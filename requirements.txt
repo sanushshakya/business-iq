@@ -1,22 +1,16 @@
-# Django - Updated to the last security patch for 3.2
-Django>=3.2.25
-asgiref>=3.4.1
-pytz>=2021.1
-sqlparse>=0.4.1
+Django==3.2.25
+asgiref==3.4.1
+pytz==2021.1
+sqlparse==0.4.1
 
-# Database - Updated for Python 3.12 compatibility
-psycopg2-binary>=2.9.9
+psycopg2-binary==2.9.9
 
-# Authentication - Version 0.54.0+ is required for Python 3.12
-django-allauth>=0.54.0
+django-allauth==0.54.0
 
-# Tenant management
-django-tenants>=3.6.0
+django-tenants==3.6.0
 
-# Testing and development tools - Modernized for 3.12 support
-pytest>=7.4.0
-black>=23.1.0
-flake8>=6.0.0
+pytest==7.4.0
+black==23.1.0
+flake8==6.0.0
 
-# Documentation
-sphinx>=7.0.0
+sphinx==7.0.0

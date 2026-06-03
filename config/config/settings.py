@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "inventory",  # Added the 'inventory' app to INSTALLED_APPS
     "demand",  # Added the 'demand' app to INSTALLED_APPS
+    "logistics",  # Added the 'logistics' app to INSTALLED_APPS
 ]
 
 MIDDLEWARE = [
@@ -113,5 +114,4 @@ USE_I18N = True
 USE_TZ = True
 
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.2/howto/static-files/
+# 

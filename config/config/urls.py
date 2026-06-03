@@ -24,4 +24,6 @@ urlpatterns = [
     path('inventory/', include('inventory.urls')),
     # Include demand URLs
     path('demand/', include('demand.urls')),
+    # Include logistics URLs
+    path('logistics/', include('logistics.urls')),
 ]

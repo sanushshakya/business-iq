@@ -142,58 +142,14 @@ coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/
-
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-.python-version
-
-# pipenv
-.Pipfile.lock
-
-# PEP 582; used by e.g. google/medusa
-__pypackages__/__init__.py
-
-# Celery stuff
-celerybeat-schedule
-celerybeat-log.txt
-
-# Environment variables file
-.env
 ```
 
-## Contributing
+## New File: requirements.txt
 
-Contributions are welcome! Please read the [CONTRIBUTING.md](CONTRIBUTING.md) file for details on our code of conduct, and the process for submitting pull requests.
+This file contains all the required packages for the `iq` project. To update this file, run:
 
-## License
+```sh
+pip freeze > requirements.txt
+```
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+The contents of the `requirements.txt` file will be automatically generated based on the current virtual environment.

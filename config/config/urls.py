@@ -22,4 +22,6 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     # Include inventory URLs
     path('inventory/', include('inventory.urls')),
+    # Include demand URLs
+    path('demand/', include('demand.urls')),
 ]

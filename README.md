@@ -2,7 +2,7 @@
 
 ## Project Description
 
-The `iq` project is a Django application designed to manage multiple tenants and provide authentication services. This project structure includes two main apps: `tenants` for managing tenant-specific data and `authentication` for handling user authentication.
+The `iq` project is a Django application designed to manage multiple tenants and provide authentication services. This project structure includes three main apps: `tenants`, `demand`, and `logistics`.
 
 ## Installation Instructions
 
@@ -59,6 +59,18 @@ The project is organized as follows:
   - `urls.py`: URL declarations for the tenants app.
   - `apps.py`: App configuration class.
 
+- `demand`: Django app for managing demand data.
+  - `models.py`: Demand-related models.
+  - `views.py`: Demand-related views.
+  - `urls.py`: URL declarations for the demand app.
+  - `apps.py`: App configuration class.
+
+- `logistics`: Django app for managing logistics data.
+  - `models.py`: Logistics-related models.
+  - `views.py`: Logistics-related views.
+  - `urls.py`: URL declarations for the logistics app.
+  - `apps.py`: App configuration class.
+
 - `authentication`: Django app for handling user authentication.
   - `admin.py`: Admin site configurations.
   - `apps.py`: App configuration class.
@@ -76,6 +88,18 @@ iq/
 │   ├── urls.py
 │   └── wsgi.py
 ├── tenants/
+│   ├── __init__.py
+│   ├── models.py
+│   ├── tests.py
+│   ├── views.py
+│   └── urls.py
+├── demand/
+│   ├── __init__.py
+│   ├── models.py
+│   ├── tests.py
+│   ├── views.py
+│   └── urls.py
+├── logistics/
 │   ├── __init__.py
 │   ├── models.py
 │   ├── tests.py
@@ -142,14 +166,3 @@ coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/
-```
-
-## New File: requirements.txt
-
-This file contains all the required packages for the `iq` project. To update this file, run:
-
-```sh
-pip freeze > requirements.txt
-```
-
-The contents of the `requirements.txt` file will be automatically generated based on the current virtual environment.

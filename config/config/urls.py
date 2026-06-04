@@ -26,4 +26,6 @@ urlpatterns = [
     path('demand/', include('demand.urls')),
     # Include logistics URLs
     path('logistics/', include('logistics.urls')),
+    # Include pricing URLs
+    path('pricing/', include('pricing.urls')),  # Added for the new pricing app
 ]

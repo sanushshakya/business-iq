@@ -28,4 +28,8 @@ urlpatterns = [
     path('logistics/', include('logistics.urls')),
     # Include pricing URLs
     path('pricing/', include('pricing.urls')),  # Added for the new pricing app
+    # Include sync URLs
+    path('sync/', include('sync.urls')),  # Added for the new sync app
+    # Include common URLs
+    path('common/', include('common.urls')),  # Added for the new common app
 ]

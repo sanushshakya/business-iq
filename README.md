@@ -71,6 +71,25 @@ The project is organized as follows:
   - `urls.py`: URL declarations for the logistics app.
   - `apps.py`: App configuration class.
 
+- `pricing`: Django app for managing pricing data.
+  - `models.py`: Pricing-related models.
+  - `views.py`: Pricing-related views.
+  - `urls.py`: URL declarations for the pricing app.
+  - `apps.py`: App configuration class.
+
+- `sync`: Django app for managing synchronization tasks.
+  - `models.py`: Synchronization-related models.
+  - `views.py`: Synchronization-related views.
+  - `urls.py`: URL declarations for the sync app.
+  - `apps.py`: App configuration class.
+
+- `common`: Django app for common utilities and components.
+  - `utils.py`: Common utility functions.
+  - `models.py`: Shared models.
+  - `views.py`: Shared views.
+  - `urls.py`: URL declarations for the common app.
+  - `apps.py`: App configuration class.
+
 - `authentication`: Django app for handling user authentication.
   - `admin.py`: Admin site configurations.
   - `apps.py`: App configuration class.
@@ -105,6 +124,24 @@ iq/
 │   ├── tests.py
 │   ├── views.py
 │   └── urls.py
+├── pricing/
+│   ├── __init__.py
+│   ├── models.py
+│   ├── tests.py
+│   ├── views.py
+│   └── urls.py
+├── sync/
+│   ├── __init__.py
+│   ├── models.py
+│   ├── tests.py
+│   ├── views.py
+│   └── urls.py
+├── common/
+│   ├── __init__.py
+│   ├── utils.py
+│   ├── models.py
+│   ├── tests.py
+│   └── views.py
 ├── authentication/
 │   ├── __init__.py
 │   ├── admin.py

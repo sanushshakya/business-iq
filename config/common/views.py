@@ -1,14 +1,15 @@
-# config/common/views.py
+# views.py
 
-from rest_framework.viewsets import ModelViewSet
-from .models import GenericModel  # Assuming you have a base model for common views
-from .serializers import GenericSerializer  # Corresponding serializer
+from django.http import HttpResponse
 
-class CommonViewSet(ModelViewSet):
+def index(request):
     """
-    ViewSet for handling CRUD operations on generic models.
-    """
-    queryset = GenericModel.objects.all()
-    serializer_class = GenericSerializer
+    A placeholder view that returns a simple HTTP response.
 
-# This viewset can be used to manage any model that inherits from GenericModel
+    Args:
+        request (HttpRequest): The current HttpRequest instance.
+
+    Returns:
+        HttpResponse: A response with a message indicating the view is a placeholder.
+    """
+    return HttpResponse("This is a placeholder view.")

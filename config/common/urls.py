@@ -1,16 +1,13 @@
 """
 config/common/urls.py
 
-URL routing for common application.
-
-This file defines the URL patterns for the 'common' Django app, which likely contains reusable components and utilities across different parts of the project.
+This file contains the URL configurations for common parts of the iq project,
+which are not specific to any single app but rather shared across multiple apps.
 """
 
 from django.urls import path
-from . import views  # Assuming views are located in config/common/views.py
+from . import views  # Assuming a basic view for demonstration purposes
 
 urlpatterns = [
-    # Define URL patterns here
-    # Example:
-    # path('some-endpoint/', views.some_view_function, name='some_view_name'),
+    path('', views.home, name='home'),  # Placeholder URL pattern
 ]

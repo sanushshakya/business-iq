@@ -98,3 +98,7 @@ AUTH_PASSWORD_VALIDATORS = [
         "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
     },
     {
+
+# Set AUTH_USER_MODEL and DEFAULT_AUTO_FIELD
+AUTH_USER_MODEL = 'common.CustomUser'
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

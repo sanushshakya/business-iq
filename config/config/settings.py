@@ -99,6 +99,6 @@ AUTH_PASSWORD_VALIDATORS = [
     },
     {
 
-# Set AUTH_USER_MODEL and DEFAULT_AUTO_FIELD
-AUTH_USER_MODEL = 'common.CustomUser'
-DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+LANGUAGE_CODE = config('LANGUAGE_CODE', default='en-us')
+TIME_ZONE = config('TIME_ZONE', default='UTC')
+USE_TZ = config('USE_TZ', default=True, cast=bool)

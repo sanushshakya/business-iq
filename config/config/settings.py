@@ -90,57 +90,13 @@ DATABASES = {
     }
 }
 
-
-# Password validation
-# https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
-
-AUTH_PASSWORD_VALIDATORS = [
-    {
-        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
-    },
-    {
-        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
-    },
-    {
-        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
-    },
-    {
-        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
-    },
-]
-
-
-# Internationalization
-# https://docs.djangoproject.com/en/5.2/topics/i18n/
-
-LANGUAGE_CODE = config('LANGUAGE_CODE', default='en-us')
-
-TIME_ZONE = config('TIME_ZONE', default='UTC')
-
-USE_I18N = True
-
-USE_L10N = True
-
-USE_TZ = True
-
-
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.2/howto/static-files/
-
-STATIC_URL = "/static/"
-
-# Default primary key field type
-# https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
-
-DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-
-# Redis cache settings
+# Cache
 CACHES = {
     'default': {
-        'BACKEND': config('REDIS_BACKEND', default='django_redis.cache.RedisCache'),
-        'LOCATION': config('REDIS_LOCATION', default='redis://127.0.0.1:6379/1'),
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': config('REDIS_URL', default='redis://127.0.0.1:6379/1'),
         'OPTIONS': {
-            'CLIENT_CLASS': config('REDIS_CLIENT_CLASS', default='django_redis.client.DefaultClient'),
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
         }
     }
 }

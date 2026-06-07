@@ -37,6 +37,16 @@ To use Docker Compose with this project, create a `docker-compose.yml` file in y
 version: '3.8'
 
 services:
+  backend:
+    build: .
+    depends_on:
+      - db
+      - redis
+    ports:
+      - "8000:8000"
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.production
+
   db:
     image: postgres:16-alpine
     volumes:
@@ -58,7 +68,7 @@ volumes:
   redis_data:
 ```
 
-This `docker-compose.yml` file defines two services: the PostgreSQL database using the official `postgres:16-alpine` image and a Redis instance using the `redis:7-alpine` image. It uses named volumes `postgres_data` and `redis_data` to persist data across container restarts.
+This `docker-compose.yml` file defines three services: the backend using the current directory as its build context, which should contain a Dockerfile, and two supporting services: PostgreSQL and Redis. The backend service depends on both the db and redis services to ensure they are up before starting.
 
 ### Docker Compose Installation Steps
 
@@ -76,5 +86,3 @@ To build and run the Docker Compose configuration:
 
 3. **Access the Application**
    Open your web browser and navigate to `http://127.0.0.1:8000/`.
-```
-This README updates the existing content by adding a section dedicated to Docker configuration and explaining how to build and run the Docker container with Redis.

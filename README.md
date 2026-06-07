@@ -107,14 +107,88 @@ To build and run the Docker Compose configuration:
 2. **Access the Application**
    Open your web browser and navigate to `http://127.0.0.1:8000/`.
 
-### Environment Variables
+### Additional Targets for Makefile
 
-To configure the application, create a `.env` file in the root of your project with the following environment variables:
+To simplify common tasks, you can add the following targets to your `Makefile`:
 
-```sh
-DJANGO_SECRET_KEY=your_secret_key_here
-DATABASE_URL=postgres://user:password@db/iqdb
-REDIS_URL=redis://redis:6379/0
+```makefile
+# Install dependencies
+install:
+    pip install -r requirements/base.txt
+
+# Run the application
+run:
+    gunicorn config.wsgi:application --bind 0.0.0.0:8000
+
+# Migrate database
+migrate:
+    python manage.py migrate
+
+# Test the application
+test:
+    python manage.py test
+
+# Open a Python shell in the container
+shell:
+    docker exec -it iq-container /bin/bash
+
+# Start Docker Compose services
+docker-up:
+    docker-compose up --build
+
+# Stop Docker Compose services
+docker-down:
+    docker-compose down
+
+# View Docker logs
+docker-logs:
+    docker-compose logs -f
 ```
 
-These variables will be used to configure Django and other services within the application.
+### Update the README to Include Makefile Targets
+
+Update your `README.md` to include information about the new targets:
+
+## Additional Targets for Makefile
+
+To simplify common tasks, you can use the following commands from a `Makefile` located at the root of your project:
+
+- **Install Dependencies**
+  ```sh
+  make install
+  ```
+
+- **Run the Application**
+  ```sh
+  make run
+  ```
+
+- **Migrate Database**
+  ```sh
+  make migrate
+  ```
+
+- **Test the Application**
+  ```sh
+  make test
+  ```
+
+- **Open a Python Shell in the Container**
+  ```sh
+  make shell
+  ```
+
+- **Start Docker Compose Services**
+  ```sh
+  make docker-up
+  ```
+
+- **Stop Docker Compose Services**
+  ```sh
+  make docker-down
+  ```
+
+- **View Docker Logs**
+  ```sh
+  make docker-logs
+  ```

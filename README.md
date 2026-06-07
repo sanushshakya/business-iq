@@ -47,6 +47,17 @@ services:
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings.production
 
+  celery:
+    build: .
+    command: celery -A config worker --loglevel=info
+    depends_on:
+      - backend
+      - db
+      - redis
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=db+postgresql://user:password@db/iqdb
+
   db:
     image: postgres:16-alpine
     volumes:
@@ -68,7 +79,7 @@ volumes:
   redis_data:
 ```
 
-This `docker-compose.yml` file defines three services: the backend using the current directory as its build context, which should contain a Dockerfile, and two supporting services: PostgreSQL and Redis. The backend service depends on both the db and redis services to ensure they are up before starting.
+This `docker-compose.yml` file defines four services: the backend using the current directory as its build context, which should contain a Dockerfile, and three supporting services: PostgreSQL, Redis, and Celery. The backend service depends on both the db and redis services to ensure they are up before starting, and the Celery service depends on all three services.
 
 ### Docker Compose Installation Steps
 

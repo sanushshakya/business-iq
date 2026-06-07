@@ -39,6 +39,9 @@ version: '3.8'
 services:
   backend:
     build: .
+    env_file: .env
+    volumes:
+      - ./iq:/app
     depends_on:
       - db
       - redis
@@ -49,25 +52,25 @@ services:
 
   celery-beat:
     build: .
+    env_file: .env
+    volumes:
+      - ./iq:/app
     command: celery -A config beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
     depends_on:
       - backend
       - db
       - redis
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=db+postgresql://user:password@db/iqdb
 
   celery:
     build: .
+    env_file: .env
+    volumes:
+      - ./iq:/app
     command: celery -A config worker --loglevel=info
     depends_on:
       - backend
       - db
       - redis
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=db+postgresql://user:password@db/iqdb
 
   db:
     image: postgres:16-alpine
@@ -98,13 +101,20 @@ To build and run the Docker Compose configuration:
 
 1. **Build and Start Services**
    ```sh
-   docker-compose up --build -d
+   docker-compose up --build
    ```
 
-2. **Verify Running Containers**
-   ```sh
-   docker-compose ps
-   ```
-
-3. **Access the Application**
+2. **Access the Application**
    Open your web browser and navigate to `http://127.0.0.1:8000/`.
+
+### Environment Variables
+
+To configure the application, create a `.env` file in the root of your project with the following environment variables:
+
+```sh
+DJANGO_SECRET_KEY=your_secret_key_here
+DATABASE_URL=postgres://user:password@db/iqdb
+REDIS_URL=redis://redis:6379/0
+```
+
+These variables will be used to configure Django and other services within the application.

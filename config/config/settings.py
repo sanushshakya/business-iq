@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     "pricing",  # Added the 'pricing' app to INSTALLED_APPS
     "sync",  # Added the 'sync' app to INSTALLED_APPS
     "common",  # Added the 'common' app to INSTALLED_APPS
+    "rest_framework",  # Added REST Framework to INSTALLED_APPS
 ]
 
 MIDDLEWARE = [
@@ -89,17 +90,25 @@ DATABASES = {
         "USER": config('DB_USER', default=None),
         "PASSWORD": config('DB_PASSWORD', default=None),
         "HOST": config('DB_HOST', default='localhost'),
-        "PORT": config('DB_PORT', default='5432'),
+        "PORT": config('DB_PORT', default ''),
     }
 }
 
-# REST framework configuration
+# REST Framework configuration
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.BasicAuthentication',
-        'rest_framework.authentication.SessionAuthentication',
-    ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.SessionAuthentication',
+        'rest_framework.authentication.BasicAuthentication',
+    ],
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '100/day',
+        'user': '1000/day',
+    },
 }

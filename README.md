@@ -1,162 +1,56 @@
-# README.md
+# Use an official Python runtime as a parent image
+FROM python:3.12-slim
 
-## Project Description
+# Set the working directory in the container
+WORKDIR /app
 
-The `iq` project is a Django application designed to manage multiple tenants and provide authentication services. This project structure includes three main apps: `tenants`, `demand`, and `logistics`.
+# Copy the current directory contents into the container at /app
+COPY . /app
 
-## Installation Instructions
+# Install any needed packages specified in requirements.txt
+RUN pip install --no-cache-dir -r requirements/base.txt
 
-### Prerequisites
+# Make port 8000 available to the world outside this container
+EXPOSE 8000
 
-- Python 3.9 or higher
-- pip (Python package installer)
+# Define environment variable
+ENV NAME World
 
-### Step-by-Step Installation
+# Run gunicorn command to serve the application
+CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000"]
+```
 
-1. **Clone the Repository**
+```markdown
+## Docker Configuration
+
+The `Dockerfile` for the `iq` project is designed to use the `python:3.12-slim` base image, which provides a lightweight Python environment. The working directory within the container is set to `/app`.
+
+### Installation Steps
+
+To build and run the Docker container:
+
+1. **Build the Docker Image**
    ```sh
-   git clone https://github.com/yourusername/iq.git
-   cd iq
+   docker build -t iq-app .
    ```
 
-2. **Create a Virtual Environment (Recommended)**
+2. **Run the Docker Container**
    ```sh
-   python -m venv venv
-   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
+   docker run -d -p 8000:8000 --name iq-container iq-app
    ```
 
-3. **Install Dependencies**
-   ```sh
-   pip install -r requirements.txt
-   ```
-
-4. **Migrate the Database**
-   ```sh
-   python manage.py migrate
-   ```
-
-5. **Run the Development Server**
-   ```sh
-   python manage.py runserver
-   ```
-
-6. **Access the Application**
+3. **Access the Application**
    Open your web browser and navigate to `http://127.0.0.1:8000/`.
 
-## Project Structure
+### Dockerfile Explanation
 
-The project is organized as follows:
-
-- `config`: The main Django configuration directory.
-  - `asgi.py`: ASGI entry-point for deploying with ASGI-compatible servers like Daphne or Uvicorn.
-  - `settings.py`: Configuration settings for the Django project.
-  - `urls.py`: URL declarations for the project.
-  - `wsgi.py`: WSGI entry-point for deploying with WSGI-compatible servers like Gunicorn.
-
-- `tenants`: Django app for managing tenant-specific data.
-  - `models.py`: Tenant-related models.
-  - `views.py`: Tenant-related views.
-  - `urls.py`: URL declarations for the tenants app.
-  - `apps.py`: App configuration class.
-
-- `demand`: Django app for managing demand data.
-  - `models.py`: Demand-related models.
-  - `views.py`: Demand-related views.
-  - `urls.py`: URL declarations for the demand app.
-  - `apps.py`: App configuration class.
-
-- `logistics`: Django app for managing logistics data.
-  - `models.py`: Logistics-related models.
-  - `views.py`: Logistics-related views.
-  - `urls.py`: URL declarations for the logistics app.
-  - `apps.py`: App configuration class.
-
-- `pricing`: Django app for managing pricing data.
-  - `models.py`: Pricing-related models.
-  - `views.py`: Pricing-related views.
-  - `urls.py`: URL declarations for the pricing app.
-  - `apps.py`: App configuration class.
-
-- `sync`: Django app for managing synchronization tasks.
-  - `models.py`: Synchronization-related models.
-  - `views.py`: Synchronization-related views.
-  - `urls.py`: URL declarations for the sync app.
-  - `apps.py`: App configuration class.
-
-- `common`: Django app for common utilities and components.
-  - `utils.py`: Common utility functions.
-  - `models.py`: Shared models.
-  - `views.py`: Shared views.
-  - `urls.py`: URL declarations for the common app.
-  - `apps.py`: App configuration class.
-
-- `authentication`: Django app for handling user authentication.
-  - `admin.py`: Admin site configurations.
-  - `apps.py`: App configuration class.
-  - `models.py`: Authentication models.
-  - `tests.py`: Authentication tests.
-  - `views.py`: Authentication views.
-
-## Directory Structure
-
-```
-iq/
-├── config/
-│   ├── asgi.py
-│   ├── settings.py
-│   ├── urls.py
-│   └── wsgi.py
-├── tenants/
-│   ├── __init__.py
-│   ├── models.py
-│   ├── tests.py
-│   ├── views.py
-│   └── urls.py
-├── demand/
-│   ├── __init__.py
-│   ├── models.py
-│   ├── tests.py
-│   ├── views.py
-│   └── urls.py
-├── logistics/
-│   ├── __init__.py
-│   ├── models.py
-│   ├── tests.py
-│   ├── views.py
-│   └── urls.py
-├── pricing/
-│   ├── __init__.py
-│   ├── models.py
-│   ├── tests.py
-│   ├── views.py
-│   └── urls.py
-├── sync/
-│   ├── __init__.py
-│   ├── models.py
-│   ├── tests.py
-│   ├── views.py
-│   └── urls.py
-├── common/
-│   ├── __init__.py
-│   ├── utils.py
-│   ├── models.py
-│   ├── tests.py
-│   └── views.py
-├── authentication/
-│   ├── __init__.py
-│   ├── admin.py
-│   ├── apps.py
-│   ├── models.py
-│   ├── tests.py
-│   └── views.py
-├── manage.py
-├── requirements.txt
-└── .gitignore
+- **Base Image**: Uses `python:3.12-slim` for a lightweight Python environment.
+- **Working Directory**: Sets `/app` as the working directory within the container.
+- **Copy Files**: Copies all files from the current directory into the `/app` directory inside the container.
+- **Install Dependencies**: Installs packages listed in `requirements/base.txt`.
+- **Expose Port**: Makes port 8000 available outside the container.
+- **Environment Variable**: Sets an environment variable for demonstration purposes.
+- **CMD**: Specifies the command to run when starting the container, which is `gunicorn` serving the application.
 ```
 
-## .gitignore
-
-```
-# Byte-compiled / optimized / DLL files
-__
---- END ---
+This README updates the existing content by adding a section dedicated to Docker configuration and explaining how to build and run the Docker container.

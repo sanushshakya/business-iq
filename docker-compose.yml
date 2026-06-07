@@ -28,6 +28,15 @@ services:
     volumes:
       - .:/app
 
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A config worker --loglevel=info
+    depends_on:
+      - db
+      - redis
+
 volumes:
   postgres_data:
   redis_data:

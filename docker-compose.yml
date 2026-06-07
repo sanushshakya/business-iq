@@ -15,6 +15,19 @@ services:
     volumes:
       - redis_data:/data
 
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python manage.py runserver 0.0.0.0:8000
+    depends_on:
+      - db
+      - redis
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+
 volumes:
   postgres_data:
   redis_data:

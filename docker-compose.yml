@@ -37,6 +37,15 @@ services:
       - db
       - redis
 
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A config beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    depends_on:
+      - db
+      - redis
+
 volumes:
   postgres_data:
   redis_data:

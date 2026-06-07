@@ -89,14 +89,17 @@ DATABASES = {
         "USER": config('DB_USER', default=None),
         "PASSWORD": config('DB_PASSWORD', default=None),
         "HOST": config('DB_HOST', default='localhost'),
-        "PORT": config('DB_PORT', default='5432', cast=int),
+        "PORT": config('DB_PORT', default='5432'),
     }
 }
 
-# Cache
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-        'LOCATION': config('REDIS_URL', default='redis://127.0.0.1:6379/1'),
-    }
+# REST framework configuration
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.BasicAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
 }

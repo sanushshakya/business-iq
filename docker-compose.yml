@@ -27,6 +27,8 @@ services:
       - "8000:8000"
     volumes:
       - .:/app
+    env_file:
+      - .env
 
   celery:
     build:
@@ -36,6 +38,10 @@ services:
     depends_on:
       - db
       - redis
+    volumes:
+      - .:/app
+    env_file:
+      - .env
 
   celery-beat:
     build:
@@ -45,7 +51,16 @@ services:
     depends_on:
       - db
       - redis
+    volumes:
+      - .:/app
+    env_file:
+      - .env
 
 volumes:
   postgres_data:
   redis_data:
+
+# Environment variables file to be created in the project root directory
+# Example content of .env:
+# DJANGO_SECRET_KEY=your_secret_key_here
+# DATABASE_URL=postgres://iquser:iqpwd@db:5432/iqdb

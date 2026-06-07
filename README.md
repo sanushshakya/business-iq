@@ -47,6 +47,17 @@ services:
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings.production
 
+  celery-beat:
+    build: .
+    command: celery -A config beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    depends_on:
+      - backend
+      - db
+      - redis
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=db+postgresql://user:password@db/iqdb
+
   celery:
     build: .
     command: celery -A config worker --loglevel=info

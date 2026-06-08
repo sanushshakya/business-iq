@@ -1,30 +1,22 @@
 # config/common/models.py
 
-import uuid
 from django.db import models
+from apps.common.models.base_model import BaseModel
+from apps.company.models import Company
 
-class BaseModel(models.Model):
+class TenantScopedModel(BaseModel):
     """
-    Abstract base model for common fields and behaviors.
+    Abstract model that extends BaseModel and includes a foreign key to the Company model.
     
-    Adds UUIDField primary key, created_at, and updated_at fields to all subclasses.
+    Attributes:
+        company (ForeignKey): A foreign key linking the model instance to a specific Company.
     """
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='%(app_label)s_%(class)s_items',
+        help_text="The company this item belongs to."
+    )
 
     class Meta:
         abstract = True
-
-class Setting(models.Model):
-    """
-    Model to store application settings.
-    """
-
-    key = models.CharField(max_length=100, unique=True)
-    value = models.TextField()
-    description = models.TextField(blank=True, null=True)
-
-    def __str__(self):
-        return self.key

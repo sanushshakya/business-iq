@@ -1,86 +1,36 @@
-import re
-from django.contrib.auth.models import User
 from rest_framework import serializers
 
-class RegisterUserSerializer(serializers.ModelSerializer):
+class LoginUserSerializer(serializers.Serializer):
     """
-    Serializer for registering a new user with a company.
+    Serializer for logging in a user.
 
-    This serializer includes fields for username, email, password, and company.
+    This serializer validates user credentials and returns an authentication token.
     """
 
-    # Field to store the company name
-    company = serializers.CharField(required=True)
-    
-    class Meta:
-        model = User
-        fields = ['username', 'email', 'password', 'company']
-        extra_kwargs = {
-            'password': {'write_only': True},
-        }
+    username = serializers.CharField(required=True)
+    password = serializers.CharField(write_only=True, required=True)
 
-    def validate_username(self, value):
+    def validate(self, data):
         """
-        Validate the username to ensure it meets certain criteria.
+        Validate the user credentials and return an authentication token.
 
         Args:
-            value (str): The username to validate.
+            data (dict): A dictionary containing 'username' and 'password'.
 
         Returns:
-            str: The validated username.
-
-        Raises:
-            serializers.ValidationError: If the username is invalid.
+            dict: A dictionary containing the authentication token.
         """
-        if not re.match(r'^[a-zA-Z0-9_]+$', value):
-            raise serializers.ValidationError("Username must be alphanumeric and may contain underscores.")
-        return value
+        username = data.get('username')
+        password = data.get('password')
 
-    def validate_email(self, value):
-        """
-        Validate the email to ensure it meets certain criteria.
+        if not username or not password:
+            raise serializers.ValidationError("Both username and password are required.")
 
-        Args:
-            value (str): The email to validate.
+        # Assuming `authenticate` is a function that checks credentials
+        from django.contrib.auth import authenticate
+        user = authenticate(username=username, password=password)
+        if not user:
+            raise serializers.ValidationError("Invalid credentials.")
 
-        Returns:
-            str: The validated email.
-
-        Raises:
-            serializers.ValidationError: If the email is invalid.
-        """
-        if not re.match(r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$', value):
-            raise serializers.ValidationError("Invalid email format.")
-        return value
-
-    def validate_company(self, value):
-        """
-        Validate the company name to ensure it meets certain criteria.
-
-        Args:
-            value (str): The company name to validate.
-
-        Returns:
-            str: The validated company name.
-
-        Raises:
-            serializers.ValidationError: If the company name is invalid.
-        """
-        if not re.match(r'^[a-zA-Z0-9_ ]+$', value):
-            raise serializers.ValidationError("Company name must be alphanumeric and may contain spaces and underscores.")
-        return value
-
-    def create(self, validated_data):
-        """
-        Create a new user instance with the provided validated data.
-
-        Args:
-            validated_data (dict): The validated data containing user information.
-
-        Returns:
-            User: The newly created user.
-        """
-        user = super().create(validated_data)
-        user.set_password(validated_data['password'])
-        user.save()
-        return user
+        data['user'] = user
+        return data

@@ -1,7 +1,7 @@
 # config/common/models.py
 
 from django.db import models
-from apps.common.models import TenantScopedModel
+from apps.common.models import TenantScopedModel, StoreBranch
 
 class BranchScopedModel(TenantScopedModel):
     """
@@ -10,7 +10,7 @@ class BranchScopedModel(TenantScopedModel):
     Attributes:
         branch (StoreBranch): A foreign key to the StoreBranch model, representing the branch scope.
     """
-    branch = models.ForeignKey('StoreBranch', on_delete=models.CASCADE)
+    branch = models.ForeignKey('apps.common.models.StoreBranch', on_delete=models.CASCADE)
 
     class Meta:
         abstract = True

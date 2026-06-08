@@ -33,7 +33,4 @@ class SyncTask(models.Model):
     end_time = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
-        return f"Task {self.task_id}: {self.status}"
-```
-
-This model represents a synchronization task within the sync app. It includes fields for the task ID, source and target systems, status of the task, and timestamps for when the task started and ended. The `STATUS_CHOICES` attribute ensures that the status is always one of the predefined choices.
+        return f"SyncTask {self.task_id} from {self.source_system} to {self.target_system} - Status: {self.status}"

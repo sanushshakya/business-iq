@@ -1,0 +1,17 @@
+Django==3.2.25
+asgiref==3.4.1
+pytz==2021.1
+sqlparse==0.4.1
+
+psycopg2-binary==2.9.9
+
+django-allauth==0.54.0
+
+django-tenants==3.6.0
+
+pytest==7.4.0
+black==23.1.0
+flake8==6.0.0
+
+sphinx==7.0.0
+djangorestframework>=3.14.0,<3.15.0

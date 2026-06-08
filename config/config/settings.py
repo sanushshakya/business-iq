@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     "sync",  # Added the 'sync' app to INSTALLED_APPS
     "common",  # Added the 'common' app to INSTALLED_APPS
     "rest_framework",  # Added REST Framework to INSTALLED_APPS
+    "tenants",  # Added 'tenants' app to INSTALLED_APPS
 ]
 
 MIDDLEWARE = [
@@ -87,17 +88,25 @@ DATABASES = {
     "default": {
         "ENGINE": config('DB_ENGINE', default='django.db.backends.sqlite3'),
         "NAME": config('DB_NAME', default=BASE_DIR / 'db.sqlite3'),
-        "USER": config('DB_USER'),
-        "PASSWORD": config('DB_PASSWORD'),
+        "USER": config('DB_USER', default=None),
+        "PASSWORD": config('DB_PASSWORD', default=None),
         "HOST": config('DB_HOST', default='localhost'),
         "PORT": config('DB_PORT', default='5432'),
     }
 }
 
-# SPECTACULAR_SETTINGS for API documentation
-SPECTACULAR_SETTINGS = {
-    'TITLE': 'IQ API',
-    'DESCRIPTION': 'API documentation for the IQ project',
-    'VERSION': '1.0.0',
-    'SERVE_INCLUDE_SCHEMA': False,
-}
+# Authentication backends
+AUTHENTICATION_BACKENDS = [
+    'django.contrib.auth.backends.ModelBackend',
+]
+
+# Custom user model
+AUTH_USER_MODEL = 'tenants.CustomUser'
+
+# Email settings
+EMAIL_BACKEND = config('EMAIL_BACKEND', default='django.core.mail.backends.smtp.EmailBackend')
+EMAIL_HOST = config('EMAIL_HOST', default='localhost')
+EMAIL_PORT = config('EMAIL_PORT', default=25, cast=int)
+EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=False, cast=bool)
+EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')

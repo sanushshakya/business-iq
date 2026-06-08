@@ -87,28 +87,17 @@ DATABASES = {
     "default": {
         "ENGINE": config('DB_ENGINE', default='django.db.backends.sqlite3'),
         "NAME": config('DB_NAME', default=BASE_DIR / 'db.sqlite3'),
-        "USER": config('DB_USER', default=None),
-        "PASSWORD": config('DB_PASSWORD', default=None),
+        "USER": config('DB_USER'),
+        "PASSWORD": config('DB_PASSWORD'),
         "HOST": config('DB_HOST', default='localhost'),
-        "PORT": config('DB_PORT', default ''),
+        "PORT": config('DB_PORT', default='5432'),
     }
 }
 
-# REST Framework configuration
-REST_FRAMEWORK = {
-    'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.IsAuthenticated',
-    ],
-    'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.SessionAuthentication',
-        'rest_framework.authentication.BasicAuthentication',
-    ],
-    'DEFAULT_THROTTLE_CLASSES': [
-        'rest_framework.throttling.AnonRateThrottle',
-        'rest_framework.throttling.UserRateThrottle',
-    ],
-    'DEFAULT_THROTTLE_RATES': {
-        'anon': '100/day',
-        'user': '1000/day',
-    },
+# SPECTACULAR_SETTINGS for API documentation
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'IQ API',
+    'DESCRIPTION': 'API documentation for the IQ project',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
 }

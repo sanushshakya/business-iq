@@ -12,6 +12,7 @@ class Demand(models.Model):
         description (str, optional): Additional description about the demand.
         due_date (DateField): The date by which the demand must be fulfilled.
         status (str): The current status of the demand ('Pending', 'Approved', 'Rejected').
+        company_id (ForeignKey): The foreign key to the Company model that represents the tenant.
         created_at (DateTimeField): The timestamp when the demand was created.
         updated_at (DateTimeField): The timestamp when the demand was last updated.
 
@@ -34,6 +35,7 @@ class Demand(models.Model):
         choices=STATUS_CHOICES,
         default='PENDING',
     )
+    company_id = models.ForeignKey('authentication.Company', on_delete=models.CASCADE)  # Added foreign key to Company
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

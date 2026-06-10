@@ -1,59 +1,4 @@
 """
-config/feature/models.py
-
-This module contains the Product model for the inventory app.
-"""
-
-from django.db import models
-from common.models import TenantModel
-
-class Product(TenantModel):
-    """
-    Model representing a product in the inventory with fields for company foreign key, SKU code,
-    name, category choices, unit choices, reorder threshold, target margin percent, perishability status,
-    and shelf life days.
-    """
-
-    CATEGORY_CHOICES = [
-        ('grains', 'Grains'),
-        ('dairy', 'Dairy'),
-        ('produce', 'Produce'),
-        ('spices', 'Spices'),
-        ('beverages', 'Beverages'),
-        ('other', 'Other')
-    ]
-
-    UNIT_CHOICES = [
-        ('kg', 'Kilogram'),
-        ('g', 'Gram'),
-        ('litre', 'Liter'),
-        ('unit', 'Unit')
-    ]
-
-    company = models.ForeignKey('authentication.Company', on_delete=models.CASCADE)
-    sku_code = models.CharField(max_length=50, unique=True)
-    name = models.CharField(max_length=255)
-    category = models.CharField(max_length=10, choices=CATEGORY_CHOICES)
-    unit = models.CharField(max_length=10, choices=UNIT_CHOICES)
-    reorder_threshold = models.IntegerField()
-    target_margin_percent = models.DecimalField(max_digits=5, decimal_places=2)
-    is_perishable = models.BooleanField(default=False)
-    shelf_life_days = models.PositiveIntegerField(null=True, blank=True)
-
-    def clean(self):
-        """
-        Validate that SKU code is unique across all companies.
-        """
-        if self.pk:
-            existing_product = Product.objects.get(pk=self.pk)
-            if self.sku_code != existing_product.sku_code and Product.objects.filter(sku_code=self.sku_code).exists():
-                raise serializers.ValidationError('SKU code must be unique across all companies.')
-        else:
-            if Product.objects.filter(sku_code=self.sku_code).exists():
-                raise serializers.ValidationError('SKU code must be unique across all companies.')
-
-
-"""
 config/feature/views.py
 
 This module contains the views for handling CRUD operations on the Product model.
@@ -85,6 +30,7 @@ class ProductViewSet(TenantModelViewSet):
 
         if category:
             queryset = queryset.filter(category=category)
+        
         if search_query:
             queryset = queryset.filter(name__icontains=search_query) | queryset.filter(sku_code__icontains=search_query)
 
@@ -92,53 +38,49 @@ class ProductViewSet(TenantModelViewSet):
 
     def create(self, request, *args, **kwargs):
         """
-        Handle product creation with additional validation.
+        Create a new product with edge-case handling and validation.
         """
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
-        # Custom validation logic
-        if serializer.validated_data['target_margin_percent'] < 0:
-            return Response({'error': 'Target margin percentage must be non-negative.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            self.perform_create(serializer)
+        except serializers.ValidationError as e:
+            return Response({'error': 'SKU code must be unique across all companies.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def update(self, request, *args, **kwargs):
         """
-        Handle product updates with additional validation.
+        Update an existing product with edge-case handling and validation.
         """
         instance = self.get_object()
-        serializer = self.get_serializer(instance, data=request.data, partial=kwargs.pop('partial', False))
+        
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         
-        # Custom validation logic
-        if serializer.validated_data['target_margin_percent'] < 0:
-            return Response({'error': 'Target margin percentage must be non-negative.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        self.perform_update(serializer)
+        try:
+            self.perform_update(serializer)
+        except serializers.ValidationError as e:
+            return Response({'error': 'SKU code must be unique across all companies.'}, status=status.HTTP_400_BAD_REQUEST)
 
         if getattr(instance, '_prefetched_objects_cache', None):
+            # If 'prefetch_related' has been applied to a queryset, we need to
+            # forcibly invalidate the prefetch cache on the instance.
             instance._prefetched_objects_cache = {}
 
         return Response(serializer.data)
 
+    def destroy(self, request, *args, **kwargs):
+        """
+        Delete an existing product with edge-case handling.
+        """
+        instance = self.get_object()
+        
+        try:
+            self.perform_destroy(instance)
+        except Exception as e:
+            return Response({'error': 'An error occurred while deleting the product.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-"""
-config/feature/serializers.py
-
-This module contains the serializers for the Product model.
-"""
-
-from rest_framework import serializers
-from .models import Product
-
-class ProductSerializer(serializers.ModelSerializer):
-    """
-    Serializer for the Product model to handle JSON serialization/deserialization.
-    """
-
-    class Meta:
-        model = Product
-        fields = '__all__'
+        return Response(status=status.HTTP_204_NO_CONTENT)

@@ -76,3 +76,21 @@ class StockBatch(models.Model):
 
     def __str__(self):
         return f"{self.product.name} - Batch {self.batch_number}"
+
+class StockMovement(models.Model):
+    """
+    Represents a movement of stock, either inbound (receiving) or outbound (shipping).
+
+    Attributes:
+        batch (StockBatch): The batch of stock being moved.
+        quantity (int): Number of units in the movement.
+        movement_type (str): Type of movement, either 'inbound' or 'outbound'.
+        date_time (datetime): Timestamp when the movement occurred.
+    """
+    batch = models.ForeignKey(StockBatch, on_delete=models.CASCADE)
+    quantity = models.IntegerField()
+    movement_type = models.CharField(max_length=10, choices=[('inbound', 'Inbound'), ('outbound', 'Outbound')])
+    date_time = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.batch.product.name} - {self.movement_type.capitalize()} of {self.quantity}"

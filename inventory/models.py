@@ -56,3 +56,23 @@ class Supplier(models.Model):
 
     def __str__(self):
         return self.name
+
+class StockBatch(models.Model):
+    """
+    Represents a batch of stock for a product.
+
+    Attributes:
+        product (Product): The product associated with this stock batch.
+        batch_number (str): Unique identifier for the batch.
+        quantity (int): Number of units in the batch.
+        receive_date (datetime): Date when the batch was received.
+        expiration_date (datetime): Date when the batch expires.
+    """
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    batch_number = models.CharField(max_length=50, unique=True)
+    quantity = models.IntegerField(default=0)
+    receive_date = models.DateTimeField(auto_now_add=True)
+    expiration_date = models.DateField()
+
+    def __str__(self):
+        return f"{self.product.name} - Batch {self.batch_number}"

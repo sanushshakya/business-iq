@@ -1,22 +1,27 @@
-from rest_framework import viewsets, generics
-from django.db.models import Q
+# config/authentication/views.py
 
-class TenantModelViewSet(viewsets.ModelViewSet):
+from django.shortcuts import get_object_or_404
+from rest_framework import status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework.response import Response
+from .models import UserInvitation
+from .serializers import UserInvitationSerializer
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsAdminUser])
+def invite_user(request):
     """
-    Base ViewSet class for handling multi-tenant models.
+    API endpoint for inviting users. Only accessible to admin/manager users.
+    
+    Parameters:
+    request (Request): The HTTP POST request containing the user invitation data.
 
-    This class overrides the `get_queryset` method to filter objects by the current company.
+    Returns:
+    Response: A JSON response indicating success or failure of the invitation.
     """
-
-    def get_queryset(self):
-        """
-        Override the default queryset to filter by the request's associated company.
-
-        Returns:
-            QuerySet: Filtered queryset based on the request's company.
-        """
-        user = self.request.user
-        if hasattr(user, 'company'):
-            return self.queryset.filter(Q(company=user.company))
-        else:
-            return self.queryset.none()
+    serializer = UserInvitationSerializer(data=request.data)
+    if serializer.is_valid():
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

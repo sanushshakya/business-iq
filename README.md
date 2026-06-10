@@ -1,194 +1,68 @@
-## Docker Configuration
+## Inventory App Product Model and CRUD REST Endpoints
 
-The `Dockerfile` for the `iq` project is designed to use the `python:3.12-slim` base image, which provides a lightweight Python environment. The working directory within the container is set to `/app`.
+This update to the inventory app introduces a new `Product` model with fields for company foreign key, SKU code, name, category, unit, reorder threshold, target margin percentage, perishability status, and shelf life days. The app now includes full CRUD (Create, Read, Update, Delete) REST endpoints for managing products, inheriting from `TenantModelViewSet`. Additionally, filtering by category and search by name/sku are supported.
 
-### Installation Steps
+### Product Model
 
-To build and run the Docker container:
+The `Product` model is designed to store detailed information about each product in the inventory. It includes fields such as:
 
-1. **Build the Docker Image**
-   ```sh
-   docker build -t iq-app .
-   ```
+- **company**: Foreign key linking to the company that owns the product.
+- **sku_code**: Unique stock keeping unit code for the product.
+- **name**: Name of the product.
+- **category**: Category of the product (grains, dairy, produce, spices, beverages, other).
+- **unit**: Unit in which the product is measured (kg, g, litre, unit).
+- **reorder_threshold**: Minimum stock level to trigger a reorder.
+- **target_margin_percent**: Target profit margin percentage for the product.
+- **is_perishable**: Boolean indicating whether the product is perishable.
+- **shelf_life_days**: Number of days before the product's shelf life expires.
 
-2. **Run the Docker Container**
-   ```sh
-   docker run -d -p 8000:8000 --name iq-container iq-app
-   ```
+### CRUD REST Endpoints
 
-3. **Access the Application**
-   Open your web browser and navigate to `http://127.0.0.1:8000/`.
+The app now includes the following REST endpoints for managing products:
 
-### Dockerfile Explanation
+1. **Create Product**
+   - **URL**: `/api/products/`
+   - **Method**: `POST`
+   - **Request Body**:
+     ```json
+     {
+       "company": 1,
+       "sku_code": "SKU12345",
+       "name": "Product Name",
+       "category": "grains",
+       "unit": "kg",
+       "reorder_threshold": 10,
+       "target_margin_percent": 5.0,
+       "is_perishable": false,
+       "shelf_life_days": 90
+     }
+     ```
 
-- **Base Image**: Uses `python:3.12-slim` for a lightweight Python environment.
-- **Working Directory**: Sets `/app` as the working directory within the container.
-- **Copy Files**: Copies all files from the current directory into the `/app` directory inside the container.
-- **Install Dependencies**: Installs packages listed in `requirements/base.txt`.
-- **Expose Port**: Makes port 8000 available outside the container.
-- **Environment Variable**: Sets an environment variable for demonstration purposes.
-- **CMD**: Specifies the command to run when starting the container, which is `gunicorn` serving the application.
+2. **Read Products**
+   - **URL**: `/api/products/`
+   - **Method**: `GET`
+   - **Query Parameters**:
+     - `category`: Filter products by category.
+     - `search`: Search products by name or SKU code.
 
-### Docker Compose
+3. **Update Product**
+   - **URL**: `/api/products/{id}/`
+   - **Method**: `PUT`
+   - **Request Body**:
+     ```json
+     {
+       "name": "Updated Product Name",
+       "category": "dairy"
+     }
+     ```
 
-To use Docker Compose with this project, create a `docker-compose.yml` file in your project root:
+4. **Delete Product**
+   - **URL**: `/api/products/{id}/`
+   - **Method**: `DELETE`
 
-```yaml
-version: '3.8'
+### Additional Features
 
-services:
-  backend:
-    build: .
-    env_file: .env
-    volumes:
-      - ./iq:/app
-    depends_on:
-      - db
-      - redis
-    ports:
-      - "8000:8000"
-    environment:
-      - DJANGO_SETTINGS_MODULE=config.settings.production
+- **Filtering by Category**: Products can be filtered by category using the `category` query parameter.
+- **Search by Name/Sku**: Products can be searched by name or SKU code using the `search` query parameter.
 
-  celery-beat:
-    build: .
-    env_file: .env
-    volumes:
-      - ./iq:/app
-    command: celery -A config beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
-    depends_on:
-      - backend
-      - db
-      - redis
-
-  celery:
-    build: .
-    env_file: .env
-    volumes:
-      - ./iq:/app
-    command: celery -A config worker --loglevel=info
-    depends_on:
-      - backend
-      - db
-      - redis
-
-  db:
-    image: postgres:16-alpine
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    environment:
-      POSTGRES_DB: iqdb
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-
-  redis:
-    image: redis:7-alpine
-    volumes:
-      - redis_data:/data
-    ports:
-      - "6379:6379"
-
-volumes:
-  postgres_data:
-  redis_data:
-```
-
-This `docker-compose.yml` file defines four services: the backend using the current directory as its build context, which should contain a Dockerfile, and three supporting services: PostgreSQL, Redis, and Celery. The backend service depends on both the db and redis services to ensure they are up before starting, and the Celery service depends on all three services.
-
-### Docker Compose Installation Steps
-
-To build and run the Docker Compose configuration:
-
-1. **Build and Start Services**
-   ```sh
-   docker-compose up --build
-   ```
-
-2. **Access the Application**
-   Open your web browser and navigate to `http://127.0.0.1:8000/`.
-
-### Additional Targets for Makefile
-
-To simplify common tasks, you can add the following targets to your `Makefile`:
-
-```makefile
-# Install dependencies
-install:
-    pip install -r requirements/base.txt
-
-# Run the application
-run:
-    gunicorn config.wsgi:application --bind 0.0.0.0:8000
-
-# Migrate database
-migrate:
-    python manage.py migrate
-
-# Test the application
-test:
-    python manage.py test
-
-# Open a Python shell in the container
-shell:
-    docker exec -it iq-container /bin/bash
-
-# Start Docker Compose services
-docker-up:
-    docker-compose up --build
-
-# Stop Docker Compose services
-docker-down:
-    docker-compose down
-
-# View Docker logs
-docker-logs:
-    docker-compose logs -f
-```
-
-### Update the README to Include Makefile Targets
-
-Update your `README.md` to include information about the new targets:
-
-## Additional Targets for Makefile
-
-To simplify common tasks, you can use the following commands from a `Makefile` located at the root of your project:
-
-- **Install Dependencies**
-  ```sh
-  make install
-  ```
-
-- **Run the Application**
-  ```sh
-  make run
-  ```
-
-- **Migrate Database**
-  ```sh
-  make migrate
-  ```
-
-- **Test the Application**
-  ```sh
-  make test
-  ```
-
-- **Open a Python Shell in the Container**
-  ```sh
-  make shell
-  ```
-
-- **Start Docker Compose Services**
-  ```sh
-  make docker-up
-  ```
-
-- **Stop Docker Compose Services**
-  ```sh
-  make docker-down
-  ```
-
-- **View Docker Logs**
-  ```sh
-  make docker-logs
-  ```
+These enhancements will greatly improve the functionality and usability of the inventory app, allowing for more efficient management of product data.

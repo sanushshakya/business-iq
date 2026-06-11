@@ -93,4 +93,4 @@ class StockMovement(models.Model):
     date_time = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.batch.product.name} - {self.movement_type.capitalize()} {self.quantity}"
+        return f"{self.batch.product.name} - {self.movement_type.capitalize()} - {self.quantity}"

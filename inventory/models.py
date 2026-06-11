@@ -88,9 +88,9 @@ class StockMovement(models.Model):
         date_time (datetime): Timestamp when the movement occurred.
     """
     batch = models.ForeignKey(StockBatch, on_delete=models.CASCADE)
-    quantity = models.IntegerField()
+    quantity = models.IntegerField(default=0)
     movement_type = models.CharField(max_length=10, choices=[('inbound', 'Inbound'), ('outbound', 'Outbound')])
     date_time = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.batch.product.name} - {self.movement_type.capitalize()} of {self.quantity}"
+        return f"{self.batch.product.name} - {self.movement_type.capitalize()} {self.quantity}"

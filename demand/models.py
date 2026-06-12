@@ -82,8 +82,8 @@ class EventProductKeyword(models.Model):
     """
 
     cultural_event = models.ForeignKey(CulturalEvent, on_delete=models.CASCADE)
-    product = models.ForeignKey('demand.Product', on_delete=models.CASCADE)  # Assuming there's a Product model in demand app
+    product = models.ForeignKey('common.Product', on_delete=models.CASCADE)  # Assuming Product model exists in common app
     keyword = models.CharField(max_length=255)
 
     def __str__(self):
-        return f"{self.cultural_event.name} - {self.product.product_name} - {self.keyword}"
+        return f"{self.cultural_event} - {self.product} - {self.keyword}"

@@ -39,3 +39,51 @@ class Demand(models.Model):
 
     def __str__(self):
         return self.product_name
+
+class CulturalEvent(models.Model):
+    """
+    A model representing a cultural event.
+
+    Fields:
+        name (str): The name of the cultural event.
+        description (str): Description of the cultural event.
+        start_date (DateTimeField): The start date and time of the event.
+        end_date (DateTimeField): The end date and time of the event.
+        location (str, optional): Location where the event will take place.
+        created_at (DateTimeField): The timestamp when the event was created.
+        updated_at (DateTimeField): The timestamp when the event was last updated.
+
+    Methods:
+        __str__: Return a string representation of the CulturalEvent instance.
+    """
+
+    name = models.CharField(max_length=255)
+    description = models.TextField()
+    start_date = models.DateTimeField()
+    end_date = models.DateTimeField()
+    location = models.CharField(max_length=255, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.name
+
+class EventProductKeyword(models.Model):
+    """
+    A model representing a keyword associated with an event and product.
+
+    Fields:
+        cultural_event (ForeignKey): Foreign key to the CulturalEvent this keyword belongs to.
+        product (ForeignKey): Foreign key to the product associated with the event.
+        keyword (str): The keyword describing the relationship between the event and product.
+
+    Methods:
+        __str__: Return a string representation of the EventProductKeyword instance.
+    """
+
+    cultural_event = models.ForeignKey(CulturalEvent, on_delete=models.CASCADE)
+    product = models.ForeignKey('demand.Product', on_delete=models.CASCADE)  # Assuming there's a Product model in demand app
+    keyword = models.CharField(max_length=255)
+
+    def __str__(self):
+        return f"{self.cultural_event.name} - {self.product.product_name} - {self.keyword}"

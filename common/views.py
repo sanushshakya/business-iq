@@ -1,34 +1,46 @@
 # common/views.py
 
-from rest_framework import generics
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
 from .models import DemandAlert
-from .serializers import DemandAlertSerializer
 
-
-class DemandAlertList(generics.ListAPIView):
+class DismissDemandAlertView(APIView):
     """
-    API view to retrieve demand alerts.
+    View for dismissing a demand alert.
 
-    This view provides a GET endpoint that returns a list of demand alerts, filtered by branch and dismissed status.
+    This view handles the PATCH request to mark a specific demand alert as dismissed.
+    Only authenticated users can perform this action.
     """
 
-    serializer_class = DemandAlertSerializer
+    permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
+    def patch(self, request, pk, format=None):
         """
-        Filter the queryset based on query parameters 'branch' and 'dismissed'.
+        Patch request handler to dismiss a demand alert.
 
-        :return: Queryset containing filtered demand alerts.
+        Parameters:
+        - request: The HTTP request object.
+        - pk: The primary key of the DemandAlert to be dismissed.
+        - format: (Optional) The format of the response.
+
+        Returns:
+        - A Response object containing the result of the operation.
         """
-        branch = self.request.query_params.get('branch', None)
-        dismissed = self.request.query_params.get('dismissed', None)
+        try:
+            # Retrieve the demand alert by its primary key
+            demand_alert = DemandAlert.objects.get(pk=pk)
 
-        queryset = DemandAlert.objects.all()
+            # Check if the user is allowed to dismiss this alert
+            if not self.request.user.owner.branch == demand_alert.branch:
+                return Response({"detail": "You do not have permission to dismiss this alert."}, status=403)
 
-        if branch is not None:
-            queryset = queryset.filter(branch=branch)
+            # Mark the demand alert as dismissed
+            demand_alert.dismissed = True
+            demand_alert.save()
 
-        if dismissed is not None:
-            queryset = queryset.filter(dismissed=bool(dismissed))
-
-        return queryset
+            # Return a success response
+            return Response({"detail": "Demand alert dismissed successfully."}, status=200)
+        except DemandAlert.DoesNotExist:
+            # Return an error response if the demand alert does not exist
+            return Response({"detail": "Demand alert not found."}, status=404)

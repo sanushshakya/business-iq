@@ -1,38 +1,49 @@
 # common/tasks.py
-import logging
+"""
+Module for Celery tasks related to demand alerts.
+
+This module contains tasks that are executed asynchronously using Celery Beat.
+"""
+
 from celery import shared_task
 from django.utils import timezone
-from datetime import timedelta
+from .models import DemandAlert
 
-from products.models import ProductBatch, StockAlert
-from branches.models import Branch
-
-logger = logging.getLogger(__name__)
-
-@shared_task(bind=True)
-def check_low_stock(self):
+@shared_task
+def scan_demand_alerts():
     """
-    Celery task to check stock levels and create alerts if the sum of quantity_remaining across batches for a branch falls below reorder_threshold.
-    """
-    # Get all branches
-    branches = Branch.objects.all()
-    
-    for branch in branches:
-        # Calculate the total remaining quantity for each product at this branch
-        total_quantity = ProductBatch.objects.filter(branch=branch).aggregate(total_quantity=models.Sum('quantity_remaining'))['total_quantity'] or 0
-        
-        # Check if the total quantity is below the reorder threshold
-        for product_batch in ProductBatch.objects.filter(branch=branch):
-            product = product_batch.product
-            if total_quantity < product.reorder_threshold:
-                StockAlert.objects.create(
-                    product=product,
-                    branch=branch,
-                    current_qty=total_quantity,
-                    threshold=product.reorder_threshold,
-                    created_at=timezone.now(),
-                    is_dismissed=False
-                )
-                logger.info(f'Created stock alert for product {product.name} at branch {branch.name}')
+    Task to scan and create demand alerts based on specific criteria.
 
-    return 'Stock check complete'
+    This function will check for products that require attention based on certain conditions,
+    such as low stock levels or impending deadlines, and create corresponding demand alerts.
+    """
+    current_time = timezone.now()
+    # Logic to identify products needing attention
+    # For example, find products with stock levels below a threshold
+    # Create DemandAlert instances for each identified product
+    alerts_to_create = [
+        DemandAlert(
+            product=product,
+            branch=branch,
+            requested_qty=required_quantity,
+            created_at=current_time,
+            is_handled=False,
+        )
+        for product, branch, required_quantity in identify_products_needing_attention()
+    ]
+    # Save the new demand alerts to the database
+    DemandAlert.objects.bulk_create(alerts_to_create)
+
+def identify_products_needing_attention():
+    """
+    Placeholder function to identify products needing attention.
+
+    This function should be replaced with actual logic based on project requirements.
+    It returns a list of tuples (product, branch, required_quantity) for each product that needs an alert.
+    """
+    # Example placeholder implementation
+    return [
+        (product_instance, branch_instance, 10)
+        for product_instance in Product.objects.filter(stock_level__lt=20)
+        for branch_instance in Branch.objects.all()
+    ]

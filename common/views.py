@@ -1,27 +1,34 @@
+# common/views.py
+
 from rest_framework import generics
-from .models import StockAlert
-from .serializers import StockAlertSerializer
+from .models import DemandAlert
+from .serializers import DemandAlertSerializer
 
-class ActiveStockAlertsView(generics.ListAPIView):
+
+class DemandAlertList(generics.ListAPIView):
     """
-    API view to list active stock alerts per branch.
-    
-    This view returns a list of active StockAlert records, filtered by the current date and time.
-    It allows querying alerts for a specific branch by adding a 'branch' query parameter.
+    API view to retrieve demand alerts.
+
+    This view provides a GET endpoint that returns a list of demand alerts, filtered by branch and dismissed status.
     """
 
-    queryset = StockAlert.objects.filter(dismissed_at__isnull=True)
-    serializer_class = StockAlertSerializer
+    serializer_class = DemandAlertSerializer
 
     def get_queryset(self):
         """
-        Optionally filter the list of stock alerts by branch ID.
+        Filter the queryset based on query parameters 'branch' and 'dismissed'.
 
-        Returns:
-            QuerySet: Filtered list of active StockAlert records.
+        :return: Queryset containing filtered demand alerts.
         """
-        qs = super().get_queryset()
-        branch_id = self.request.query_params.get('branch', None)
-        if branch_id is not None:
-            qs = qs.filter(branch=branch_id)
-        return qs
+        branch = self.request.query_params.get('branch', None)
+        dismissed = self.request.query_params.get('dismissed', None)
+
+        queryset = DemandAlert.objects.all()
+
+        if branch is not None:
+            queryset = queryset.filter(branch=branch)
+
+        if dismissed is not None:
+            queryset = queryset.filter(dismissed=bool(dismissed))
+
+        return queryset

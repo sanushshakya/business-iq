@@ -14,7 +14,12 @@ def setup_periodic_tasks(sender, **kwargs):
     """
     Schedule periodic tasks using Celery Beat.
     """
-    sender.add_periodic_task(86400.0, check_low_stock.s(), name='check low stock daily')
+    # Add a new periodic task to run the scan_demand_alerts task every Monday at 06:00 UTC
+    sender.add_periodic_task(
+        crontab(hour=6, minute=0, day_of_week=0),  # Crontab for Monday at 06:00 UTC
+        scan_demand_alerts.s(),  # Task to run
+        name='scan demand alerts weekly'  # Name of the task
+    )
 
 @app.task
 def check_low_stock():
@@ -37,3 +42,13 @@ def check_low_stock():
                 created_at=datetime.now(),
                 is_dismissed=False
             )
+
+@app.task
+def scan_demand_alerts():
+    """
+    Celery task to scan for demand alerts based on specific criteria.
+    """
+    from common.models import DemandAlert
+
+    # Logic to scan demand alerts can be added here
+    pass

@@ -7,21 +7,18 @@ class DemandAlert(models.Model):
     Model representing a demand alert for a product in a specific branch.
 
     Fields:
-    - product: Foreign key to the product that requires attention.
-    - branch: Foreign key to the branch where the product is needed.
-    - requested_qty: Integer field representing the quantity requested.
-    - created_at: DateTimeField indicating when the alert was created.
-    - is_handled: Boolean field indicating whether the alert has been addressed.
-
-    Methods:
-    - __str__: String representation of the model.
+    - event_name: CharField representing the name of the event.
+    - product_name: CharField representing the name of the product.
+    - days_until_event: IntegerField representing the number of days until the event.
+    - recommended_order_quantity: IntegerField representing the recommended order quantity.
+    - dismissed: BooleanField indicating whether the alert has been dismissed.
     """
-    
-    product = models.ForeignKey('inventory.Product', on_delete=models.CASCADE)
-    branch = models.ForeignKey('inventory.Branch', on_delete=models.CASCADE)
-    requested_qty = models.IntegerField()
-    created_at = models.DateTimeField(auto_now_add=True)
-    is_handled = models.BooleanField(default=False)
+
+    event_name = models.CharField(max_length=255)
+    product_name = models.CharField(max_length=255)
+    days_until_event = models.IntegerField()
+    recommended_order_quantity = models.IntegerField()
+    dismissed = models.BooleanField(default=False)
 
     def __str__(self):
-        return f"DemandAlert for {self.product} at {self.branch} (requested: {self.requested_qty})"
+        return f"DemandAlert for {self.product_name} until {self.days_until_event} days"

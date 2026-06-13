@@ -6,7 +6,7 @@ which are not specific to any single app but rather shared across multiple apps.
 """
 
 from django.urls import path
-from .views import StockAlertListAPIView
+from .views import StockAlertListAPIView, DemandAlertCreateAPIView, DemandAlertDismissAPIView
 
 urlpatterns = [
     # Existing URL patterns can be kept here if necessary
@@ -15,4 +15,9 @@ urlpatterns = [
     
     # Add the URL pattern for the stock alerts API
     path('api/alerts/stock/', StockAlertListAPIView.as_view(), name='stock-alert-list'),
+    
+    # New URL patterns for demand alerts
+    path('api/alerts/demand/create/', DemandAlertCreateAPIView.as_view(), name='demand-alert-create'),
+    path('api/alerts/demand/dismiss/<int:pk>/', DemandAlertDismissAPIView.as_view(), name='demand-alert-dismiss'),
 ]
+--- END ---

@@ -1,0 +1,15 @@
+<!-- dashboard/demand-alerts.component.html -->
+<div>
+  <h2>Demand Alerts</h2>
+  <div *ngFor="let alert of demandAlerts">
+    <app-alert-card [alert]="alert"></app-alert-card>
+  </div>
+</div>
+
+<!-- dashboard/stock-alerts.component.html -->
+<div>
+  <h2>Stock Alerts</h2>
+  <div *ngFor="let alert of stockAlerts">
+    <app-stock-alert-card [alert]="alert"></app-stock-alert-card>
+  </div>
+</div>

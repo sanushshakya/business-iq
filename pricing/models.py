@@ -32,3 +32,32 @@ class Subscription(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - {self.plan.name}"
+
+class SupplierInvoice(models.Model):
+    """
+    Model representing an invoice from a supplier.
+    
+    Fields:
+    - invoice_number: CharField representing the unique identifier of the invoice.
+    - supplier: ForeignKey to the Company model, representing the supplier.
+    - total_amount: DecimalField representing the total amount due on the invoice.
+    - issued_date: DateField representing the date when the invoice was issued.
+    - due_date: DateField representing the date by which the invoice is due.
+    - payment_status: CharField representing the current status of the payment (e.g., 'paid', 'pending').
+    """
+    
+    INVOICE_STATUS_CHOICES = [
+        ('paid', 'Paid'),
+        ('pending', 'Pending'),
+        ('overdue', 'Overdue'),
+    ]
+
+    invoice_number = models.CharField(max_length=50, unique=True)
+    supplier = models.ForeignKey('common.Company', on_delete=models.CASCADE)
+    total_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    issued_date = models.DateField()
+    due_date = models.DateField(null=True, blank=True)
+    payment_status = models.CharField(max_length=10, choices=INVOICE_STATUS_CHOICES, default='pending')
+
+    def __str__(self):
+        return self.invoice_number

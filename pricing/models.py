@@ -61,3 +61,30 @@ class SupplierInvoice(models.Model):
 
     def __str__(self):
         return self.invoice_number
+
+class InvoiceLineItem(models.Model):
+    """
+    Model representing an individual line item in an invoice.
+    
+    Fields:
+    - invoice: ForeignKey to the SupplierInvoice model, representing the invoice this line item belongs to.
+    - description: CharField representing a brief description of the item.
+    - quantity: IntegerField representing the number of units of the item.
+    - price_per_unit: DecimalField representing the price per unit of the item.
+    - total_price: DecimalField representing the total price for this line item.
+    """
+
+    INVOICE_LINE_ITEM_STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('paid', 'Paid'),
+    ]
+
+    invoice = models.ForeignKey(SupplierInvoice, on_delete=models.CASCADE)
+    description = models.CharField(max_length=255)
+    quantity = models.IntegerField()
+    price_per_unit = models.DecimalField(max_digits=10, decimal_places=2)
+    total_price = models.DecimalField(max_digits=10, decimal_places=2)
+    status = models.CharField(max_length=10, choices=INVOICE_LINE_ITEM_STATUS_CHOICES, default='pending')
+
+    def __str__(self):
+        return f"{self.invoice.invoice_number} - {self.description}"

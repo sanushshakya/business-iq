@@ -1,0 +1,60 @@
+/* src/components/CulturalCalendar.css */
+
+/**
+ * Styles for the Cultural Calendar component.
+ */
+
+.CulturalCalendar {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+}
+
+.MonthHeader {
+    font-size: 24px;
+    margin-bottom: 15px;
+    text-align: center;
+}
+
+.EventCard {
+    background-color: #f9f9f9;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    padding: 15px;
+    margin-bottom: 10px;
+    width: 300px;
+}
+
+.EventCard h3 {
+    font-size: 18px;
+    margin-top: 0;
+}
+
+.DateRange {
+    font-style: italic;
+    color: #666;
+}
+
+.ProductCategories {
+    margin-top: 10px;
+    font-weight: bold;
+}
+
+.DemandMultiplier {
+    margin-top: 5px;
+    font-size: 16px;
+    color: #ff6347;
+}
+
+.EventCard a {
+    display: inline-block;
+    margin-top: 10px;
+    text-decoration: none;
+    color: #007bff;
+    font-weight: bold;
+}
+
+.EventCard a:hover {
+    text-decoration: underline;
+}

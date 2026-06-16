@@ -3,7 +3,7 @@
 Module for caching API responses using Redis.
 
 This module provides a decorator to cache API responses for one day, reducing the number of requests
-to external services like AlAdhan.com's Hijri calendar API.
+to external services like HMRC Tariff Service.
 """
 
 import redis
@@ -42,13 +42,10 @@ def cache_api_response(timeout=86400):
 
 # Example usage:
 # @cache_api_response()
-# def fetch_hijri_calendar():
+# def fetch_tariff_data():
 #     """
-#     Function to fetch Hijri calendar data from AlAdhan.com API.
+#     Function to fetch tariff data from HMRC Tariff Service API.
 #     """
 #     import requests
-#     response = requests.get("https://api.aladhan.com/v1/gregorianToHijri")
+#     response = requests.get("https://api.hmrc.gov.uk/tariff")
 #     return response.json()
-```
-
-This file defines a `cache_api_response` decorator that can be used to cache the results of any function for a specified number of seconds (default is 24 hours). The decorator generates a unique cache key based on the function name and its arguments, checks if the result is already cached in Redis, and if not, calls the function, caches the result, and then returns it.

@@ -1,17 +1,44 @@
 # common/serializers.py
 
 from rest_framework import serializers
-from .models import StockProjection
+from .models import Product, PriceChangeLog
 
-class StockProjectionSerializer(serializers.ModelSerializer):
+class ProductSerializer(serializers.ModelSerializer):
     """
-    Serializer for the StockProjection model.
+    Serializer for the Product model.
 
-    This serializer is used to convert StockProjection objects into JSON and vice versa.
+    This serializer is used to convert Product objects into JSON and vice versa.
     """
 
     class Meta:
-        model = StockProjection  # Specify the model this serializer will serialize
-        fields = '__all__'  # Include all fields from the StockProjection model in the serialized data
+        model = Product
+        fields = ['id', 'name', 'description', 'price', 'created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at']
 
-# Inline comments explaining each section of the code
+class PriceChangeLogSerializer(serializers.ModelSerializer):
+    """
+    Serializer for the PriceChangeLog model.
+
+    This serializer is used to convert PriceChangeLog objects into JSON and vice versa.
+    """
+
+    class Meta:
+        model = PriceChangeLog
+        fields = ['id', 'product', 'old_price', 'new_price', 'change_date']
+        read_only_fields = ['id', 'change_date']
+
+    def validate_new_price(self, value):
+        """
+        Validate that the new price is greater than the old price.
+        """
+
+        product_id = self.initial_data.get('product')
+        try:
+            product = Product.objects.get(id=product_id)
+        except Product.DoesNotExist:
+            raise serializers.ValidationError("Product does not exist")
+
+        if value <= product.price:
+            raise serializers.ValidationError("New price must be greater than the old price")
+        
+        return value

@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime, timedelta
 from django.utils import timezone
-from .models import StockBatch
+from .models import StockBatch, PriceChangeLog
 
 class PriceRecommendationService:
     """
@@ -65,6 +65,24 @@ class PriceRecommendationService:
         stock_batch.product.save()
         self.logger.info(f"Applied markdown discount of {discount_percentage}% to product: {stock_batch.product.name}, new price: {discounted_price}")
 
+    def create_price_change_log_entry(self, stock_batch, reason):
+        """
+        Create a PriceChangeLog entry for the given StockBatch with the specified reason.
+
+        Args:
+            stock_batch (StockBatch): The StockBatch object associated with the change.
+            reason (str): The reason for the price change.
+        """
+        # Create and save a new PriceChangeLog entry
+        PriceChangeLog.objects.create(
+            stock_batch=stock_batch,
+            old_price=stock_batch.product.price,
+            new_price=stock_batch.product.price,
+            reason=reason,
+            changed_at=timezone.now(),
+        )
+        self.logger.info(f"Created price change log entry for product: {stock_batch.product.name}, reason: {reason}")
+
     def query_stock_batches_for_decay_pricing(self):
         """
         Query StockBatches for decay pricing — where expiry_date is not null and quantity_remaining > 0.
@@ -72,89 +90,16 @@ class PriceRecommendationService:
         Returns:
             queryset: A queryset of StockBatch objects that are eligible for decay pricing.
         """
-        # Calculate the current date
-        now = timezone.now()
-        
-        # Define a buffer period before expiration to consider batches for potential decay
-        buffer_days = 7
-        
-        # Query the database for StockBatches where expiry_date is not null, quantity_remaining > 0,
-        # and where the batch is within the buffer period of expiration
-        eligible_batches = StockBatch.objects.filter(
-            expiry_date__isnull=False,
-            quantity_remaining__gt=0,
-            expiry_date__lte=now + timedelta(days=buffer_days),
-        )
-        
-        return eligible_batches
+        return StockBatch.objects.filter(expiry_date__isnull=False, quantity_remaining__gt=0)
 
-    def apply_decay_pricing_to_batches(self):
+    def apply_decay_pricing(self):
         """
-        Apply decay pricing to all eligible StockBatches.
+        Apply decay pricing to all applicable StockBatches and log the changes.
         """
-        # Query the database for eligible StockBatches
-        eligible_batches = self.query_stock_batches_for_decay_pricing()
-        
-        # Apply markdown discounts to each eligible batch
-        for batch in eligible_batches:
+        stock_batches = self.query_stock_batches_for_decay_pricing()
+        for batch in stock_batches:
+            original_price = batch.product.price
             self.apply_markdown_discounts(batch)
-
-# common/models.py
-
-from django.db import models
-from .services.price_recommendation_service import PriceRecommendationService
-
-class StockBatch(models.Model):
-    """
-    Model representing a batch of stock with details including expiration date and remaining quantity.
-
-    Fields:
-    - product: ForeignKey to the Product model, representing the product in this batch.
-    - batch_number: CharField representing the unique batch number for tracking.
-    - expiry_date: DateTimeField representing the expiration date of the batch.
-    - quantity_remaining: IntegerField representing the remaining quantity of the batch.
-    """
-    product = models.ForeignKey('common.Product', on_delete=models.CASCADE)
-    batch_number = models.CharField(max_length=255, unique=True)
-    expiry_date = models.DateTimeField()
-    quantity_remaining = models.IntegerField()
-
-# common/tasks.py
-
-from celery import shared_task
-from .services.price_recommendation_service import PriceRecommendationService
-
-@shared_task
-def apply_decay_pricing_task():
-    """
-    Celery task to apply decay pricing to eligible StockBatches.
-    """
-    price_recommender = PriceRecommendationService()
-    price_recommender.apply_decay_pricing_to_batches()
-
-# common/serializers.py
-
-from rest_framework import serializers
-from .models import Product, StockBatch, PriceChangeLog
-
-class ProductSerializer(serializers.ModelSerializer):
-    """
-    Serializer for the Product model.
-
-    This serializer is used to convert Product objects into JSON and vice versa.
-    """
-
-    class Meta:
-        model = Product
-        fields = '__all__'
-
-class StockBatchSerializer(serializers.ModelSerializer):
-    """
-    Serializer for the StockBatch model.
-
-    This serializer is used to convert StockBatch objects into JSON and vice versa.
-    """
-
-    class Meta:
-        model = StockBatch
-        fields = '__all__'
+            new_price = batch.product.price
+            if original_price != new_price:
+                self.create_price_change_log_entry(batch, reason='decay_markdown')

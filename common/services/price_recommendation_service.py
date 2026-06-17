@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime, timedelta
 from django.utils import timezone
+from .models import StockBatch
 
 class PriceRecommendationService:
     """
@@ -37,6 +38,33 @@ class PriceRecommendationService:
 
         return recommended_price
 
+    def apply_markdown_discounts(self, stock_batch):
+        """
+        Apply markdown discounts to a StockBatch based on shelf life remaining percentage.
+
+        Args:
+            stock_batch (StockBatch): The StockBatch object for which to apply the discount.
+        """
+        # Calculate the percentage of shelf life remaining
+        current_date = timezone.now()
+        shelf_life_remaining = (stock_batch.expiry_date - current_date).days / (stock_batch.expiry_date - stock_batch.created_at).days * 100
+
+        if shelf_life_remaining < 25:
+            discount_percentage = 20
+        elif shelf_life_remaining < 50:
+            discount_percentage = 15
+        else:
+            discount_percentage = 10
+
+        # Calculate the discounted price
+        original_price = stock_batch.product.price
+        discounted_price = original_price * (1 - discount_percentage / 100)
+
+        # Update the product price and log the change
+        stock_batch.product.price = discounted_price
+        stock_batch.product.save()
+        self.logger.info(f"Applied markdown discount of {discount_percentage}% to product: {stock_batch.product.name}, new price: {discounted_price}")
+
     def query_stock_batches_for_decay_pricing(self):
         """
         Query StockBatches for decay pricing — where expiry_date is not null and quantity_remaining > 0.
@@ -60,6 +88,17 @@ class PriceRecommendationService:
         
         return eligible_batches
 
+    def apply_decay_pricing_to_batches(self):
+        """
+        Apply decay pricing to all eligible StockBatches.
+        """
+        # Query the database for eligible StockBatches
+        eligible_batches = self.query_stock_batches_for_decay_pricing()
+        
+        # Apply markdown discounts to each eligible batch
+        for batch in eligible_batches:
+            self.apply_markdown_discounts(batch)
+
 # common/models.py
 
 from django.db import models
@@ -73,37 +112,49 @@ class StockBatch(models.Model):
     - product: ForeignKey to the Product model, representing the product in this batch.
     - batch_number: CharField representing the unique batch number for tracking.
     - expiry_date: DateTimeField representing the expiration date of the batch.
-    - quantity_remaining: IntegerField representing the quantity of the product remaining in this batch.
+    - quantity_remaining: IntegerField representing the remaining quantity of the batch.
     """
-
     product = models.ForeignKey('common.Product', on_delete=models.CASCADE)
-    batch_number = models.CharField(max_length=50, unique=True)
+    batch_number = models.CharField(max_length=255, unique=True)
     expiry_date = models.DateTimeField()
     quantity_remaining = models.IntegerField()
 
-    def apply_decay_pricing(self):
-        """
-        Apply decay pricing to the batch based on the remaining shelf life.
+# common/tasks.py
 
-        This method calculates the recommended price considering the time left until expiration.
-        """
-        if self.expiry_date is not None and self.quantity_remaining > 0:
-            # Calculate days remaining
-            days_remaining = (self.expiry_date - timezone.now()).days
+from celery import shared_task
+from .services.price_recommendation_service import PriceRecommendationService
 
-            # Define a decay rate — here, a simple linear decrease in price over time
-            decay_rate_per_day = 1.0 / 365.0  # Assuming annual decay rate of 1%
+@shared_task
+def apply_decay_pricing_task():
+    """
+    Celery task to apply decay pricing to eligible StockBatches.
+    """
+    price_recommender = PriceRecommendationService()
+    price_recommender.apply_decay_pricing_to_batches()
 
-            # Calculate the new recommended price
-            new_price = self.product.price * (1 - days_remaining * decay_rate_per_day)
+# common/serializers.py
 
-            # Ensure the new price is not below zero
-            if new_price < 0:
-                new_price = 0
+from rest_framework import serializers
+from .models import Product, StockBatch, PriceChangeLog
 
-            # Update the product's price with the decayed value
-            self.product.price = new_price
-            self.product.save()
+class ProductSerializer(serializers.ModelSerializer):
+    """
+    Serializer for the Product model.
 
-            # Log the change
-            PriceRecommendationService().logger.info(f"Applied decay pricing to {self.batch_number}: New price is {new_price}")
+    This serializer is used to convert Product objects into JSON and vice versa.
+    """
+
+    class Meta:
+        model = Product
+        fields = '__all__'
+
+class StockBatchSerializer(serializers.ModelSerializer):
+    """
+    Serializer for the StockBatch model.
+
+    This serializer is used to convert StockBatch objects into JSON and vice versa.
+    """
+
+    class Meta:
+        model = StockBatch
+        fields = '__all__'

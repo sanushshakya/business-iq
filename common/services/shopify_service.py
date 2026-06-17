@@ -103,12 +103,26 @@ class ShopifyService:
         response_data = self.make_request(endpoint, method='PUT', data=product_data)
         return response_data['product']
 
-    def delete_product(self, product_id: int):
+    def update_product_price(self, product_id: int, price: float) -> dict:
         """
-        Delete a product from the Shopify store.
+        Update the price of an existing product in the Shopify store.
 
         Args:
-            product_id (int): ID of the product to delete.
+            product_id (int): ID of the product to update.
+            price (float): New price for the product.
+
+        Returns:
+            dict: Updated product dictionary.
         """
-        endpoint = f'products/{product_id}'
-        self.make_request(endpoint, method='DELETE')
+        product_data = {
+            'product': {
+                'id': product_id,
+                'variants': [
+                    {
+                        'id': None,  # Use None to let Shopify auto-fill this field
+                        'price': str(price),  # Ensure the price is a string
+                    }
+                ],
+            },
+        }
+        return self.update_product(product_id, product_data)

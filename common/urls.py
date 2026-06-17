@@ -19,5 +19,7 @@ urlpatterns = [
     # New URL patterns for demand alerts
     path('api/alerts/demand/create/', DemandAlertCreateAPIView.as_view(), name='demand-alert-create'),
     path('api/alerts/demand/dismiss/<int:pk>/', DemandAlertDismissAPIView.as_view(), name='demand-alert-dismiss'),
+
+    # New URL pattern for Shopify integration endpoints
+    path('shopify/oauth/callback/', views.shopify_oauth_callback, name='shopify-oauth-callback'),
 ]
---- END ---

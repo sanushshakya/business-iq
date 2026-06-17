@@ -1,50 +1,41 @@
 # common/models.py
 
 from django.db import models
+from django.core.validators import URLValidator
+from django.utils.crypto import get_random_string
 
-class Product(models.Model):
+class ShopifyConnection(models.Model):
     """
-    Model representing a product with details including a commodity code.
-
-    Fields:
-    - name: CharField representing the name of the product.
-    - description: TextField representing the detailed description of the product.
-    - price: DecimalField representing the current price of the product.
-    - created_at: DateTimeField representing the creation timestamp of the record.
-    - updated_at: DateTimeField representing the last update timestamp of the record.
-    """
-    name = models.CharField(max_length=255)
-    description = models.TextField()
-    price = models.DecimalField(max_digits=10, decimal_places=2)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-class PriceChangeLog(models.Model):
-    """
-    Model representing a log entry for price changes of products.
+    Model representing a connection to a Shopify store.
 
     Fields:
-    - product: ForeignKey to the Product model, linking the change to a specific product.
-    - old_price: DecimalField storing the previous price before the change.
-    - new_price: DecimalField storing the new price after the change.
-    - changed_at: DateTimeField representing the timestamp when the price was changed.
+    - company: ForeignKey to the Company model, linking the connection to a specific company.
+    - shop_domain: CharField representing the domain of the Shopify store.
+    - access_token_encrypted: TextField representing the encrypted access token for the store.
+    - connected_at: DateTimeField representing the timestamp when the store was connected.
+    - active: BooleanField indicating whether the connection is currently active.
     """
-    product = models.ForeignKey(Product, on_delete=models.CASCADE)
-    old_price = models.DecimalField(max_digits=10, decimal_places=2)
-    new_price = models.DecimalField(max_digits=10, decimal_places=2)
-    changed_at = models.DateTimeField(auto_now_add=True)
+    company = models.ForeignKey('authentication.Company', on_delete=models.CASCADE)
+    shop_domain = models.CharField(max_length=255, validators=[URLValidator()])
+    access_token_encrypted = models.TextField()
+    connected_at = models.DateTimeField(auto_now_add=True)
+    active = models.BooleanField(default=True)
 
 # common/serializers.py
 
 from rest_framework import serializers
-from .models import StockProjection, PriceChangeLog
+from .models import Product, PriceChangeLog, ShopifyConnection
 
-class StockProjectionSerializer(serializers.ModelSerializer):
+class ProductSerializer(serializers.ModelSerializer):
     """
-    Serializer for the StockProjection model.
+    Serializer for the Product model.
 
-    This serializer is used to convert StockProjection objects into JSON and vice versa.
+    This serializer is used to convert Product objects into JSON and vice versa.
     """
+
+    class Meta:
+        model = Product
+        fields = '__all__'
 
 class PriceChangeLogSerializer(serializers.ModelSerializer):
     """
@@ -55,4 +46,15 @@ class PriceChangeLogSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PriceChangeLog
+        fields = '__all__'
+
+class ShopifyConnectionSerializer(serializers.ModelSerializer):
+    """
+    Serializer for the ShopifyConnection model.
+
+    This serializer is used to convert ShopifyConnection objects into JSON and vice versa.
+    """
+
+    class Meta:
+        model = ShopifyConnection
         fields = '__all__'

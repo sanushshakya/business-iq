@@ -2,7 +2,7 @@
 
 from django.db import models
 from django.core.validators import URLValidator
-from django.utils.crypto import get_random_string
+from django.utils.crypto import get_random_string, pbkdf2_hmac
 
 class ShopifyConnection(models.Model):
     """
@@ -21,10 +21,31 @@ class ShopifyConnection(models.Model):
     connected_at = models.DateTimeField(auto_now_add=True)
     active = models.BooleanField(default=True)
 
+    def save(self, *args, **kwargs):
+        """
+        Override the default save method to encrypt the access token before saving.
+        """
+        if self.access_token:
+            self.access_token_encrypted = self.encrypt_access_token(self.access_token)
+        super(ShopifyConnection, self).save(*args, **kwargs)
+
+    def encrypt_access_token(self, access_token):
+        """
+        Encrypt the access token using a secure hashing algorithm.
+
+        Args:
+        - access_token (str): The access token to be encrypted.
+
+        Returns:
+        - str: The encrypted access token.
+        """
+        salt = get_random_string(length=16)
+        return pbkdf2_hmac('sha256', access_token.encode(), salt.encode(), 32).hex()
+
 # common/serializers.py
 
 from rest_framework import serializers
-from .models import Product, PriceChangeLog, ShopifyConnection
+from .models import Product, PriceChangeLog
 
 class ProductSerializer(serializers.ModelSerializer):
     """
@@ -46,15 +67,4 @@ class PriceChangeLogSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PriceChangeLog
-        fields = '__all__'
-
-class ShopifyConnectionSerializer(serializers.ModelSerializer):
-    """
-    Serializer for the ShopifyConnection model.
-
-    This serializer is used to convert ShopifyConnection objects into JSON and vice versa.
-    """
-
-    class Meta:
-        model = ShopifyConnection
         fields = '__all__'

@@ -1,25 +1,32 @@
 # common/views.py
 
-from rest_framework import generics
-from .models import StockProjection
-from .serializers import StockProjectionSerializer
+from django.http import JsonResponse
+from rest_framework.decorators import api_view
+from .models import PriceChangeLog
 
-class StockProjectionDetailView(generics.RetrieveAPIView):
+@api_view(['GET'])
+def price_change_log(request):
     """
-    API endpoint to retrieve stock projection data for a specific product.
+    API endpoint to retrieve the list of price change logs.
 
-    This endpoint allows clients to fetch the current and projected stock price,
-    as well as the date of the projection, for a given product identified by its ID.
+    This function retrieves all records from the PriceChangeLog model and returns them as JSON.
     
-    URL parameters:
-    - <product_id>: Integer representing the unique identifier of the product.
-
     Returns:
-    - JSON object containing the stock projection data if found.
-    - 404 Not Found if no stock projection exists for the specified product ID.
+        JsonResponse: A JSON response containing the list of price change logs.
     """
-    queryset = StockProjection.objects.all()
-    serializer_class = StockProjectionSerializer
-    lookup_field = 'product_id'
+    try:
+        # Retrieve all price change logs
+        logs = PriceChangeLog.objects.all()
+        
+        # Convert queryset to list of dictionaries
+        log_list = [{'id': log.id, 'product_name': log.product.name, 'old_price': log.old_price, 
+                      'new_price': log.new_price, 'change_date': log.change_date} for log in logs]
+        
+        # Return JSON response
+        return JsonResponse(log_list, safe=False)
+    
+    except PriceChangeLog.DoesNotExist:
+        # Handle the case where no price change logs exist
+        return JsonResponse({'error': 'No price change logs found'}, status=404)
 
-# End of file
+# Additional views can be added here as needed for other functionalities.

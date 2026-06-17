@@ -88,25 +88,28 @@ DATABASES = {
     "default": {
         "ENGINE": config('DB_ENGINE', default='django.db.backends.sqlite3'),
         "NAME": config('DB_NAME', default=BASE_DIR / 'db.sqlite3'),
-        "USER": config('DB_USER', default=None),
-        "PASSWORD": config('DB_PASSWORD', default=None),
-        "HOST": config('DB_HOST', default='localhost'),
-        "PORT": config('DB_PORT', default='5432'),
+        "USER": config('DB_USER', default ''),
+        "PASSWORD": config('DB_PASSWORD', default ''),
+        "HOST": config('DB_HOST', default ''),
+        "PORT": config('DB_PORT', default ''),
     }
 }
 
-# Authentication backends
-AUTHENTICATION_BACKENDS = [
-    'django.contrib.auth.backends.ModelBackend',
-]
+# Internationalization
+# https://docs.djangoproject.com/en/5.2/topics/i18n/
 
-# Custom user model
-AUTH_USER_MODEL = 'tenants.CustomUser'
+LANGUAGE_CODE = 'en-us'
 
-# Email settings
-EMAIL_BACKEND = config('EMAIL_BACKEND', default='django.core.mail.backends.smtp.EmailBackend')
-EMAIL_HOST = config('EMAIL_HOST', default='localhost')
-EMAIL_PORT = config('EMAIL_PORT', default=25, cast=int)
-EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=False, cast=bool)
-EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
-EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
+TIME_ZONE = 'UTC'
+
+USE_I18N = True
+
+USE_L10N = True
+
+USE_TZ = True
+
+
+# Static files (CSS, JavaScript, Images)
+# https://docs.djangoproject.com/en/5.2/howto/static-files/
+
+STATIC_URL = '/static/'

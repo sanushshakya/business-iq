@@ -1,32 +1,59 @@
 # common/views.py
 
 from django.http import JsonResponse
-from rest_framework.decorators import api_view
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
 from .models import PriceChangeLog
 
-@api_view(['GET'])
-def price_change_log(request):
+@csrf_exempt
+@require_http_methods(["PATCH"])
+def approve_price_change(request, log_id):
     """
-    API endpoint to retrieve the list of price change logs.
+    API endpoint to approve a price change log.
 
-    This function retrieves all records from the PriceChangeLog model and returns them as JSON.
-    
+    Args:
+        request (HttpRequest): The HTTP request object.
+        log_id (int): The ID of the PriceChangeLog to be approved.
+
     Returns:
-        JsonResponse: A JSON response containing the list of price change logs.
+        JsonResponse: A JSON response indicating success or failure.
     """
     try:
-        # Retrieve all price change logs
-        logs = PriceChangeLog.objects.all()
-        
-        # Convert queryset to list of dictionaries
-        log_list = [{'id': log.id, 'product_name': log.product.name, 'old_price': log.old_price, 
-                      'new_price': log.new_price, 'change_date': log.change_date} for log in logs]
-        
-        # Return JSON response
-        return JsonResponse(log_list, safe=False)
-    
+        log = PriceChangeLog.objects.get(id=log_id)
     except PriceChangeLog.DoesNotExist:
-        # Handle the case where no price change logs exist
-        return JsonResponse({'error': 'No price change logs found'}, status=404)
+        return JsonResponse({'error': 'Price change log not found.'}, status=404)
 
-# Additional views can be added here as needed for other functionalities.
+    if log.approved:
+        return JsonResponse({'error': 'Price change log is already approved.'}, status=400)
+
+    log.approved = True
+    log.save()
+
+    return JsonResponse({'message': 'Price change log approved successfully.'}, status=200)
+
+
+@csrf_exempt
+@require_http_methods(["PATCH"])
+def reject_price_change(request, log_id):
+    """
+    API endpoint to reject a price change log.
+
+    Args:
+        request (HttpRequest): The HTTP request object.
+        log_id (int): The ID of the PriceChangeLog to be rejected.
+
+    Returns:
+        JsonResponse: A JSON response indicating success or failure.
+    """
+    try:
+        log = PriceChangeLog.objects.get(id=log_id)
+    except PriceChangeLog.DoesNotExist:
+        return JsonResponse({'error': 'Price change log not found.'}, status=404)
+
+    if log.approved:
+        return JsonResponse({'error': 'Price change log is already approved.'}, status=400)
+
+    log.approved = False
+    log.save()
+
+    return JsonResponse({'message': 'Price change log rejected successfully.'}, status=200)

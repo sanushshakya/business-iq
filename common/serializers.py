@@ -24,7 +24,7 @@ class PriceChangeLogSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PriceChangeLog
-        fields = ['id', 'product', 'old_price', 'new_price', 'change_date']
+        fields = ['id', 'product', 'old_price', 'new_price', 'change_date', 'status']
         read_only_fields = ['id', 'change_date']
 
     def validate_new_price(self, value):
@@ -42,3 +42,22 @@ class PriceChangeLogSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("New price must be greater than the old price")
         
         return value
+
+    def create(self, validated_data):
+        """
+        Create a new PriceChangeLog instance and set the default status based on the company's approval_mode.
+        """
+
+        company_id = self.context['request'].data.get('product__company')
+        try:
+            company = Company.objects.get(id=company_id)
+        except Company.DoesNotExist:
+            raise serializers.ValidationError("Company does not exist")
+
+        price_change_log = PriceChangeLog.objects.create(**validated_data)
+        if company.approval_mode == 'auto_apply':
+            price_change_log.status = PriceChangeLog.APPROVED
+        else:
+            price_change_log.status = PriceChangeLog.PENDING
+
+        return price_change_log

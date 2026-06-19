@@ -77,6 +77,8 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
+ASGI_APPLICATION = 'config.asgi.application'  # Added ASGI application setting
+
 # Celery configuration
 CELERY_BROKER_URL = config('CELERY_BROKER_URL', default='redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', default='redis://localhost:6379/0')
@@ -87,29 +89,27 @@ CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', default='redis://localho
 DATABASES = {
     "default": {
         "ENGINE": config('DB_ENGINE', default='django.db.backends.sqlite3'),
-        "NAME": config('DB_NAME', default=BASE_DIR / 'db.sqlite3'),
-        "USER": config('DB_USER', default ''),
-        "PASSWORD": config('DB_PASSWORD', default ''),
-        "HOST": config('DB_HOST', default ''),
-        "PORT": config('DB_PORT', default ''),
+        "NAME": config('DB_NAME', default=BASE_DIR / "db.sqlite3"),
     }
 }
 
-# Internationalization
-# https://docs.djangoproject.com/en/5.2/topics/i18n/
+# Channels configuration
+INSTALLED_APPS += ["channels"]  # Added channels to INSTALLED_APPS
 
-LANGUAGE_CODE = 'en-us'
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [(config('REDIS_HOST', default='localhost'), config('REDIS_PORT', default=6379, cast=int))],
+        },
+    },
+}
 
-TIME_ZONE = 'UTC'
-
-USE_I18N = True
-
-USE_L10N = True
-
-USE_TZ = True
-
+# CORS configuration
+CORS_ALLOW_ALL_ORIGINS = True  # Added for development purposes
 
 # Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.2/howto/static-files/
-
 STATIC_URL = '/static/'
+
+# Default primary key field type
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

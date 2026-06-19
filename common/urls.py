@@ -5,7 +5,7 @@ This file contains the URL configurations for common parts of the iq project,
 which are not specific to any single app but rather shared across multiple apps.
 """
 
-from django.urls import path
+from django.urls import path, re_path  # Added re_path for WebSocket support
 from .views import StockAlertListAPIView, DemandAlertCreateAPIView, DemandAlertDismissAPIView
 
 urlpatterns = [
@@ -22,4 +22,7 @@ urlpatterns = [
 
     # New URL pattern for Shopify integration endpoints
     path('shopify/oauth/callback/', views.shopify_oauth_callback, name='shopify-oauth-callback'),
+
+    # WebSocket consumer URL pattern
+    re_path(r'ws/socket-server/$', consumers.MyWebSocketConsumer.as_view()),  # Added this line
 ]

@@ -28,8 +28,7 @@ def stock_movement_event():
     Fixture to simulate a StockMovement event.
     """
     # Simulate an event here, for example:
-    # return {"type": "stock_moved", "data": {"product_id": 123}}
-    pass
+    return {"type": "stock_moved", "data": {"product_id": 123}}
 
 async def test_stockmovement_websocket(stock_movement_event):
     """
@@ -47,5 +46,9 @@ async def test_stockmovement_websocket(stock_movement_event):
         'type': 'websocket.response',
         'message': 'Stock movement received successfully'
     }
+
+    # Ensure the message is not sent twice
+    with pytest.raises(TimeoutError):
+        await communicator.receive_json_from(timeout=1)
 
     await communicator.disconnect()

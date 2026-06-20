@@ -1,20 +1,30 @@
-# Use an official Python runtime as a parent image
-FROM python:3.12-slim
+# Stage 1: Builder Image
+FROM python:3.12-slim AS builder
 
-# Set the working directory in the container
 WORKDIR /app
 
-# Copy the current directory contents into the container at /app
-COPY . /app
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements/base.txt
+COPY supplyiq/ ./
 
-# Make port 8000 available to the world outside this container
-EXPOSE 8000
+RUN python manage.py collectstatic --noinput --clear
 
-# Define environment variable
-ENV NAME World
+# Stage 2: Production Image
+FROM python:3.12-slim
 
-# Run gunicorn command when the container launches
-CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000"]
+ENV PYTHONUNBUFFERED=1 \
+    DJANGO_SECRET_KEY='your_secret_key_here' \
+    DATABASE_URL='your_database_url_here'
+
+WORKDIR /app
+
+COPY --from=builder /app/venv /app/venv
+COPY --from=builder /app/static /app/static
+COPY supplyiq/ ./
+
+RUN chown -R www-data:www-data /app
+
+USER www-data
+
+CMD ["gunicorn", "supplyiq.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4"]

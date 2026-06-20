@@ -1,40 +1,53 @@
+# logistics/models.py
+
 from django.db import models
+from common.models import ShopifyConnection
 
-# Module-level docstring
-"""
-This module contains the Django models for the logistics app.
-"""
-
-class LogisticProvider(models.Model):
+class UserSupplier(models.Model):
     """
-    Represents a logistic provider in the system.
+    Model representing a user supplier.
 
-    Attributes:
-        name (str): The name of the logistic provider.
-        address (str): The address of the logistic provider.
-        phone_number (str): The phone number of the logistic provider.
+    Fields:
+    - company: ForeignKey to the Company model, linking the connection to a specific company.
+    - name: CharField representing the name of the supplier.
+    - country_of_origin: CharField representing the country where the supplier is based.
+    - product_categories: JSONField representing the categories of products supplied by the supplier.
+    - lead_time_days: IntegerField representing the estimated time in days for delivery from this supplier.
+    - notes: TextField representing additional information or notes about the supplier.
     """
-
+    company = models.ForeignKey(ShopifyConnection, on_delete=models.CASCADE)
     name = models.CharField(max_length=255)
-    address = models.TextField()
-    phone_number = models.CharField(max_length=15)
+    country_of_origin = models.CharField(max_length=100)
+    product_categories = models.JSONField()
+    lead_time_days = models.IntegerField()
+    notes = models.TextField(blank=True, null=True)
 
-    def __str__(self):
-        return self.name
-
-class Delivery(models.Model):
+class AlternativeSupplier(models.Model):
     """
-    Represents a delivery order in the system.
+    Model representing an alternative supplier.
 
-    Attributes:
-        provider (LogisticProvider): The logistic provider handling this delivery.
-        shipment_date (datetime.date): The date when the shipment is expected to be delivered.
-        status (str): The current status of the delivery ('Pending', 'In Transit', 'Delivered').
+    Fields:
+    - company: ForeignKey to the Company model, linking the connection to a specific company.
+    - name: CharField representing the name of the supplier.
+    - country_of_origin: CharField representing the country where the supplier is based.
+    - product_categories: JSONField representing the categories of products supplied by the supplier.
+    - lead_time_days: IntegerField representing the estimated time in days for delivery from this supplier.
     """
+    company = models.ForeignKey(ShopifyConnection, on_delete=models.CASCADE)
+    name = models.CharField(max_length=255)
+    country_of_origin = models.CharField(max_length=100)
+    product_categories = models.JSONField()
+    lead_time_days = models.IntegerField()
 
-    provider = models.ForeignKey(LogisticProvider, on_delete=models.CASCADE)
-    shipment_date = models.DateField()
-    status = models.CharField(max_length=20, choices=[('Pending', 'Pending'), ('In Transit', 'In Transit'), ('Delivered', 'Delivered')], default='Pending')
+class FreightAlert(models.Model):
+    """
+    Model representing a freight alert.
 
-    def __str__(self):
-        return f"Delivery for {self.provider.name} on {self.shipment_date}"
+    Fields:
+    - user_supplier: ForeignKey to the UserSupplier model, linking the alert to a specific supplier.
+    - status: CharField representing the current status of the freight (e.g., 'pending', 'shipped').
+    - tracking_number: CharField representing the tracking number for the shipment.
+    """
+    user_supplier = models.ForeignKey(UserSupplier, on_delete=models.CASCADE)
+    status = models.CharField(max_length=50)
+    tracking_number = models.CharField(max_length=100)

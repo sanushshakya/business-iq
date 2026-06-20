@@ -1,49 +1,50 @@
-# common/tasks.py
-"""
-Module for Celery tasks related to demand alerts.
-
-This module contains tasks that are executed asynchronously using Celery Beat.
-"""
-
+import requests
 from celery import shared_task
-from django.utils import timezone
-from .models import DemandAlert
+from django.conf import settings
+from .models import FreightAlert
 
 @shared_task
-def scan_demand_alerts():
+def check_freight_rates():
     """
-    Task to scan and create demand alerts based on specific criteria.
+    Celery task to fetch current freight rates and create alerts if the rate has changed.
+    
+    This task will:
+    1. Fetch current freight rates from an external API.
+    2. Compare the current rate with the last recorded rate for each company.
+    3. Create a FreightAlert instance if there is a significant change exceeding a predefined threshold.
+    """
+    # URL of the external API to fetch freight rates
+    api_url = settings.FREIGHT_RATES_API_URL
+    
+    try:
+        response = requests.get(api_url)
+        response.raise_for_status()
+        
+        rates_data = response.json()
+        
+        for rate_info in rates_data:
+            company_id = rate_info['company_id']
+            current_rate = rate_info['current_rate']
+            
+            # Fetch the last recorded freight rate from the database
+            last_alert = FreightAlert.objects.filter(company_id=company_id).order_by('-id').first()
+            
+            if last_alert and abs(current_rate - last_alert.rate) >= settings.RATE_CHANGE_THRESHOLD:
+                # Create a new alert if there is a significant change in rate
+                FreightAlert.objects.create(
+                    company_id=company_id,
+                    rate=current_rate,
+                    previous_rate=last_alert.rate
+                )
+    
+    except requests.RequestException as e:
+        # Log the error or handle it appropriately
+        print(f"Error fetching freight rates: {e}")
 
-    This function will check for products that require attention based on certain conditions,
-    such as low stock levels or impending deadlines, and create corresponding demand alerts.
-    """
-    current_time = timezone.now()
-    # Logic to identify products needing attention
-    # For example, find products with stock levels below a threshold
-    # Create DemandAlert instances for each identified product
-    alerts_to_create = [
-        DemandAlert(
-            product=product,
-            branch=branch,
-            requested_qty=required_quantity,
-            created_at=current_time,
-            is_handled=False,
-        )
-        for product, branch, required_quantity in identify_products_needing_attention()
-    ]
-    # Save the new demand alerts to the database
-    DemandAlert.objects.bulk_create(alerts_to_create)
-
-def identify_products_needing_attention():
-    """
-    Placeholder function to identify products needing attention.
-
-    This function should be replaced with actual logic based on project requirements.
-    It returns a list of tuples (product, branch, required_quantity) for each product that needs an alert.
-    """
-    # Example placeholder implementation
-    return [
-        (product_instance, branch_instance, 10)
-        for product_instance in Product.objects.filter(stock_level__lt=20)
-        for branch_instance in Branch.objects.all()
-    ]
+# Example Celery Beat schedule configuration in settings.py
+# CELERY_BEAT_SCHEDULE = {
+#     'check_freight_rates_every_hour': {
+#         'task': 'common.tasks.check_freight_rates',
+#         'schedule': crontab(hour='*/1'),
+#     },
+# }

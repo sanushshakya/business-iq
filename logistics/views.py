@@ -1,26 +1,88 @@
-from rest_framework import viewsets
-from .models import LogisticsOrder, WarehouseLocation, TransportVehicle
-from .serializers import LogisticsOrderSerializer, WarehouseLocationSerializer, TransportVehicleSerializer
+# logistics/views.py
 
-class LogisticsOrderViewSet(viewsets.ModelViewSet):
-    """
-    A viewset for viewing and editing logistics order instances.
-    """
-    queryset = LogisticsOrder.objects.all()
-    serializer_class = LogisticsOrderSerializer
+from django.shortcuts import render, get_object_or_404, redirect
+from django.views.generic.edit import CreateView, UpdateView, DeleteView
+from django.urls import reverse_lazy
+from .models import UserSupplier, AlternativeSupplier, FreightAlert
 
+class UserSupplierCreateView(CreateView):
+    """
+    View for creating a new UserSupplier instance.
 
-class WarehouseLocationViewSet(viewsets.ModelViewSet):
+    Handles the creation form and saves the new instance to the database.
     """
-    A viewset for viewing and editing warehouse location instances.
-    """
-    queryset = WarehouseLocation.objects.all()
-    serializer_class = WarehouseLocationSerializer
+    model = UserSupplier
+    fields = ['supplier_name', 'contact_info']
+    success_url = reverse_lazy('user_supplier_list')
 
+    def form_valid(self, form):
+        """
+        Validate the form data and save the new UserSupplier instance.
 
-class TransportVehicleViewSet(viewsets.ModelViewSet):
+        :param form: Form containing the user supplier data.
+        :return: Redirect to list view on successful creation.
+        """
+        response = super().form_valid(form)
+        return response
+
+class UserSupplierUpdateView(UpdateView):
     """
-    A viewset for viewing and editing transport vehicle instances.
+    View for updating an existing UserSupplier instance.
+
+    Handles the update form and updates the instance in the database.
     """
-    queryset = TransportVehicle.objects.all()
-    serializer_class = TransportVehicleSerializer
+    model = UserSupplier
+    fields = ['supplier_name', 'contact_info']
+    success_url = reverse_lazy('user_supplier_list')
+
+    def get_object(self):
+        """
+        Retrieve the UserSupplier object based on the URL parameter.
+
+        :return: UserSupplier instance matching the primary key.
+        """
+        return get_object_or_404(UserSupplier, pk=self.kwargs['pk'])
+
+class UserSupplierDeleteView(DeleteView):
+    """
+    View for deleting an existing UserSupplier instance.
+
+    Handles the deletion of a UserSupplier instance from the database.
+    """
+    model = UserSupplier
+    success_url = reverse_lazy('user_supplier_list')
+
+    def get_object(self):
+        """
+        Retrieve the UserSupplier object based on the URL parameter.
+
+        :return: UserSupplier instance matching the primary key.
+        """
+        return get_object_or_404(UserSupplier, pk=self.kwargs['pk'])
+
+def user_supplier_list(request):
+    """
+    View for listing all UserSupplier instances.
+
+    Displays a list of all UserSuppliers in the database.
+    """
+    usersuppliers = UserSupplier.objects.all()
+    context = {'usersuppliers': usersuppliers}
+    return render(request, 'logistics/user_supplier_list.html', context)
+
+class AlternativeSupplierReadView(DetailView):
+    """
+    View for reading a specific AlternativeSupplier instance.
+
+    Displays details of an AlternativeSupplier instance.
+    """
+    model = AlternativeSupplier
+    template_name = 'logistics/alternative_supplier_detail.html'
+
+    def get_object(self):
+        """
+        Retrieve the AlternativeSupplier object based on the URL parameter.
+
+        :return: AlternativeSupplier instance matching the primary key.
+        """
+        return get_object_or_404(AlternativeSupplier, pk=self.kwargs['pk'])

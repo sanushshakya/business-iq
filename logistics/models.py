@@ -1,31 +1,31 @@
-from django.db import models
-from django.core.validators import URLValidator
-from django.utils.crypto import get_random_string, pbkdf2_hmac
+# logistics/models.py
 
-class AlternativeSupplier(models.Model):
+from django.db import models
+from authentication.models import Company
+
+class FreightAlert(models.Model):
     """
-    Model representing an alternative supplier for logistics.
+    Model representing a freight alert for a shipping lane.
 
     Fields:
-    - name: CharField representing the name of the alternative supplier.
-    - country: CharField representing the country where the supplier is located.
-    - product_categories: JSONField representing a list of product categories that the supplier specializes in.
-    - contact_url: URLField representing the URL to contact the supplier.
+    - company: ForeignKey to the Company model, linking the alert to a specific company.
+    - shipping_lane: CharField representing the shipping lane associated with the alert.
+    - current_rate: DecimalField representing the current rate for the shipping lane.
+    - baseline_rate: DecimalField representing the baseline rate for comparison.
+    - change_percent: FloatField representing the percentage change in rates.
+    - alert_date: DateTimeField representing the date the alert was generated.
+    - is_dismissed: BooleanField indicating whether the alert has been dismissed by the user.
     """
-    
-    # Define validators
-    url_validator = URLValidator()
-
-    name = models.CharField(max_length=255, help_text="The name of the alternative supplier.")
-    country = models.CharField(max_length=100, help_text="The country where the supplier is located.")
-    product_categories = models.JSONField(help_text="A list of product categories that the supplier specializes in.")
-    contact_url = models.URLField(validators=[url_validator], help_text="The URL to contact the supplier.")
+    company = models.ForeignKey(Company, on_delete=models.CASCADE)
+    shipping_lane = models.CharField(max_length=255)
+    current_rate = models.DecimalField(max_digits=10, decimal_places=2)
+    baseline_rate = models.DecimalField(max_digits=10, decimal_places=2)
+    change_percent = models.FloatField()
+    alert_date = models.DateTimeField(auto_now_add=True)
+    is_dismissed = models.BooleanField(default=False)
 
     def __str__(self):
-        """
-        String representation of the AlternativeSupplier model.
-        
-        Returns:
-            str: The name of the alternative supplier.
-        """
-        return self.name
+        return f"Freight Alert for {self.company.name} on {self.shipping_lane}"
+```
+
+This file defines the `FreightAlert` model with the specified fields. Each field is properly documented to explain its purpose and characteristics. The model uses a foreign key to link back to the `Company` model from the `authentication` app, ensuring that each freight alert is associated with a specific company.

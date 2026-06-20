@@ -11,60 +11,34 @@ class ShopifyConnection(models.Model):
     Fields:
     - company: ForeignKey to the Company model, linking the connection to a specific company.
     - shop_domain: CharField representing the domain of the Shopify store.
-    - access_token_encrypted: TextField representing the encrypted access token for the store.
-    - connected_at: DateTimeField representing the timestamp when the store was connected.
-    - active: BooleanField indicating whether the connection is currently active.
+    - access_token: CharField representing the access token for authentication.
     """
+
     company = models.ForeignKey('authentication.Company', on_delete=models.CASCADE)
-    shop_domain = models.CharField(max_length=255, validators=[URLValidator()])
-    access_token_encrypted = models.TextField()
-    connected_at = models.DateTimeField(auto_now_add=True)
-    active = models.BooleanField(default=True)
+    shop_domain = models.CharField(max_length=255, validators=[URLValidator(schemes=['https'])])
+    access_token = models.CharField(max_length=256)
 
-    def save(self, *args, **kwargs):
-        """
-        Override the default save method to encrypt the access token before saving.
-        """
-        if self.access_token:
-            self.access_token_encrypted = self.encrypt_access_token(self.access_token)
-        super(ShopifyConnection, self).save(*args, **kwargs)
+    def __str__(self):
+        return f"{self.company.name} - {self.shop_domain}"
 
-    def encrypt_access_token(self, access_token):
-        """
-        Encrypt the access token using a secure hashing algorithm.
 
-        Args:
-        - access_token (str): The access token to be encrypted.
-
-        Returns:
-        - str: The encrypted access token.
-        """
-        salt = get_random_string(length=16)
-        return pbkdf2_hmac('sha256', access_token.encode(), salt.encode(), 32).hex()
-
-# common/serializers.py
-
-from rest_framework import serializers
-from .models import Product, PriceChangeLog
-
-class ProductSerializer(serializers.ModelSerializer):
+class FreightRateCache(models.Model):
     """
-    Serializer for the Product model.
+    Model representing cached freight rates.
 
-    This serializer is used to convert Product objects into JSON and vice versa.
+    Fields:
+    - shop_connection: ForeignKey to the ShopifyConnection model, linking the rate data to a specific Shopify connection.
+    - service_code: CharField representing the shipping service code.
+    - rate: DecimalField representing the current rate for the service.
+    - currency: CharField representing the currency in which the rate is denominated.
+    - last_updated: DateTimeField automatically updated when the model instance is saved.
     """
 
-    class Meta:
-        model = Product
-        fields = '__all__'
+    shop_connection = models.ForeignKey(ShopifyConnection, on_delete=models.CASCADE)
+    service_code = models.CharField(max_length=100)
+    rate = models.DecimalField(max_digits=10, decimal_places=2)
+    currency = models.CharField(max_length=3)
+    last_updated = models.DateTimeField(auto_now=True)
 
-class PriceChangeLogSerializer(serializers.ModelSerializer):
-    """
-    Serializer for the PriceChangeLog model.
-
-    This serializer is used to convert PriceChangeLog objects into JSON and vice versa.
-    """
-
-    class Meta:
-        model = PriceChangeLog
-        fields = '__all__'
+    def __str__(self):
+        return f"{self.shop_connection.shop_domain} - {self.service_code} - ${self.rate}"

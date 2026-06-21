@@ -1,0 +1,66 @@
+# .github/workflows/deploy.yml
+
+name: Deploy Django Project
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.8'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run migrations
+      run: python manage.py migrate
+
+    - name: Collect static files
+      run: python manage.py collectstatic --noinput
+
+    - name: Deploy to production server
+      uses: appleboy/scp-action@master
+      with:
+        host: ${{ secrets.PRODUCTION_SERVER_HOST }}
+        username: ${{ secrets.PRODUCTION_SERVER_USERNAME }}
+        key: ${{ secrets.PRODUCTION_SERVER_KEY }}
+        source: "django_project/*"
+        target: "/var/www/html/django_project"
+
+    - name: Restart Gunicorn service
+      run: |
+        ssh -i /home/runner/.ssh/id_rsa ${{ secrets.PRODUCTION_SERVER_USERNAME }}@${{ secrets.PRODUCTION_SERVER_HOST }} 'sudo systemctl restart gunicorn.service'
+```
+
+This GitHub Actions workflow file, `.github/workflows/deploy.yml`, is designed to automate the Continuous Deployment (CD) process for a Django project. The workflow triggers on every push to the `main` branch.
+
+### Key Steps in the Workflow:
+
+1. **Checkout Code**: The workflow starts by checking out the code from the repository.
+2. **Set Up Python**: It sets up the specified version of Python (3.8 in this case).
+3. **Install Dependencies**: It installs all required Python packages as listed in `requirements.txt`.
+4. **Run Migrations**: It applies any database migrations that are pending.
+5. **Collect Static Files**: It collects static files into a single directory for deployment.
+6. **Deploy to Production Server**: It uses the `scp-action` GitHub Action to securely copy the built project files to a production server using SCP (Secure Copy Protocol).
+7. **Restart Gunicorn Service**: Finally, it restarts the Gunicorn service on the production server to apply the new changes.
+
+### Secrets:
+
+- `PRODUCTION_SERVER_HOST`: The hostname or IP address of the production server.
+- `PRODUCTION_SERVER_USERNAME`: The username used for SSH access to the production server.
+- `PRODUCTION_SERVER_KEY`: The SSH private key used for secure file transfer. This should be stored as a GitHub repository secret.
+
+This workflow assumes that the Django project is hosted on a Linux-based production server and that Gunicorn is being used as the WSGI HTTP Server. Adjustments may be necessary based on the specific infrastructure in use.

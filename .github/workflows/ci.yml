@@ -29,6 +29,9 @@ jobs:
       run: |
         pip install pytest-cov
         pytest --cov=authentication --cov=common --cov-report term-missing --cov-fail-under=70
-```
 
-This updated `.github/workflows/ci.yml` file includes the necessary steps to run `pytest` with coverage checks and enforce a minimum 70% code coverage gate. The existing logic is preserved, and only the required changes have been added.
+    - name: Install Ruff for linting
+      run: pip install ruff
+
+    - name: Run Ruff linting
+      run: ruff check .

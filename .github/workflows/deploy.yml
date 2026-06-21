@@ -45,15 +45,9 @@ jobs:
         docker tag django_project:$GITHUB_SHA ${{ secrets.AWS_ECR_REPOSITORY_URL }}
         docker push ${{ secrets.AWS_ECR_REPOSITORY_URL }}
 
-    - name: Deploy to production server
-      uses: appleboy/scp-action@master
-      with:
-        host: ${{ secrets.PRODUCTION_SERVER_HOST }}
-        username: ${{ secrets.PRODUCTION_SERVER_USERNAME }}
-        key: ${{ secrets.PRODUCTION_SERVER_KEY }}
-        source: "django_project/*"
-        target: "/var/www/html/django_project"
+    - name: Deploy to ECS service
+      run: aws ecs update-service --cluster ${{ secrets.AWS_ECS_CLUSTER }} --service ${{ secrets.AWS_ECS_SERVICE }} --force-new-deployment
 
-    - name: Restart Gunicorn service
-      run: |
-        ssh -i /home/runner/.ssh/id_rsa ${{ secrets.PRODUCTION_SERVER_USERNAME }}@${{ secrets.PRODUCTION_SERVER_HOST }} 'sudo systemctl restart gunicorn.service'
+    # - name: Restart Gunicorn service (no longer needed with ECS)
+    #   run: |
+    #     ssh -i /home/runner/.ssh/id_rsa ${{ secrets.PRODUCTION_SERVER_USERNAME }}@${{ secrets.PRODUCTION_SERVER_HOST }} 'sudo systemctl restart gunicorn.service'

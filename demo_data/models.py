@@ -86,17 +86,4 @@ class DemandAlert(models.Model):
 
     Fields:
     - product: ForeignKey to the Product model, linking the alert to a specific product.
-    - threshold_quantity: IntegerField representing the minimum stock quantity that triggers the alert.
-    - last_checked: DateTimeField representing when the demand was last checked.
-    """
-
-    product = models.ForeignKey('demo_data.Product', on_delete=models.CASCADE)
-    threshold_quantity = models.IntegerField()
-    last_checked = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return f"{self.product.name} - Demand Alert"
-
-    class Meta:
-        verbose_name = "Demand Alert"
-        verbose_name_plural = "Demand Alerts"
+    - threshold_quantity: IntegerField representing the minimum stock quantity that triggers

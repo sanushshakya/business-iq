@@ -1,24 +1,30 @@
 from django.db import models
 
-class Company(models.Model):
+class Branch(models.Model):
     """
-    Model representing a company for which demo data will be seeded.
+    Model representing a branch for which demo data will be seeded.
 
     Fields:
-    - name: CharField representing the name of the company.
-    - description: TextField representing a brief description of the company.
-    - website_url: URLField representing the company's website URL.
-    - contact_email: EmailField representing the primary contact email for the company.
+    - name: CharField representing the name of the branch.
+    - address: TextField representing the physical address of the branch.
+    - city: CharField representing the city where the branch is located.
+    - state: CharField representing the state or province where the branch is located.
+    - zip_code: CharField representing the postal code of the branch's address.
+    - country: CharField representing the country where the branch is located.
+    - company: ForeignKey to the Company model, linking the branch to a specific company.
     """
 
-    name = models.CharField(max_length=255, unique=True)
-    description = models.TextField()
-    website_url = models.URLField(validators=[URLValidator()])
-    contact_email = models.EmailField()
+    name = models.CharField(max_length=255)
+    address = models.TextField()
+    city = models.CharField(max_length=100)
+    state = models.CharField(max_length=100)
+    zip_code = models.CharField(max_length=20)
+    country = models.CharField(max_length=100)
+    company = models.ForeignKey('demo_data.Company', on_delete=models.CASCADE)
 
     def __str__(self):
-        return self.name
+        return f"{self.name} - {self.city}, {self.state}"
 
     class Meta:
-        verbose_name = "Company"
-        verbose_name_plural = "Companies"
+        verbose_name = "Branch"
+        verbose_name_plural = "Branches"

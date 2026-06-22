@@ -60,3 +60,43 @@ class StockMovement(models.Model):
     class Meta:
         verbose_name = "Stock Movement"
         verbose_name_plural = "Stock Movements"
+
+class Branch(models.Model):
+    """
+    Model representing a branch where products are stored and managed.
+
+    Fields:
+    - name: CharField representing the name of the branch.
+    - address: TextField representing the address of the branch.
+    """
+
+    name = models.CharField(max_length=255)
+    address = models.TextField()
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        verbose_name = "Branch"
+        verbose_name_plural = "Branches"
+
+class DemandAlert(models.Model):
+    """
+    Model representing a demand alert for a product.
+
+    Fields:
+    - product: ForeignKey to the Product model, linking the alert to a specific product.
+    - threshold_quantity: IntegerField representing the minimum stock quantity that triggers the alert.
+    - last_checked: DateTimeField representing when the demand was last checked.
+    """
+
+    product = models.ForeignKey('demo_data.Product', on_delete=models.CASCADE)
+    threshold_quantity = models.IntegerField()
+    last_checked = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.product.name} - Demand Alert"
+
+    class Meta:
+        verbose_name = "Demand Alert"
+        verbose_name_plural = "Demand Alerts"

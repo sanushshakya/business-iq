@@ -32,3 +32,31 @@ class Product(models.Model):
     class Meta:
         verbose_name = "Product"
         verbose_name_plural = "Products"
+
+class StockMovement(models.Model):
+    """
+    Model representing a stock movement for a product.
+
+    Fields:
+    - product: ForeignKey to the Product model, linking the movement to a specific product.
+    - movement_type: CharField representing whether the movement is an 'in' or 'out'.
+    - quantity: IntegerField representing the quantity moved.
+    - timestamp: DateTimeField representing when the movement occurred.
+    """
+
+    MOVEMENT_CHOICES = [
+        ('in', 'In'),
+        ('out', 'Out'),
+    ]
+
+    product = models.ForeignKey('demo_data.Product', on_delete=models.CASCADE)
+    movement_type = models.CharField(max_length=3, choices=MOVEMENT_CHOICES)
+    quantity = models.IntegerField()
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.product.name} - {self.movement_type} - {self.quantity}"
+
+    class Meta:
+        verbose_name = "Stock Movement"
+        verbose_name_plural = "Stock Movements"

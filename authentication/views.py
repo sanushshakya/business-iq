@@ -1,59 +1,39 @@
-from django.http import HttpResponse
-from django.views.generic import FormView
-from django.contrib.auth.models import User
-from .models import Company, Owner
-from common.services.shopify_service import ShopifyService
+from django.http import JsonResponse
+from rest_framework.views import APIView
+from .serializers import VerificationTokenSerializer
 
-class SendVerificationEmailView(FormView):
+class VerifyEmailTokenView(APIView):
     """
-    View to handle the email sending logic for user verification.
-    
-    This view expects a POST request with 'email' as one of the parameters.
-    It checks if a user with the provided email exists and sends a verification email if found.
+    View to handle the verification of email tokens.
+
+    This view expects a POST request with 'token' as the token parameter.
+    It validates the token and returns a JSON response indicating success or failure.
     """
-    template_name = 'authentication/send_verification_email.html'
 
     def post(self, request, *args, **kwargs):
-        email = request.POST.get('email')
+        serializer = VerificationTokenSerializer(data=request.data)
+        if not serializer.is_valid():
+            return JsonResponse({'error': 'Invalid token'}, status=400)
+
+        token = serializer.validated_data['token']
+        # Logic to verify the email token
+        # This could involve checking a database or calling an external service
+        is_verified = self.verify_token(token)
         
-        try:
-            user = User.objects.get(email=email)
-            shopify_service = ShopifyService()
-            shopify_service.send_verification_email(user)
-            
-            return HttpResponse("Verification email sent successfully.", status=200)
-        except User.DoesNotExist:
-            return HttpResponse("No user found with the provided email.", status=404)
+        if is_verified:
+            return JsonResponse({'message': 'Email verified successfully'}, status=200)
+        else:
+            return JsonResponse({'error': 'Invalid or expired token'}, status=401)
 
-    def get(self, request, *args, **kwargs):
-        return HttpResponse("This view only accepts POST requests.", status=405)
+    def verify_token(self, token):
+        """
+        Placeholder method for verifying the email token.
 
+        Args:
+            token (str): The verification token to validate.
 
-class UserRegistrationView(FormView):
-    """
-    View to handle user registration.
-    
-    This view expects a POST request with 'username', 'email', and 'password' as parameters.
-    It creates a new User, Company, and Owner instance in one transaction and sends a verification email.
-    """
-    template_name = 'authentication/register.html'
-
-    def post(self, request, *args, **kwargs):
-        username = request.POST.get('username')
-        email = request.POST.get('email')
-        password = request.POST.get('password')
-
-        try:
-            user = User.objects.create_user(username=username, email=email, password=password)
-            user.is_verified = False  # Initially set to false for verification
-            user.save()
-
-            company = Company.objects.create(user=user)
-            owner = Owner.objects.create(company=company)
-
-            shopify_service = ShopifyService()
-            shopify_service.send_verification_email(user)
-
-            return HttpResponse("User registered and verification email sent successfully.", status=201)
-        except Exception as e:
-            return HttpResponse(f"Registration failed: {str(e)}", status=500)
+        Returns:
+            bool: True if the token is valid, False otherwise.
+        """
+        # Actual implementation of token verification logic goes here
+        return True  # Placeholder

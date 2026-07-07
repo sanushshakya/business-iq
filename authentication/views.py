@@ -27,3 +27,33 @@ class SendVerificationEmailView(FormView):
 
     def get(self, request, *args, **kwargs):
         return HttpResponse("This view only accepts POST requests.", status=405)
+
+
+class UserRegistrationView(FormView):
+    """
+    View to handle user registration.
+    
+    This view expects a POST request with 'username', 'email', and 'password' as parameters.
+    It creates a new User, Company, and Owner instance in one transaction and sends a verification email.
+    """
+    template_name = 'authentication/register.html'
+
+    def post(self, request, *args, **kwargs):
+        username = request.POST.get('username')
+        email = request.POST.get('email')
+        password = request.POST.get('password')
+
+        try:
+            user = User.objects.create_user(username=username, email=email, password=password)
+            user.is_verified = False  # Initially set to false for verification
+            user.save()
+
+            company = Company.objects.create(user=user)
+            owner = Owner.objects.create(company=company)
+
+            shopify_service = ShopifyService()
+            shopify_service.send_verification_email(user)
+
+            return HttpResponse("User registered and verification email sent successfully.", status=201)
+        except Exception as e:
+            return HttpResponse(f"Registration failed: {str(e)}", status=500)

@@ -1,25 +1,29 @@
 from rest_framework import serializers
-from .models import User
 
-class UserSerializer(serializers.ModelSerializer):
+class VerificationTokenSerializer(serializers.Serializer):
     """
-    Serializer for the User model.
+    Serializer for handling email verification tokens.
 
-    Includes additional fields:
-    - is_verified: BooleanField indicating whether the user has been verified.
+    Fields:
+    - token: CharField representing the verification token.
     """
 
-    class Meta:
-        model = User
-        fields = ['id', 'username', 'email', 'is_active', 'is_staff', 'is_verified']
+    token = serializers.CharField(max_length=255)
 
-    def to_representation(self, instance):
+    def validate_token(self, value):
         """
-        Include the is_verified field in the serialized representation of a user.
+        Validate that the provided token is valid and not expired.
 
-        :param instance: The User instance to serialize.
-        :return: Dictionary representing the serialized user data including is_verified.
+        Args:
+            value (str): The verification token to validate.
+
+        Returns:
+            str: The validated token.
+
+        Raises:
+            ValidationError: If the token is invalid or expired.
         """
-        ret = super().to_representation(instance)
-        ret['is_verified'] = instance.is_verified
-        return ret
+        # TODO: Implement token validation logic here
+        # For example, check if the token exists in the database and has not expired
+
+        raise serializers.ValidationError("Invalid or expired verification token")

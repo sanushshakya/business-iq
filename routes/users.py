@@ -41,28 +41,25 @@ class UserRoutes:
         and deleting users. Each route should include appropriate security checks
         and role-based access control.
         """
-        @router.post("/users/")
+        @router.post("/users/", dependencies=[Depends(get_current_user)])
         async def create_user(user_data: UserCreate, db: Session = Depends(get_db)):
             # Implement logic to create a new user
             return {"message": "User created successfully"}
 
-        @router.get("/users/{user_id}")
+        @router.get("/users/{user_id}", dependencies=[Depends(get_current_user)])
         async def get_user(user_id: int, db: Session = Depends(get_db)):
             # Implement logic to retrieve a single user by ID
             return {"user_id": user_id}
 
-        @router.put("/users/{user_id}")
+        @router.put("/users/{user_id}", dependencies=[Depends(get_current_user)])
         async def update_user(user_id: int, updated_data: UserUpdate, db: Session = Depends(get_db)):
             # Implement logic to update an existing user
             return {"message": "User updated successfully"}
 
-        @router.delete("/users/{user_id}")
+        @router.delete("/users/{user_id}", dependencies=[Depends(get_current_user)])
         async def delete_user(user_id: int, db: Session = Depends(get_db)):
             # Implement logic to delete a user
             return {"message": "User deleted successfully"}
 
 # Example usage of UserRoutes in your main application file
 # app.include_router(UserRoutes(db).user_crud_routes(db))
-```
-
-Note: This code snippet provides a basic structure for handling user-related routes with FastAPI. You will need to implement the actual logic for creating, reading, updating, and deleting users within each route handler. Additionally, you should handle authentication and authorization appropriately, including role-based access control.

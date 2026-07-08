@@ -1,48 +1,38 @@
-from fastapi import Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import jwt, JWTError
-from datetime import datetime, timedelta
-from pydantic import ValidationError
+"""
+auth/dependencies.py
 
-# Import necessary settings and models
-from config.settings import SECRET_KEY
-from authentication.models import User
+This file contains custom dependency functions for handling authentication and authorization in Django REST Framework (DRF).
+"""
 
-# Dependency to decode JWT and return current user
-security = HTTPBearer()
+import jwt
+from django.conf import settings
+from rest_framework.exceptions import AuthenticationFailed
 
-async def get_current_user(token: HTTPAuthorizationCredentials = Depends(security)):
+def get_current_user(request):
     """
-    Decode JWT token and return the corresponding user.
+    Decode JWT token from request headers and return the current user.
 
     Args:
-        token (HTTPAuthorizationCredentials): The authorization credentials containing the JWT token.
+        request (HttpRequest): The incoming HTTP request object.
 
     Returns:
-        User: The decoded user object if successful, otherwise raises an exception.
-    
+        User: The authenticated user object.
+
     Raises:
-        HTTPException: If the token is invalid or expired.
+        AuthenticationFailed: If no valid token is provided or the token is invalid.
     """
-    credentials_exception = HTTPException(
-        status_code=401,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token.credentials, SECRET_KEY, algorithms=["HS256"])
-        exp_time = datetime.fromtimestamp(payload["exp"])
-        if exp_time < datetime.utcnow():
-            raise credentials_exception
-    except (JWTError, ValidationError):
-        raise credentials_exception
+    auth_header = request.headers.get('Authorization')
+    
+    if not auth_header:
+        raise AuthenticationFailed('No token provided')
 
-    user_id: str = payload.get("sub")
-    if user_id is None:
-        raise credentials_exception
     try:
-        user = User.objects.get(username=user_id)
-    except User.DoesNotExist:
-        raise credentials_exception
-
-    return user
+        token = auth_header.split()[1]
+        payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=['HS256'])
+        user_id = payload['user_id']
+        # Assuming User model is available and correctly imported
+        from authentication.models import User
+        user = User.objects.get(pk=user_id)
+        return user
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+        raise AuthenticationFailed('Invalid or expired token')

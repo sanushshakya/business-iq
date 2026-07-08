@@ -17,7 +17,7 @@ class User(models.Model):
 
     username = models.CharField(max_length=150, unique=True)
     email = models.EmailField(unique=True)
-    password_hash = models.CharField(max_length=256)
+    hashed_password = models.CharField(max_length=256)
     reset_token = models.CharField(max_length=100, null=True, blank=True)
     reset_token_expiry = models.DateTimeField(null=True, blank=True)
 
@@ -28,7 +28,7 @@ class User(models.Model):
         Args:
         - password (str): The plain text password to hash.
         """
-        self.password_hash = pbkdf2_hmac('sha256', password.encode(), get_random_string(12).encode(), 100000)
+        self.hashed_password = pbkdf2_hmac('sha256', password.encode(), get_random_string(12).encode(), 100000)
 
     def check_password(self, password):
         """
@@ -40,4 +40,4 @@ class User(models.Model):
         Returns:
         - bool: True if the passwords match, False otherwise.
         """
-        return pbkdf2_hmac('sha256', password.encode(), get_random_string(12).encode(), 100000) == self.password_hash
+        return pbkdf2_hmac('sha256', password.encode(), get_random_string(12).encode(), 100000) == self.hashed_password

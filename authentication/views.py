@@ -1,39 +1,37 @@
 from django.http import JsonResponse
 from rest_framework.views import APIView
-from .serializers import VerificationTokenSerializer
+from .serializers import PasswordResetSerializer
 
-class VerifyEmailTokenView(APIView):
+class PasswordResetView(APIView):
     """
-    View to handle the verification of email tokens.
+    View to handle the password reset request.
 
-    This view expects a POST request with 'token' as the token parameter.
-    It validates the token and returns a JSON response indicating success or failure.
+    This view expects a POST request with 'token' and 'new_password' as parameters.
+    It validates the token, sets the new password, and returns a JSON response indicating success or failure.
     """
 
-    def post(self, request, *args, **kwargs):
-        serializer = VerificationTokenSerializer(data=request.data)
-        if not serializer.is_valid():
-            return JsonResponse({'error': 'Invalid token'}, status=400)
-
-        token = serializer.validated_data['token']
-        # Logic to verify the email token
-        # This could involve checking a database or calling an external service
-        is_verified = self.verify_token(token)
-        
-        if is_verified:
-            return JsonResponse({'message': 'Email verified successfully'}, status=200)
-        else:
-            return JsonResponse({'error': 'Invalid or expired token'}, status=401)
-
-    def verify_token(self, token):
+    def post(self, request, format=None):
         """
-        Placeholder method for verifying the email token.
+        Handle the POST request for password reset.
 
         Args:
-            token (str): The verification token to validate.
+        - request: The incoming HTTP request object.
+        - format (str): The format of the response.
 
         Returns:
-            bool: True if the token is valid, False otherwise.
+        - JsonResponse: A JSON response indicating the result of the password reset attempt.
         """
-        # Actual implementation of token verification logic goes here
-        return True  # Placeholder
+        serializer = PasswordResetSerializer(data=request.data)
+        if serializer.is_valid():
+            token = serializer.validated_data['token']
+            new_password = serializer.validated_data['new_password']
+
+            # TODO: Implement logic to validate the token and set the new password
+            # Example:
+            # user = User.objects.get(password_reset_token=token)
+            # user.set_password(new_password)
+            # user.save()
+
+            return JsonResponse({'message': 'Password reset successful'}, status=200)
+
+        return JsonResponse(serializer.errors, status=400)

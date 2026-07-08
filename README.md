@@ -85,62 +85,55 @@ docker-compose run web python manage.py test
      }
      ```
 
-3. **Logout User**
-   - **URL**: `/api/logout/`
+3. **Verify Email Token**
+   - **URL**: `/api/verify-token/`
    - **Method**: `POST`
+   - **Request Body**:
+     ```json
+     {
+       "token": "abc123def456ghi789"
+     }
+     ```
+   - **Description**: This endpoint verifies an email token. Only verified users can access protected endpoints.
 
-### Inventory Module
+### Product Module
 
-1. **Create Product**
+1. **Get All Products**
+   - **URL**: `/api/products/`
+   - **Method**: `GET`
+   - **Authentication Required**: Yes
+   - **Description**: Retrieve a list of all products.
+
+2. **Create a New Product**
    - **URL**: `/api/products/`
    - **Method**: `POST`
    - **Request Body**:
      ```json
      {
-       "company": 1,
-       "sku_code": "SKU12345",
        "name": "Product Name",
-       "category": "grains",
-       "unit": "kg",
-       "reorder_threshold": 10,
-       "target_margin_percent": 5.0,
-       "is_perishable": false,
-       "shelf_life_days": 90
+       "description": "Product Description",
+       "price": 19.99
      }
      ```
-
-2. **Read Products**
-   - **URL**: `/api/products/`
-   - **Method**: `GET`
-   - **Query Parameters**:
-     - `category`: Filter products by category.
-     - `search`: Search products by name or SKU code.
+   - **Authentication Required**: Yes
+   - **Description**: Create a new product.
 
 3. **Update Product**
-   - **URL**: `/api/products/{id}/`
+   - **URL**: `/api/products/<id>/`
    - **Method**: `PUT`
    - **Request Body**:
      ```json
      {
        "name": "Updated Product Name",
-       "category": "dairy"
+       "description": "Updated Product Description",
+       "price": 29.99
      }
      ```
+   - **Authentication Required**: Yes
+   - **Description**: Update an existing product.
 
-4. **Delete Product**
-   - **URL**: `/api/products/{id}/`
+4. **Delete a Product**
+   - **URL**: `/api/products/<id>/`
    - **Method**: `DELETE`
-
-## Mermaid Architecture Diagram
-
-```mermaid
-graph TD;
-    React --> Django;
-    Django --> PostgreSQL;
-    Django --> Redis;
-    Django --> Celery;
-    Celery --> ExternalAPI1;
-    Celery --> ExternalAPI2;
-```
-
-This diagram shows the flow of data and services within the system, from the frontend (React) to the backend (Django), database (PostgreSQL), caching (Redis), task queue (Celery), and external APIs.
+   - **Authentication Required**: Yes
+   - **Description**: Delete a product.

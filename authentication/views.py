@@ -1,37 +1,58 @@
-from django.http import JsonResponse
 from rest_framework.views import APIView
-from .serializers import PasswordResetSerializer
+from rest_framework.response import Response
+from rest_framework import status
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.translation import gettext as _
+from authentication.serializers import PasswordResetConfirmSerializer
 
-class PasswordResetView(APIView):
+class PasswordResetConfirmView(APIView):
     """
-    View to handle the password reset request.
+    View to handle the password reset confirmation request.
 
-    This view expects a POST request with 'token' and 'new_password' as parameters.
+    This view expects a POST request with 'token', 'new_password1', and 'new_password2' as parameters.
     It validates the token, sets the new password, and returns a JSON response indicating success or failure.
     """
 
-    def post(self, request, format=None):
+    def post(self, request, *args, **kwargs):
         """
-        Handle the POST request for password reset.
+        Handle the POST request for password reset confirmation.
 
-        Args:
-        - request: The incoming HTTP request object.
-        - format (str): The format of the response.
+        Parameters:
+        - request: The HTTP request object containing the data to be processed.
 
         Returns:
-        - JsonResponse: A JSON response indicating the result of the password reset attempt.
+        - A JSON response indicating whether the password reset was successful or not.
         """
-        serializer = PasswordResetSerializer(data=request.data)
+        serializer = PasswordResetConfirmSerializer(data=request.data)
         if serializer.is_valid():
-            token = serializer.validated_data['token']
-            new_password = serializer.validated_data['new_password']
+            user = self.get_user(serializer.validated_data['token'])
+            if user is not None:
+                new_password = serializer.validated_data['new_password1']
+                user.set_password(new_password)
+                user.save()
+                return Response({'detail': _('Password reset successful')}, status=status.HTTP_200_OK)
+            else:
+                return Response({'detail': _('Invalid token')}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-            # TODO: Implement logic to validate the token and set the new password
-            # Example:
-            # user = User.objects.get(password_reset_token=token)
-            # user.set_password(new_password)
-            # user.save()
+    def get_user(self, uidb64):
+        """
+        Retrieve the user from the database using the provided UID.
 
-            return JsonResponse({'message': 'Password reset successful'}, status=200)
+        Parameters:
+        - uidb64: The base-64 encoded primary key of the user.
 
-        return JsonResponse(serializer.errors, status=400)
+        Returns:
+        - The user object if found, otherwise None.
+        """
+        try:
+            # Convert UID to integer
+            uid = urlsafe_base64_decode(uidb64).decode()
+            user = User.objects.get(pk=uid)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            user = None
+
+        return user
+```
+This code implements a view for handling password reset confirmation in a Django application. It uses a serializer to validate the incoming data and then attempts to retrieve the corresponding user based on the provided token. If successful, it sets the new password and returns a success message; otherwise, it handles errors gracefully by returning appropriate error messages.

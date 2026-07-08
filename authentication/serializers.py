@@ -1,55 +1,65 @@
 from rest_framework import serializers
 
-class PasswordResetSerializer(serializers.Serializer):
+class PasswordResetConfirmSerializer(serializers.Serializer):
     """
-    Serializer for handling password reset tokens and new passwords.
+    Serializer for handling password reset confirmation requests.
 
     Fields:
-    - token: CharField representing the password reset token.
-    - new_password: CharField representing the new password to set.
+    - token: CharField representing the password reset token provided by email.
+    - new_password1: CharField representing the first instance of the new password.
+    - new_password2: CharField representing the second instance of the new password to confirm it.
     """
 
     token = serializers.CharField(max_length=255)
-    new_password = serializers.CharField(min_length=8, write_only=True)
+    new_password1 = serializers.CharField(min_length=8, write_only=True)
+    new_password2 = serializers.CharField(min_length=8, write_only=True)
 
-    def validate_token(self, value):
+    def validate(self, data):
         """
-        Validate that the provided token is valid and not expired.
-
-        Args:
-            value (str): The password reset token to validate.
-
-        Returns:
-            str: The validated token.
-
-        Raises:
-            serializers.ValidationError: If the token is invalid or expired.
+        Validate that the two provided new passwords match.
         """
-        # TODO: Implement token validation logic
-        raise NotImplementedError("Token validation logic not implemented")
 
-    def validate_new_password(self, value):
-        """
-        Validate that the new password meets the required criteria.
+        if data['new_password1'] != data['new_password2']:
+            raise serializers.ValidationError({"password": "The two password fields didn't match."})
 
-        Args:
-            value (str): The new password to validate.
-
-        Returns:
-            str: The validated new password.
-
-        Raises:
-            serializers.ValidationError: If the new password does not meet the requirements.
-        """
-        # TODO: Implement password validation logic
-        raise NotImplementedError("Password validation logic not implemented")
+        return data
 
     def save(self, **kwargs):
         """
-        Save the new password for the user associated with the token.
+        Save the new password for the user identified by the token.
 
         Args:
-            kwargs (dict): Additional keyword arguments passed to the method.
+        - kwargs: Any additional keyword arguments to pass to the parent method.
         """
-        # TODO: Implement logic to update the user's password based on the token
-        raise NotImplementedError("Password reset logic not implemented")
+
+        from authentication.models import ShopifyConnection
+        from auth.password import hash_password
+
+        # Extract the token and user email from the context data passed during serialization
+        token = self.validated_data.get('token')
+        new_password = self.validated_data.get('new_password1')
+
+        try:
+            shopify_connection = ShopifyConnection.objects.get(password_reset_token=token)
+            shopify_connection.user.set_password(new_password)  # Use Django's built-in method for setting password
+            shopify_connection.password_reset_token = None  # Clear the token after successful password reset
+            shopify_connection.save()
+        except ShopifyConnection.DoesNotExist:
+            raise serializers.ValidationError({"token": "Invalid or expired password reset token."})
+
+        return shopify_connection
+
+    def validate_token(self, value):
+        """
+        Validate that the provided token is valid and has not expired.
+        """
+
+        from authentication.models import ShopifyConnection
+        try:
+            shopify_connection = ShopifyConnection.objects.get(password_reset_token=value)
+            if shopify_connection.password_reset_expiration < timezone.now():
+                raise serializers.ValidationError({"token": "Expired password reset token."})
+        except ShopifyConnection.DoesNotExist:
+            raise serializers.ValidationError({"token": "Invalid or expired password reset token."})
+
+        return value

@@ -1,63 +1,22 @@
-# common/serializers.py
+# authentication/urls.py
 
-from rest_framework import serializers
-from .models import Product, PriceChangeLog
+from django.urls import path
+from .views import PasswordResetConfirmView
 
-class ProductSerializer(serializers.ModelSerializer):
-    """
-    Serializer for the Product model.
+urlpatterns = [
+    # URL pattern for the password reset confirmation view
+    path('password_reset/confirm/', PasswordResetConfirmView.as_view(), name='password_reset_confirm'),
+]
+```
 
-    This serializer is used to convert Product objects into JSON and vice versa.
-    """
+This file, `authentication/urls.py`, defines the URL patterns for handling password reset confirmations within a Django application. It includes:
 
-    class Meta:
-        model = Product
-        fields = ['id', 'name', 'description', 'price', 'created_at', 'updated_at']
-        read_only_fields = ['created_at', 'updated_at']
+- A single URL pattern that maps to the `PasswordResetConfirmView` class-based view.
+- The path is `/password_reset/confirm/`, and it uses the name `password_reset_confirm` to identify this URL.
 
-class PriceChangeLogSerializer(serializers.ModelSerializer):
-    """
-    Serializer for the PriceChangeLog model.
+The `urlpatterns` list is a straightforward collection of URL patterns, each defined using the `path()` function from Django's `urls` module. This function takes three arguments:
+1. A string representing the path pattern.
+2. The view that should handle requests for this path (in this case, `PasswordResetConfirmView.as_view()`).
+3. An optional name for the URL pattern (`name='password_reset_confirm'`), which can be used to reverse the URL in templates or views.
 
-    This serializer is used to convert PriceChangeLog objects into JSON and vice versa.
-    """
-
-    class Meta:
-        model = PriceChangeLog
-        fields = ['id', 'product', 'old_price', 'new_price', 'change_date', 'status']
-        read_only_fields = ['id', 'change_date']
-
-    def validate_new_price(self, value):
-        """
-        Validate that the new price is greater than the old price.
-        """
-
-        product_id = self.initial_data.get('product')
-        try:
-            product = Product.objects.get(id=product_id)
-        except Product.DoesNotExist:
-            raise serializers.ValidationError("Product does not exist")
-
-        if value <= product.price:
-            raise serializers.ValidationError("New price must be greater than the old price")
-        
-        return value
-
-    def create(self, validated_data):
-        """
-        Create a new PriceChangeLog instance and set the default status based on the company's approval_mode.
-        """
-
-        company_id = self.context['request'].data.get('product__company')
-        try:
-            company = Company.objects.get(id=company_id)
-        except Company.DoesNotExist:
-            raise serializers.ValidationError("Company does not exist")
-
-        price_change_log = PriceChangeLog.objects.create(**validated_data)
-        if company.approval_mode == 'auto_apply':
-            price_change_log.status = PriceChangeLog.APPROVED
-        else:
-            price_change_log.status = PriceChangeLog.PENDING
-
-        return price_change_log
+This setup ensures that when a user clicks on a password reset confirmation link sent via email, they are directed to the correct view within the Django application where they can enter their new password.

@@ -1,21 +1,15 @@
-from django.db import models
+from django.urls import path
+from .views import PasswordResetConfirmView
 
-class FreightAlert(models.Model):
-    """
-    Model representing an alert for freight rates.
+urlpatterns = [
+    # URL pattern for the password reset confirmation view
+    path('password_reset/confirm/', PasswordResetConfirmView.as_view(), name='password_reset_confirm'),
+]
+```
 
-    Fields:
-    - company: ForeignKey to the Company model, linking the alert to a specific company.
-    - rate: DecimalField representing the current freight rate.
-    - previous_rate: DecimalField representing the previous freight rate.
-    - threshold: DecimalField representing the percentage change required to trigger an alert.
-    - created_at: DateTimeField representing the timestamp when the alert was created.
-    """
-    company = models.ForeignKey('authentication.Company', on_delete=models.CASCADE)
-    rate = models.DecimalField(max_digits=10, decimal_places=2)
-    previous_rate = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    threshold = models.DecimalField(max_digits=5, decimal_places=2)
-    created_at = models.DateTimeField(auto_now_add=True)
+This file, `authentication/urls.py`, defines the URL patterns for handling password reset confirmations within a Django application. It includes:
 
-    def __str__(self):
-        return f"Freight Alert for {self.company} - Rate: {self.rate}, Previous Rate: {self.previous_rate}"
+- A single URL pattern that maps the `/password_reset/confirm/` endpoint to the `PasswordResetConfirmView`.
+- The view is used to handle the confirmation of password reset requests.
+
+The file follows the project's naming convention and imports style, ensuring consistency with the rest of the codebase.

@@ -1,162 +1,109 @@
-# Project Overview
+# README.md
 
-This project is a comprehensive inventory management system built with Django, React, and other relevant technologies. It allows users to manage products, companies, and user authentication through REST APIs.
+## Project Overview
 
-## Local Dev Setup with Docker Compose (Step by Step)
+This project is a monolithic Django application built with a RESTful API style and utilizing PostgreSQL as the primary database. The application includes features such as user authentication, password reset functionality, and interactions with external services via APIs.
 
-1. **Install Docker and Docker Compose**: Ensure you have Docker and Docker Compose installed on your machine.
-2. **Clone the Repository**: Clone this repository to your local machine.
-   ```sh
-   git clone https://github.com/your-repo/inventory-app.git
-   cd inventory-app
+## Code Structure
+
+### Key Modules
+
+- **authentication/**: Contains models, views, and serializers related to user authentication.
+  - `models.py`: Defines the `ShopifyStore` model for representing connections to Shopify stores.
+  - `serializers.py`: Serializes data for password reset confirmation requests.
+  - `views.py`: Views handling HTTP requests related to password reset confirmations.
+
+- **common/**: Contains utility classes, services, and other shared components across the application.
+  - `exceptions.py`: Defines a base custom exception class.
+  - `pagination.py`: Custom pagination classes.
+  - `serializers.py`: Additional serializers that can be reused across different parts of the app.
+  - `services/**`: Service classes encapsulating business logic.
+    - `cost_calculation_service.py`: Calculates costs associated with products or transactions.
+    - `hijri_calendar_service.py`: Interacts with the AlAdhan.com Hijri calendar API.
+    - `hmrctariff_service.py`: Fetches import duty rates from HMRC API.
+    - `price_recommendation_service.py`: Computes recommended retail prices based on landed cost and margin.
+    - `shopify_service.py`: Interacts with the Shopify Admin REST API.
+    - `verification_token_service.py`: Handles verification tokens for various purposes.
+
+- **celery_app/**: Contains Celery configuration and tasks.
+  - `tasks.py`: Defines Celery tasks, such as processing price change logs to update product prices.
+
+### Dependencies
+
+The project depends on several libraries:
+- Django
+- asgiref
+- pytz
+- sqlparse
+- psycopg2-binary
+- django-allauth
+- pytest
+- black
+- flake8
+- sphinx
+- djangorestframework
+
+## Configuration and Setup
+
+To set up the development environment, follow these steps:
+
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/your-repo/config.git
+   cd config
    ```
-3. **Build the Docker Images**: Run the following command to build the necessary Docker images.
-   ```sh
-   docker-compose up --build
-   ```
-4. **Migrate Database**: After the containers are running, apply migrations to set up the database schema.
-   ```sh
-   docker-compose run web python manage.py migrate
-   ```
-5. **Create Superuser**: Create a superuser to access the Django admin panel.
-   ```sh
-   docker-compose run web python manage.py createsuperuser
-   ```
-6. **Run Migrations and Seed Demo Data**: Run migrations and seed demo data using the provided scripts.
-   ```sh
-   docker-compose run web python manage.py loaddata initial_data.json
-   ```
-7. **Access the Application**: Open your web browser and navigate to `http://localhost:3000` to access the React frontend.
 
-## Environment Variable Reference Table
-
-| Variable Name          | Description                           | Example Value  |
-|------------------------|---------------------------------------|----------------|
-| DJANGO_SECRET_KEY        | Secret key for Django                 | mysecretkey    |
-| DEBUG                    | Enable or disable debug mode            | true           |
-| DATABASE_URL             | Database URL                          | postgresql://user:password@db:5432/mydatabase |
-| REDIS_URL                | Redis URL                             | redis://redis:6379/1 |
-| CELERY_BROKER_URL        | Celery broker URL                     | amqp://guest:@celery-broker:5672// |
-| SHOPIFY_APP_KEY          | Shopify app key                       | yourappkey     |
-| SHOPIFY_APP_SECRET       | Shopify app secret                    | yourappsecret  |
-
-## Running Migrations and Seed Demo Data
-
-1. **Apply Migrations**:
-   ```sh
-   docker-compose run web python manage.py migrate
-   ```
-2. **Seed Demo Data**:
-   ```sh
-   docker-compose run web python manage.py loaddata initial_data.json
+2. **Create a virtual environment**:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
    ```
 
-## Running Tests
+3. **Install dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-To run the tests, execute the following command:
-```sh
-docker-compose run web python manage.py test
+4. **Run migrations**:
+   ```bash
+   python manage.py migrate
+   ```
+
+5. **Create a superuser** (if needed):
+   ```bash
+   python manage.py createsuperuser
+   ```
+
+6. **Start the development server**:
+   ```bash
+   python manage.py runserver
+   ```
+
+## Testing
+
+The project uses `pytest` for testing. To run tests, execute:
+
+```bash
+pytest
 ```
 
-## API Endpoint Summary Grouped by Module
+## Documentation
 
-### Authentication Module
+Documentation is generated using Sphinx. Build the documentation with:
 
-1. **Register User**
-   - **URL**: `/api/register/`
-   - **Method**: `POST`
-   - **Request Body**:
-     ```json
-     {
-       "username": "user",
-       "email": "user@example.com",
-       "password": "secure_password"
-     }
-     ```
+```bash
+sphinx-build -b html docs/source docs/build
+```
 
-2. **Login User**
-   - **URL**: `/api/login/`
-   - **Method**: `POST`
-   - **Request Body**:
-     ```json
+Access the generated HTML documentation by opening `docs/build/index.html`.
 
----
+## Code Conventions
 
-## New Feature: Add Logo to Company Model
+- **Naming Style**: snake_case
+- **Type Hints**: Not used in this project.
+- **Multi-Tenancy**: Not implemented.
+- **RBAC**: Implemented.
+- **Repository Pattern**: Not used.
+- **Service Layer**: Implemented.
 
-To add a logo to the Company model, follow these steps:
-
-1. **Update Company Model**:
-   - Modify the `authentication/models.py` file to include an `ImageField` for the logo.
-2. **Configure Media Storage**:
-   - Update the `settings.py` file to configure media storage either locally or on S3 for production environments.
-3. **Migrate Database**:
-   - Run migrations to apply the changes to the database schema.
-
-### Detailed Steps
-
-1. **Update Company Model (`authentication/models.py`)**:
-   ```python
-   from django.db import models
-   from django.core.validators import URLValidator
-   from django.contrib.auth.models import AbstractUser
-
-   class Company(models.Model):
-       """
-       Model representing a company.
-
-       Fields:
-       - name: CharField representing the name of the company.
-       - logo: ImageField representing the logo of the company.
-       """
-
-       name = models.CharField(max_length=255, unique=True)
-       logo = models.ImageField(upload_to='company_logos/', null=True, blank=True)
-
-       def __str__(self):
-           return self.name
-   ```
-
-2. **Configure Media Storage (`settings.py`)**:
-   ```python
-   import os
-
-   if 'DJANGO_ENV' in os.environ and os.environ['DJANGO_ENV'] == 'production':
-       DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
-       AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
-       AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
-       AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME')
-   else:
-       DEFAULT_FILE_STORAGE = 'django.core.files.storage.FileSystemStorage'
-       MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
-   ```
-
-3. **Migrate Database**:
-   ```sh
-   docker-compose run web python manage.py makemigrations authentication
-   docker-compose run web python manage.py migrate
-   ```
-
----
-
-## API Endpoint Summary Grouped by Module
-
-### Authentication Module
-
-1. **Register User**
-   - **URL**: `/api/register/`
-   - **Method**: `POST`
-   - **Request Body**:
-     ```json
-     {
-       "username": "user",
-       "email": "user@example.com",
-       "password": "secure_password"
-     }
-     ```
-
-2. **Login User**
-   - **URL**: `/api/login/`
-   - **Method**: `POST`
-   - **Request Body**:
-     ```json
+This README provides a high-level overview of the project structure and setup instructions. For detailed information, refer to the documentation and source code.

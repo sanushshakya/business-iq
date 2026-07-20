@@ -100,10 +100,3 @@ Access the generated HTML documentation by opening `docs/build/index.html`.
 ## Code Conventions
 
 - **Naming Style**: snake_case
-- **Type Hints**: Not used in this project.
-- **Multi-Tenancy**: Not implemented.
-- **RBAC**: Implemented.
-- **Repository Pattern**: Not used.
-- **Service Layer**: Implemented.
-
-This README provides a high-level overview of the project structure and setup instructions. For detailed information, refer to the documentation and source code.

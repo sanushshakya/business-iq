@@ -1,30 +1,20 @@
-# Stage 1: Builder Image
-FROM python:3.12-slim AS builder
+# Use an official Python runtime as a parent image
+FROM python:3.9-slim
 
+# Set the working directory in the container
 WORKDIR /app
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy the current directory contents into the container at /app
+COPY . /app
 
-COPY supplyiq/ ./
+# Install any needed packages specified in requirements.txt
+RUN pip install --trusted-host pypi.python.org -r requirements.txt
 
-RUN python manage.py collectstatic --noinput --clear
+# Make port 8000 available to the world outside this container
+EXPOSE 8000
 
-# Stage 2: Production Image
-FROM python:3.12-slim
+# Define environment variable
+ENV NAME World
 
-ENV PYTHONUNBUFFERED=1 \
-    DJANGO_SECRET_KEY='your_secret_key_here' \
-    DATABASE_URL='your_database_url_here'
-
-WORKDIR /app
-
-COPY --from=builder /app/venv /app/venv
-COPY --from=builder /app/static /app/static
-COPY supplyiq/ ./
-
-RUN chown -R www-data:www-data /app
-
-USER www-data
-
-CMD ["gunicorn", "supplyiq.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4"]
+# Run app.py when the container launches
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]

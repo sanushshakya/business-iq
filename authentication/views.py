@@ -48,11 +48,9 @@ class PasswordResetConfirmView(APIView):
         """
         try:
             # Convert UID to integer
-            uid = urlsafe_base64_decode(uidb64).decode()
+            uid = default_token_generator.make_hashed_password(uidb64)
             user = User.objects.get(pk=uid)
         except (TypeError, ValueError, OverflowError, User.DoesNotExist):
             user = None
 
         return user
-```
-This code implements a view for handling password reset confirmation in a Django application. It uses a serializer to validate the incoming data and then attempts to retrieve the corresponding user based on the provided token. If successful, it sets the new password and returns a success message; otherwise, it handles errors gracefully by returning appropriate error messages.

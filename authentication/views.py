@@ -28,18 +28,26 @@ class PasswordResetConfirmView(APIView):
         Returns:
         - A JSON response indicating whether the password reset was successful or not.
         """
-        serializer = PasswordResetConfirmSerializer(data=request.data)
-        if serializer.is_valid():
-            user = self.get_user(serializer.validated_data['uidb64'])
-            if user is not None:
-                new_password = serializer.validated_data['new_password1']
-                user.set_password(new_password)
-                user.save()
-                return Response({'detail': _('Password reset successful')}, status=status.HTTP_200_OK)
+        try:
+            serializer = PasswordResetConfirmSerializer(data=request.data)
+            if serializer.is_valid():
+                user = self.get_user(serializer.validated_data['uidb64'])
+                if user is not None:
+                    new_password = serializer.validated_data['new_password1']
+                    user.set_password(new_password)
+                    user.save()
+                    return Response({'detail': _('Password reset successful')}, status=status.HTTP_200_OK)
+                else:
+                    return Response({'detail': _('Invalid token')}, status=status.HTTP_400_BAD_REQUEST)
             else:
-                return Response({'detail': _('Invalid token')}, status=status.HTTP_400_BAD_REQUEST)
-        else:
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            # Log the exception for debugging purposes
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.exception("An error occurred during password reset: %s", e)
+
+            return Response({'detail': _('Internal server error')}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def get_user(self, uidb64):
         """

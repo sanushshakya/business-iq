@@ -30,7 +30,7 @@ class PasswordResetConfirmView(APIView):
         """
         serializer = PasswordResetConfirmSerializer(data=request.data)
         if serializer.is_valid():
-            user = self.get_user(serializer.validated_data['token'])
+            user = self.get_user(serializer.validated_data['uidb64'])
             if user is not None:
                 new_password = serializer.validated_data['new_password1']
                 user.set_password(new_password)

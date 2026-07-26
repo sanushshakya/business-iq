@@ -1,8 +1,13 @@
+"""
+authentication/views.py
+
+This file contains the views for handling password reset confirmations within a Django application.
+"""
+
+from django.contrib.auth.tokens import default_token_generator
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from django.contrib.auth.tokens import default_token_generator
-from django.utils.translation import gettext as _
 from authentication.serializers import PasswordResetConfirmSerializer
 
 class PasswordResetConfirmView(APIView):

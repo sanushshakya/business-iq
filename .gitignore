@@ -27,4 +27,4 @@ docker-compose.yml
 Dockerfile
 
 # Ignore PyCharm project files
-.idea/
+.idea/.env

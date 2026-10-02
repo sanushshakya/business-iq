@@ -4,6 +4,7 @@ pricing/models.py
 This file contains Django models for the pricing application.
 """
 
+from django.conf import settings
 from django.db import models
 
 class PricingPlan(models.Model):
@@ -24,14 +25,14 @@ class Subscription(models.Model):
     Model representing a subscription for a pricing plan.
     """
 
-    user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     plan = models.ForeignKey(PricingPlan, on_delete=models.CASCADE)
     start_date = models.DateField()
     end_date = models.DateField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
 
     def __str__(self):
-        return f"{self.user.username} - {self.plan.name}"
+        return f"{self.user} - {self.plan.name}"
 
 class SupplierInvoice(models.Model):
     """
@@ -53,7 +54,7 @@ class SupplierInvoice(models.Model):
     ]
 
     invoice_number = models.CharField(max_length=50, unique=True)
-    supplier = models.ForeignKey('common.Company', on_delete=models.CASCADE)
+    supplier = models.ForeignKey('tenants.Company', on_delete=models.CASCADE)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2)
     issued_date = models.DateField()
     due_date = models.DateField(null=True, blank=True)
@@ -88,3 +89,28 @@ class InvoiceLineItem(models.Model):
 
     def __str__(self):
         return f"{self.invoice.invoice_number} - {self.description}"
+
+
+class PriceChangeLog(models.Model):
+    """
+    Record of a change to a product's price.
+
+    Approved, unprocessed logs are pushed to Shopify by ``pricing.tasks.sync_approved_prices``.
+    """
+
+    product = models.ForeignKey('inventory.Product', on_delete=models.CASCADE, related_name='price_changes')
+    stock_batch = models.ForeignKey(
+        'inventory.StockBatch', null=True, blank=True, on_delete=models.SET_NULL, related_name='price_changes'
+    )
+    old_price = models.DecimalField(max_digits=10, decimal_places=2)
+    new_price = models.DecimalField(max_digits=10, decimal_places=2)
+    reason = models.CharField(max_length=100, blank=True)
+    changed_at = models.DateTimeField(auto_now_add=True)
+    is_approved = models.BooleanField(default=False)
+    is_processed = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['-changed_at']
+
+    def __str__(self):
+        return f"{self.product.name}: {self.old_price} -> {self.new_price}"

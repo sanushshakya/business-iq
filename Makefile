@@ -18,7 +18,7 @@ migrate:
 
 # Run tests
 test:
-	python manage.py test
+	pytest
 
 # Generate coverage report
 coverage:

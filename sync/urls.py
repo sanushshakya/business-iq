@@ -1,10 +1,14 @@
-from django.urls import path
+# sync/urls.py
 
-# Import views from the sync app
-from .views import SyncView, AnotherSyncView
+from django.urls import include, path
+from rest_framework.routers import DefaultRouter
+
+from . import views
+
+router = DefaultRouter()
+router.register(r'tasks', views.SyncTaskViewSet, basename='synctask')
+router.register(r'shopify-connections', views.ShopifyConnectionViewSet, basename='shopifyconnection')
 
 urlpatterns = [
-    # Define URL patterns for the sync app
-    path('sync/', SyncView.as_view(), name='sync'),
-    path('another-sync/', AnotherSyncView.as_view(), name='another_sync'),
+    path('', include(router.urls)),
 ]

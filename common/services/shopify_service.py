@@ -2,7 +2,7 @@
 
 import requests
 from django.conf import settings
-from .models import ShopifyConnection
+from sync.models import ShopifyConnection
 
 
 class ShopifyService:
@@ -31,7 +31,7 @@ class ShopifyService:
         """
         try:
             connection = ShopifyConnection.objects.get(shop_domain=self.shop_domain)
-            return connection.access_token_encrypted
+            return connection.access_token
         except ShopifyConnection.DoesNotExist:
             raise ValueError("No Shopify connection found for the given domain.")
 

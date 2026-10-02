@@ -1,38 +1,41 @@
-"""
-config/inventory/serializers.py
-
-This file contains Django REST Framework (DRF) serializers for the inventory app.
-"""
+# inventory/serializers.py
 
 from rest_framework import serializers
-from .models import Item, Location, Supplier
+
+from .models import ProductCategory, Product, Order, Supplier, StockBatch, StockMovement
 
 
-class ItemSerializer(serializers.ModelSerializer):
-    """
-    Serializer for the Item model.
-    """
-
+class ProductCategorySerializer(serializers.ModelSerializer):
     class Meta:
-        model = Item
-        fields = "__all__"
+        model = ProductCategory
+        fields = '__all__'
 
 
-class LocationSerializer(serializers.ModelSerializer):
-    """
-    Serializer for the Location model.
-    """
-
+class ProductSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Location
-        fields = "__all__"
+        model = Product
+        fields = '__all__'
+
+
+class OrderSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Order
+        fields = '__all__'
 
 
 class SupplierSerializer(serializers.ModelSerializer):
-    """
-    Serializer for the Supplier model.
-    """
-
     class Meta:
         model = Supplier
-        fields = "__all__"
+        fields = '__all__'
+
+
+class StockBatchSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StockBatch
+        fields = '__all__'
+
+
+class StockMovementSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StockMovement
+        fields = '__all__'

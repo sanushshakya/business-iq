@@ -1,75 +1,65 @@
-# tests/factories.py
+# common/tests/factories.py
+
+from datetime import timedelta
+from decimal import Decimal
 
 import factory
-from django.contrib.auth.models import User
+from django.contrib.auth import get_user_model
 from django.utils import timezone
-from .models import Till, StockMovement
 
-class UserFactory(factory.django.DjangoModelFactory):
-    """
-    Factory for creating fake User instances.
-    """
+from inventory.models import Product, StockBatch
+from sync.models import ShopifyConnection
+from tenants.models import Company
 
-    class Meta:
-        model = User
-
-    username = factory.Sequence(lambda n: f'user{n}')
-    password = factory.PostGenerationMethodCall('set_password', 'password')
 
 class CompanyFactory(factory.django.DjangoModelFactory):
-    """
-    Factory for creating fake Company instances.
-    """
-
     class Meta:
         model = Company
 
     name = factory.Sequence(lambda n: f'Company {n}')
+    registration_number = factory.Sequence(lambda n: f'REG{n:05d}')
+    address = '1 Test Street'
 
-class OwnerFactory(factory.django.DjangoModelFactory):
-    """
-    Factory for creating fake Owner instances.
-    """
 
+class UserFactory(factory.django.DjangoModelFactory):
     class Meta:
-        model = Owner
+        model = get_user_model()
+        skip_postgeneration_save = True
 
-    user = factory.SubFactory(UserFactory)
+    email = factory.Sequence(lambda n: f'user{n}@example.com')
     company = factory.SubFactory(CompanyFactory)
 
-class ShopifyConnectionFactory(factory.django.DjangoModelFactory):
-    """
-    Factory for creating fake ShopifyConnection instances.
-    """
+    @factory.post_generation
+    def password(self, create, extracted, **kwargs):
+        self.set_password(extracted or 'password-12345')
+        if create:
+            self.save()
 
+
+class ProductFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = Product
+
+    name = factory.Sequence(lambda n: f'Product {n}')
+    description = 'A product'
+    price = Decimal('100.00')
+    stock_quantity = 50
+
+
+class StockBatchFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = StockBatch
+
+    product = factory.SubFactory(ProductFactory)
+    batch_number = factory.Sequence(lambda n: f'B{n:05d}')
+    quantity = 10
+    expiration_date = factory.LazyFunction(lambda: timezone.localdate() + timedelta(days=30))
+
+
+class ShopifyConnectionFactory(factory.django.DjangoModelFactory):
     class Meta:
         model = ShopifyConnection
 
-    company = factory.SubFactory(OwnerFactory.company)
+    company = factory.SubFactory(CompanyFactory)
     shop_domain = factory.Sequence(lambda n: f'shop{n}.myshopify.com')
-    access_token = factory.LazyAttribute(lambda _: get_random_string(length=32))
-
-class TillFactory(factory.django.DjangoModelFactory):
-    """
-    Factory for creating fake Till instances.
-    """
-
-    class Meta:
-        model = Till
-
-    company = factory.SubFactory(OwnerFactory.company)
-    location = factory.Sequence(lambda n: f'Location {n}')
-
-class StockMovementFactory(factory.django.DjangoModelFactory):
-    """
-    Factory for creating fake StockMovement instances.
-    """
-
-    class Meta:
-        model = StockMovement
-
-    till = factory.SubFactory(TillFactory)
-    product_name = factory.Sequence(lambda n: f'Product {n}')
-    quantity = factory.LazyAttribute(lambda _: random.randint(1, 100))
-    movement_type = 'IN'
-    timestamp = factory.LazyFunction(timezone.now)
+    access_token = 'test-token'

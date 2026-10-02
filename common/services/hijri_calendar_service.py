@@ -3,9 +3,13 @@
 Service layer for interacting with the AlAdhan.com Hijri calendar API to fetch event dates and manage caching.
 """
 
+import logging
+
 import requests
 from django.core.cache import cache
-from django.utils.decorators import method_decorator
+
+logger = logging.getLogger(__name__)
+
 
 class HijriCalendarService:
     """
@@ -16,7 +20,6 @@ class HijriCalendarService:
     CACHE_KEY = "next_hijri_event_date"
     CACHE_TIMEOUT = 3600  # Cache timeout in seconds (1 hour)
 
-    @method_decorator(cache_page(CACHE_TIMEOUT))
     def get_next_event_date(self):
         """
         Fetches the next event date from the AlAdhan.com Hijri calendar API.
@@ -47,6 +50,6 @@ class HijriCalendarService:
                     return next_event_date
 
         except requests.RequestException as e:
-            print(f"Error fetching next hijri event date: {e}")
+            logger.warning("Error fetching next hijri event date: %s", e)
 
         return None

@@ -7,6 +7,19 @@ for representing and managing inventory-related data within the application.
 
 from django.db import models
 
+class ProductCategory(models.Model):
+    """
+    A category used to group products (e.g. for demand-calendar events).
+    """
+    name = models.CharField(max_length=100, unique=True)
+
+    class Meta:
+        verbose_name_plural = 'product categories'
+
+    def __str__(self):
+        return self.name
+
+
 class Product(models.Model):
     """
     Represents a product in the inventory.
@@ -21,6 +34,15 @@ class Product(models.Model):
     description = models.TextField()
     price = models.DecimalField(max_digits=10, decimal_places=2)
     stock_quantity = models.IntegerField(default=0)
+    reorder_threshold = models.PositiveIntegerField(default=5)
+    commodity_code = models.CharField(max_length=20, blank=True)
+    category = models.ForeignKey(
+        ProductCategory, null=True, blank=True, on_delete=models.SET_NULL, related_name='products'
+    )
+    company = models.ForeignKey(
+        'tenants.Company', null=True, blank=True, on_delete=models.CASCADE, related_name='products'
+    )
+    shopify_product_id = models.BigIntegerField(null=True, blank=True)
 
     def __str__(self):
         return self.name

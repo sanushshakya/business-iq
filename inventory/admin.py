@@ -1,25 +1,28 @@
 from django.contrib import admin
 
-# Register your models here.
+from .models import Order, Product, ProductCategory, StockBatch, StockMovement, Supplier
 
-from .models import StockBatch, StockMovement
+admin.site.register(ProductCategory)
+admin.site.register(Order)
+admin.site.register(Supplier)
+
+
+@admin.register(Product)
+class ProductAdmin(admin.ModelAdmin):
+    list_display = ('name', 'category', 'price', 'stock_quantity', 'reorder_threshold')
+    search_fields = ['name', 'commodity_code']
+    list_filter = ['category']
+
 
 @admin.register(StockBatch)
 class StockBatchAdmin(admin.ModelAdmin):
-    """
-    Admin class for the StockBatch model.
-    """
+    list_display = ('batch_number', 'product', 'quantity', 'expiration_date')
+    search_fields = ['batch_number', 'product__name']
+    list_filter = ['expiration_date']
 
-    list_display = ('batch_id', 'product_name', 'quantity', 'expiry_date')
-    search_fields = ['batch_id', 'product_name']
-    list_filter = ['expiry_date']
 
 @admin.register(StockMovement)
 class StockMovementAdmin(admin.ModelAdmin):
-    """
-    Admin class for the StockMovement model.
-    """
-
-    list_display = ('movement_id', 'batch', 'type', 'quantity', 'timestamp')
-    search_fields = ['movement_id', 'type']
-    list_filter = ['type', 'timestamp']
+    list_display = ('id', 'batch', 'movement_type', 'quantity', 'date_time')
+    search_fields = ['batch__batch_number']
+    list_filter = ['movement_type', 'date_time']

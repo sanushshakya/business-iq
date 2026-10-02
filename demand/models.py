@@ -82,7 +82,7 @@ class EventProductKeyword(models.Model):
     """
 
     cultural_event = models.ForeignKey(CulturalEvent, on_delete=models.CASCADE)
-    product = models.ForeignKey('common.Product', on_delete=models.CASCADE)  # Assuming Product model exists in common app
+    product = models.ForeignKey('inventory.Product', on_delete=models.CASCADE)
     keyword = models.CharField(max_length=255)
 
     def __str__(self):

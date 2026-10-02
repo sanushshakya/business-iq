@@ -1,5 +1,7 @@
 # common/services/cost_calculation_service.py
 
+from decimal import Decimal
+
 from django.conf import settings
 
 class CostCalculationService:
@@ -23,7 +25,7 @@ class CostCalculationService:
 
         # Add customs duty based on the commodity code
         customs_duty_rate = self.get_customs_duty_rate(product.commodity_code)
-        customs_duty_amount = base_cost * customs_duty_rate
+        customs_duty_amount = base_cost * Decimal(str(customs_duty_rate))
 
         # Calculate total landed cost
         total_landed_cost = base_cost + customs_duty_amount

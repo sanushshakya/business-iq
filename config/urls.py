@@ -21,23 +21,17 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, Sp
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    # Include inventory URLs
+    path('auth/', include('authentication.urls')),
     path('inventory/', include('inventory.urls')),
-    # Include demand URLs
     path('demand/', include('demand.urls')),
-    # Include logistics URLs
+    path('calendar/', include('demand_calendar.urls')),
     path('logistics/', include('logistics.urls')),
-    # Include pricing URLs
-    path('pricing/', include('pricing.urls')),  # Added for the new pricing app
-    # Include sync URLs
-    path('sync/', include('sync.urls')),  # Added for the new sync app
-    # Include common URLs
-    path('common/', include('common.urls')),  # Added for the new common app
-    
+    path('pricing/', include('pricing.urls')),
+    path('sync/', include('sync.urls')),
+    path('common/', include('common.urls')),
+
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/schema/swagger-ui/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
     path('api/schema/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
-    
-    # New URL pattern for API documentation
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='api-docs'),
 ]

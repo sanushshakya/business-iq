@@ -1,8 +1,15 @@
-from django.urls import path
+# demand_calendar/urls.py
 
-# Module docstring: Defines URL patterns for accessing the Demand Calendar API.
+from django.urls import include, path
+from rest_framework.routers import DefaultRouter
+
+from . import views
+
+router = DefaultRouter()
+router.register(r'events', views.EventViewSet, basename='event')
+router.register(r'alerts', views.DemandAlertViewSet, basename='demandalert')
 
 urlpatterns = [
-    # Endpoint to retrieve events for the next 3 months
-    path('events/', 'demand_calendar.views.get_next_three_months_events', name='get_next_three_months_events'),
+    path('upcoming/', views.get_next_three_months_events, name='get_next_three_months_events'),
+    path('', include(router.urls)),
 ]

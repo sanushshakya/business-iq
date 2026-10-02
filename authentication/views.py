@@ -14,6 +14,9 @@ from django.utils import timezone
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 from django.utils.translation import gettext as _
+from drf_spectacular.utils import extend_schema, inline_serializer
+from rest_framework import serializers as drf_serializers
+from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -30,6 +33,9 @@ class PasswordResetConfirmView(APIView):
     checked against the user identified by 'uidb64'; on success the password is replaced.
     """
 
+    permission_classes = [AllowAny]
+
+    @extend_schema(request=PasswordResetConfirmSerializer, responses={200: None})
     def post(self, request, *args, **kwargs):
         serializer = PasswordResetConfirmSerializer(data=request.data)
         if not serializer.is_valid():
@@ -62,6 +68,15 @@ class AcceptInvitationView(APIView):
     creating a new user (identified by the invited email), and associating them with the company specified in the invitation.
     """
 
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        request=inline_serializer(
+            'AcceptInvitationRequest',
+            {'token': drf_serializers.UUIDField(), 'password': drf_serializers.CharField()},
+        ),
+        responses={201: None},
+    )
     def post(self, request):
         """
         Handle POST requests to accept an invitation.

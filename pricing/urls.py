@@ -1,14 +1,17 @@
-"""
-config/pricing/urls.py
+# pricing/urls.py
 
-URL routing for the pricing app in the iq project.
-"""
+from django.urls import include, path
+from rest_framework.routers import DefaultRouter
 
-from django.urls import path
 from . import views
 
+router = DefaultRouter()
+router.register(r'plans', views.PricingPlanViewSet, basename='pricingplan')
+router.register(r'subscriptions', views.SubscriptionViewSet, basename='subscription')
+router.register(r'invoices', views.SupplierInvoiceViewSet, basename='supplierinvoice')
+router.register(r'invoice-items', views.InvoiceLineItemViewSet, basename='invoicelineitem')
+router.register(r'price-changes', views.PriceChangeLogViewSet, basename='pricechangelog')
+
 urlpatterns = [
-    # Define URL patterns here
-    path('pricing/', views.pricing_list, name='pricing-list'),
-    path('pricing/<int:id>/', views.pricing_detail, name='pricing-detail'),
+    path('', include(router.urls)),
 ]

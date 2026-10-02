@@ -9,6 +9,10 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    env:
+      SECRET_KEY: ci-only-secret-key
+      DEBUG: 'True'
+
     steps:
     - uses: actions/checkout@v2
 

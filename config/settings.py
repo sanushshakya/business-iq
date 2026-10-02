@@ -41,6 +41,8 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "channels",
+    "drf_spectacular",
     "inventory",  # Added the 'inventory' app to INSTALLED_APPS
     "demand",  # Added the 'demand' app to INSTALLED_APPS
     "logistics",  # Added the 'logistics' app to INSTALLED_APPS
@@ -50,6 +52,7 @@ INSTALLED_APPS = [
     "rest_framework",  # Added REST Framework to INSTALLED_APPS
     "tenants",  # Added 'tenants' app to INSTALLED_APPS
     "authentication",
+    "demand_calendar",
 ]
 
 MIDDLEWARE = [
@@ -83,19 +86,46 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 ASGI_APPLICATION = 'config.asgi.application'  # Added ASGI application setting
 
+# Django REST framework
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.SessionAuthentication",
+        "rest_framework.authentication.BasicAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Business IQ API",
+    "VERSION": "1.0.0",
+}
+
+# External services
+HMRC_API_KEY = config('HMRC_API_KEY', default='')
+HMRC_API_URL = config('HMRC_API_URL', default='https://api.hmrc.gov.uk/tariffs')
+DEFAULT_CUSTOMS_DUTY_RATE = config('DEFAULT_CUSTOMS_DUTY_RATE', default=0.0, cast=float)
+FREIGHT_RATES_API_URL = config('FREIGHT_RATES_API_URL', default='')
+RATE_CHANGE_THRESHOLD = config('RATE_CHANGE_THRESHOLD', default=5.0, cast=float)  # percent
+
+# Redis
+REDIS_HOST = config('REDIS_HOST', default='127.0.0.1')
+REDIS_PORT = config('REDIS_PORT', default=6379, cast=int)
+
 # Celery configuration
 CELERY_BROKER_URL = config('CELERY_BROKER_URL', default='redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', default='redis://localhost:6379/0')
 
 # Channel layer configuration
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {
-            "hosts": [(config('REDIS_HOST', default='127.0.0.1'), config('REDIS_PORT', default=6379, cast=int))],
+if config('USE_REDIS_CHANNELS', default=False, cast=bool):
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {"hosts": [(REDIS_HOST, REDIS_PORT)]},
         },
-    },
-}
+    }
+else:
+    CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases

@@ -1,19 +1,16 @@
-"""
-config/sync/views.py
-
-This file contains Django REST Framework (DRF) ViewSets for handling sync operations in the `sync` app of the `iq` project.
-"""
+# sync/views.py
 
 from rest_framework import viewsets
-from .models import SyncModel  # Replace with actual model name
-from .serializers import SyncSerializer  # Replace with actual serializer name
 
-class SyncViewSet(viewsets.ModelViewSet):
-    """
-    A viewset for handling CRUD operations on the SyncModel.
+from .models import ShopifyConnection, SyncTask
+from .serializers import ShopifyConnectionSerializer, SyncTaskSerializer
 
-    This ViewSet provides default actions for list, create, retrieve, update, and destroy.
-    """
 
-    queryset = SyncModel.objects.all()
-    serializer_class = SyncSerializer
+class SyncTaskViewSet(viewsets.ModelViewSet):
+    queryset = SyncTask.objects.all()
+    serializer_class = SyncTaskSerializer
+
+
+class ShopifyConnectionViewSet(viewsets.ModelViewSet):
+    queryset = ShopifyConnection.objects.all()
+    serializer_class = ShopifyConnectionSerializer

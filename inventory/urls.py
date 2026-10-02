@@ -1,18 +1,18 @@
-"""
-config/inventory/urls.py
+# inventory/urls.py
 
-URL routing for the inventory app in the iq project.
-"""
+from django.urls import include, path
+from rest_framework.routers import DefaultRouter
 
-from django.urls import path
-from .views import InventoryListView, InventoryDetailView, InventoryCreateView, InventoryUpdateView, InventoryDeleteView
+from . import views
 
-app_name = 'inventory'
+router = DefaultRouter()
+router.register(r'categories', views.ProductCategoryViewSet, basename='category')
+router.register(r'products', views.ProductViewSet, basename='product')
+router.register(r'orders', views.OrderViewSet, basename='order')
+router.register(r'suppliers', views.SupplierViewSet, basename='supplier')
+router.register(r'batches', views.StockBatchViewSet, basename='stockbatch')
+router.register(r'movements', views.StockMovementViewSet, basename='stockmovement')
 
 urlpatterns = [
-    path('', InventoryListView.as_view(), name='list'),
-    path('<int:pk>/', InventoryDetailView.as_view(), name='detail'),
-    path('new/', InventoryCreateView.as_view(), name='create'),
-    path('<int:pk>/edit/', InventoryUpdateView.as_view(), name='update'),
-    path('<int:pk>/delete/', InventoryDeleteView.as_view(), name='delete'),
+    path('', include(router.urls)),
 ]

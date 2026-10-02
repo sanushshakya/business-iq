@@ -1,19 +1,15 @@
-# config/logistics/urls.py
+# logistics/urls.py
 
-from django.urls import path
-from .views import UserSupplierListView, UserSupplierDetailView, AlternativeSupplierReadOnlyView, FreightAlertCreateView  # Import your views here
+from django.urls import include, path
+from rest_framework.routers import DefaultRouter
+
+from . import views
+
+router = DefaultRouter()
+router.register(r'freight-alerts', views.FreightAlertViewSet, basename='freightalert')
+router.register(r'providers', views.LogisticProviderViewSet, basename='logisticprovider')
+router.register(r'deliveries', views.DeliveryViewSet, basename='delivery')
 
 urlpatterns = [
-    # Define URL patterns for logistics app
-    path('', LogisticsView.as_view(), name='logistics'),  # Example URL pattern
-
-    # URLs for UserSupplier
-    path('usersuppliers/', UserSupplierListView.as_view(), name='user-supplier-list'),
-    path('usersuppliers/<int:pk>/', UserSupplierDetailView.as_view(), name='user-supplier-detail'),
-
-    # Read-only URL for AlternativeSupplier
-    path('alternativesuppliers/<int:pk>/', AlternativeSupplierReadOnlyView.as_view(), name='alternative-supplier-read-only'),
-
-    # URL for FreightAlert
-    path('freightalerts/', FreightAlertCreateView.as_view(), name='freight-alert-create'),
+    path('', include(router.urls)),
 ]

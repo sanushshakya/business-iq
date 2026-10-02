@@ -10,14 +10,14 @@ class CompanyAdmin(admin.ModelAdmin):
     """
     Admin configuration for the Company model.
     """
-    list_display = ('name', 'code')
+    list_display = ('name', 'registration_number')
 
 @admin.register(Branch)
 class BranchAdmin(admin.ModelAdmin):
     """
     Admin configuration for the Branch model.
     """
-    list_display = ('name', 'company', 'location')
+    list_display = ('name', 'company', 'address', 'is_active')
 
 @admin.register(Till)
 class TillAdmin(admin.ModelAdmin):

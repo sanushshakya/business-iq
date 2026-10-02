@@ -34,3 +34,19 @@ class SyncTask(models.Model):
 
     def __str__(self):
         return f"SyncTask {self.task_id} from {self.source_system} to {self.target_system} - Status: {self.status}"
+
+
+class ShopifyConnection(models.Model):
+    """
+    Credentials for a company's Shopify store.
+
+    NOTE: ``access_token`` is stored as-is; encrypt it at rest before storing real tokens.
+    """
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='shopify_connections')
+    shop_domain = models.CharField(max_length=255, unique=True)
+    access_token = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.shop_domain

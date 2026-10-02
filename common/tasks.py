@@ -1,50 +1,41 @@
-import requests
+# common/tasks.py
+
+from datetime import timedelta
+
 from celery import shared_task
-from django.conf import settings
-from .models import FreightAlert
+from django.db.models import F
+from django.utils import timezone
+
+from inventory.models import Product
+
+from .models import DemandAlert, StockAlert
+
 
 @shared_task
-def check_freight_rates():
+def check_low_stock():
     """
-    Celery task to fetch current freight rates and create alerts if the rate has changed.
-    
-    This task will:
-    1. Fetch current freight rates from an external API.
-    2. Compare the current rate with the last recorded rate for each company.
-    3. Create a FreightAlert instance if there is a significant change exceeding a predefined threshold.
-    """
-    # URL of the external API to fetch freight rates
-    api_url = settings.FREIGHT_RATES_API_URL
-    
-    try:
-        response = requests.get(api_url)
-        response.raise_for_status()
-        
-        rates_data = response.json()
-        
-        for rate_info in rates_data:
-            company_id = rate_info['company_id']
-            current_rate = rate_info['current_rate']
-            
-            # Fetch the last recorded freight rate from the database
-            last_alert = FreightAlert.objects.filter(company_id=company_id).order_by('-id').first()
-            
-            if last_alert and abs(current_rate - last_alert.rate) >= settings.RATE_CHANGE_THRESHOLD:
-                # Create a new alert if there is a significant change in rate
-                FreightAlert.objects.create(
-                    company_id=company_id,
-                    rate=current_rate,
-                    previous_rate=last_alert.rate
-                )
-    
-    except requests.RequestException as e:
-        # Log the error or handle it appropriately
-        print(f"Error fetching freight rates: {e}")
+    Create a StockAlert for every product at or below its reorder threshold that has no open alert.
 
-# Example Celery Beat schedule configuration in settings.py
-# CELERY_BEAT_SCHEDULE = {
-#     'check_freight_rates_every_hour': {
-#         'task': 'common.tasks.check_freight_rates',
-#         'schedule': crontab(hour='*/1'),
-#     },
-# }
+    Returns the number of alerts created.
+    """
+    low = Product.objects.filter(stock_quantity__lte=F('reorder_threshold')).exclude(
+        stock_alerts__is_dismissed=False
+    )
+    created = 0
+    for product in low:
+        StockAlert.objects.create(
+            product=product, current_qty=product.stock_quantity, threshold=product.reorder_threshold
+        )
+        created += 1
+    return created
+
+
+@shared_task
+def scan_demand_alerts(max_age_hours=24):
+    """
+    Mark demand alerts that have been open longer than ``max_age_hours`` as handled.
+
+    Returns the number of alerts updated.
+    """
+    cutoff = timezone.now() - timedelta(hours=max_age_hours)
+    return DemandAlert.objects.filter(is_handled=False, created_at__lt=cutoff).update(is_handled=True)

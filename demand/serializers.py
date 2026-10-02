@@ -1,60 +1,42 @@
-"""
-Serializers for the `demand` app in the `iq` project.
-"""
+# demand/serializers.py
 
+from django.utils import timezone
 from rest_framework import serializers
 
-# Assuming there is a model named `Demand` in the `demand/models.py`
-from .models import Demand
+from .models import CulturalEvent, Demand, EventProductKeyword
 
 
 class DemandSerializer(serializers.ModelSerializer):
-    """
-    Serializer for the `Demand` model.
-
-    This serializer handles the serialization and deserialization of
-    the `Demand` model, which represents demand data within the system.
-    """
-
     class Meta:
-        """
-        Metadata for the serializer.
-
-        Specifies the model and fields to be included in serialization.
-        """
-
-        model = Demand  # Model this serializer operates on
-        fields = "__all__"  # Include all fields from the `Demand` model
+        model = Demand
+        fields = '__all__'
 
     def validate_quantity(self, value):
-        """
-        Validate that the quantity field is not negative.
-
-        Args:
-            value (int): The quantity to be validated.
-
-        Returns:
-            int: The validated quantity.
-        """
-
         if value < 0:
             raise serializers.ValidationError("Quantity cannot be negative.")
         return value
 
     def validate_due_date(self, value):
-        """
-        Validate that the due date is in the future.
-
-        Args:
-            value (datetime.date): The due date to be validated.
-
-        Returns:
-            datetime.date: The validated due date.
-        """
-
-        from django.utils import timezone
-
-        now = timezone.now().date()
-        if value < now:
-            raise serializers.ValidationError("Due date must be in the future.")
+        # Only enforce on creation; existing demands may legitimately be past due.
+        if self.instance is None and value < timezone.now().date():
+            raise serializers.ValidationError("Due date must not be in the past.")
         return value
+
+
+class CulturalEventSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CulturalEvent
+        fields = '__all__'
+
+    def validate(self, data):
+        start = data.get('start_date', getattr(self.instance, 'start_date', None))
+        end = data.get('end_date', getattr(self.instance, 'end_date', None))
+        if start and end and end < start:
+            raise serializers.ValidationError("end_date must not be before start_date.")
+        return data
+
+
+class EventProductKeywordSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EventProductKeyword
+        fields = '__all__'

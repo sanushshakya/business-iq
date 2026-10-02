@@ -1,20 +1,30 @@
-from django.shortcuts import render
-from django.views.generic.list import ListView
-from .models import AlternativeSupplier
+# logistics/views.py
 
-class AlternativeSupplierListView(ListView):
-    """
-    A read-only view for displaying a list of all AlternativeSuppliers.
+from rest_framework import viewsets
+from rest_framework.decorators import action
+from rest_framework.response import Response
 
-    This view inherits from Django's generic ListView and is designed to handle GET requests,
-    rendering a template with a queryset of all AlternativeSupplier objects.
-    
-    Template:
-    - 'logistics/alternative_supplier_list.html'
+from .models import Delivery, FreightAlert, LogisticProvider
+from .serializers import DeliverySerializer, FreightAlertSerializer, LogisticProviderSerializer
 
-    Context:
-    - 'alternative_suppliers': A list of AlternativeSupplier objects
-    """
-    model = AlternativeSupplier
-    template_name = 'logistics/alternative_supplier_list.html'
-    context_object_name = 'alternative_suppliers'
+
+class FreightAlertViewSet(viewsets.ModelViewSet):
+    queryset = FreightAlert.objects.all()
+    serializer_class = FreightAlertSerializer
+
+    @action(detail=True, methods=['post'])
+    def dismiss(self, request, pk=None):
+        alert = self.get_object()
+        alert.is_dismissed = True
+        alert.save(update_fields=['is_dismissed'])
+        return Response(self.get_serializer(alert).data)
+
+
+class LogisticProviderViewSet(viewsets.ModelViewSet):
+    queryset = LogisticProvider.objects.all()
+    serializer_class = LogisticProviderSerializer
+
+
+class DeliveryViewSet(viewsets.ModelViewSet):
+    queryset = Delivery.objects.all()
+    serializer_class = DeliverySerializer

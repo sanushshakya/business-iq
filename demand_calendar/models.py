@@ -17,9 +17,8 @@ class Event(models.Model):
     name = models.CharField(max_length=255)
     start_date = models.DateField()
     end_date = models.DateField()
-    product_categories = models.ManyToManyField('common.ProductCategory')
+    product_categories = models.ManyToManyField('inventory.ProductCategory')
     demand_multiplier = models.DecimalField(max_digits=5, decimal_places=2)
-    demand_alerts = models.OneToOneField('DemandAlert', on_delete=models.SET_NULL, null=True, blank=True)
 
 class DemandAlert(models.Model):
     """
@@ -29,7 +28,7 @@ class DemandAlert(models.Model):
     - event: ForeignKey linking to the associated Event object.
     - url: URLField representing the link to the demand alert.
     """
-    event = models.ForeignKey(Event, on_delete=models.CASCADE)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='demand_alerts')
     url = models.URLField(max_length=255)
 
 # EOF

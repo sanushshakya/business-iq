@@ -2,28 +2,22 @@ from django.contrib.auth import authenticate
 from rest_framework import serializers
 
 
-# Serializer for handling password reset confirmation requests
 class PasswordResetConfirmSerializer(serializers.Serializer):
     """
-    Serializer class for password reset confirmation.
+    Serializer for password reset confirmation.
 
-    This serializer ensures that all required fields are present and correctly formatted.
+    Expects the base64-encoded user id and token from the reset email, plus the
+    new password entered twice.
     """
 
-    new_password = serializers.CharField(required=True, min_length=8)
-    confirm_new_password = serializers.CharField(required=True, min_length=8)
+    uidb64 = serializers.CharField()
+    token = serializers.CharField()
+    new_password1 = serializers.CharField(min_length=8, write_only=True)
+    new_password2 = serializers.CharField(min_length=8, write_only=True)
 
     def validate(self, data):
-        """
-        Validates the input data to ensure the passwords match and meet length requirements.
-
-        Args:
-            data (dict): The input data containing new_password and confirm_new_password.
-
-        Returns:
-            dict: The validated data.
-        """
-        if data['new_password'] != data['confirm_new_password']:
+        """Ensure both password fields match."""
+        if data['new_password1'] != data['new_password2']:
             raise serializers.ValidationError("Passwords must match.")
         return data
 

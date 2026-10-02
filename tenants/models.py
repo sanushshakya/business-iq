@@ -117,6 +117,9 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     is_staff = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    company = models.ForeignKey(
+        Company, null=True, blank=True, on_delete=models.SET_NULL, related_name='users', verbose_name='Company'
+    )
 
     objects = CustomUserManager()
 

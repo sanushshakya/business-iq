@@ -2,6 +2,7 @@
 
 import logging
 from django.conf import settings
+import time
 from celery import shared_task
 from .models import PriceChangeLog
 
@@ -34,15 +35,23 @@ def sync_approved_prices():
 
     logger.info("Finished syncing all approved prices.")
 
-# Additional functions and classes can be added here if necessary
-```
 
-### Explanation:
-1. **Module Docstring**: The module docstring provides a brief description of the Celery task file.
-2. **Function Docstring**: The `sync_approved_prices` function is decorated with `@shared_task`, indicating that it's a Celery task. It includes a detailed docstring explaining its purpose and functionality.
-3. **Logging**: Logging is set up to record information about the task's execution, including errors.
-4. **Fetching Logs**: The function retrieves all `PriceChangeLog` objects that are marked as approved.
-5. **Processing Logs**: For each approved log, the function attempts to get the associated `ShopifyConnection`. If found, it calls a method on the connection object to update the product price on Shopify. The log's status is then updated to indicate processing.
-6. **Exception Handling**: Any exceptions during the processing are logged for debugging purposes.
+@shared_task(idempotent=True)
+def process_sync_event(event_id):
+    """
+    Celery task to process events idempotently.
+    
+    Args:
+        event_id (int): The unique identifier for the event to process.
 
-This task can be triggered by a periodic Celery beat schedule or as part of other business logic that requires immediate updates.
+    Returns:
+        bool: True if the event was processed successfully, False otherwise.
+    """
+    try:
+        # Simulate event processing logic
+        time.sleep(2)  # Sleep to mimic time-consuming operation
+        print(f"Processing event {event_id}")
+        return True
+    except Exception as e:
+        print(f"Failed to process event {event_id}: {e}")
+        return False

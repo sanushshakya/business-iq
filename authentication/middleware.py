@@ -1,5 +1,5 @@
 """
-config/authentication/middleware.py
+authentication/middleware.py
 
 Middleware to read JWT, extract company_id, and attach request.company to the request object.
 """
@@ -7,7 +7,7 @@ Middleware to read JWT, extract company_id, and attach request.company to the re
 import jwt
 from django.http import JsonResponse
 from rest_framework_jwt.settings import api_settings
-from .models import Company
+from tenants.models import Company
 
 JWT_AUTH_HEADER_PREFIX = 'Bearer'
 

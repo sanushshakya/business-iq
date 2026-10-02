@@ -17,6 +17,3 @@ class SyncViewSet(viewsets.ModelViewSet):
 
     queryset = SyncModel.objects.all()
     serializer_class = SyncSerializer
-```
-
-This file defines a DRF `ViewSet` named `SyncViewSet` for managing operations on a hypothetical model `SyncModel`. The viewset includes standard actions for listing all instances, creating new instances, retrieving a specific instance, updating an existing instance, and deleting an instance.

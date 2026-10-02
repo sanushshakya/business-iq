@@ -1,0 +1,7 @@
+<!-- frontend/src/components/stock-alerts.component.html -->
+<div>
+  <h2>Stock Alerts</h2>
+  <div *ngFor="let alert of stockAlerts">
+    <app-stock-alert-card [alert]="alert"></app-stock-alert-card>
+  </div>
+</div>

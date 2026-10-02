@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     "common",  # Added the 'common' app to INSTALLED_APPS
     "rest_framework",  # Added REST Framework to INSTALLED_APPS
     "tenants",  # Added 'tenants' app to INSTALLED_APPS
+    "authentication",
 ]
 
 MIDDLEWARE = [

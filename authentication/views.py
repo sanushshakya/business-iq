@@ -4,11 +4,20 @@ authentication/views.py
 This file contains the views for handling password reset confirmations within a Django application.
 """
 
+import uuid
+
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.contrib.auth.tokens import default_token_generator
+from django.utils import timezone
+from django.utils.translation import gettext as _
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from authentication.models import UserInvitation
 from authentication.serializers import PasswordResetConfirmSerializer
+
+User = get_user_model()
 
 class PasswordResetConfirmView(APIView):
     """
@@ -67,3 +76,49 @@ class PasswordResetConfirmView(APIView):
             user = None
 
         return user
+
+
+class AcceptInvitationView(APIView):
+    """
+    View for accepting user invitations using a valid token.
+    
+    This view handles the logic for accepting a user invitation by validating the token,
+    creating a new user, and associating them with the company specified in the invitation.
+    """
+
+    def post(self, request):
+        """
+        Handle POST requests to accept an invitation.
+
+        :param request: The incoming HTTP request
+        :return: A JSON response indicating success or failure
+        """
+        token = request.data.get('token')
+        
+        if not token:
+            return Response({'error': 'Token is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            invitation = UserInvitation.objects.get(token=uuid.UUID(token), expires_at__gt=timezone.now())
+        except UserInvitation.DoesNotExist:
+            return Response({'error': 'Invalid or expired token'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Create a new user and associate them with the company
+        username = request.data.get('username')
+        password = request.data.get('password')
+
+        if not (username and password):
+            return Response({'error': 'Username and password are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = User.objects.create_user(username=username, email=invitation.invited_email, password=password)
+        
+        # Set the user's role
+        user.groups.add(Group.objects.get_or_create(name=invitation.role)[0])
+        
+        # Mark the invitation as accepted
+        invitation.accepted_at = timezone.now()
+        invitation.save()
+
+        # Optionally, send a notification or perform other actions
+
+        return Response({'message': 'Invitation accepted successfully'}, status=status.HTTP_201_CREATED)

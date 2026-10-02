@@ -1,5 +1,6 @@
 from django.core.management.base import BaseCommand
-from authentication.models import Company, Owner
+from tenants.models import Company
+from authentication.models import Owner
 from common.models import ShopifyConnection
 
 class Command(BaseCommand):

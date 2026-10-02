@@ -1,5 +1,5 @@
 """
-config/authentication/tests.py
+authentication/test_invitations.py
 
 This file contains tests for ensuring that expired tokens are rejected when accepting user invitations.
 """
@@ -9,6 +9,7 @@ from datetime import timedelta
 from django.test import TestCase, RequestFactory
 from rest_framework.test import APIClient
 from rest_framework.status import HTTP_400_BAD_REQUEST, HTTP_200_OK
+from tenants.models import Company
 from .models import UserInvitation
 
 class ExpiredTokenTests(TestCase):

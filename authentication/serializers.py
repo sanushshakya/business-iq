@@ -1,18 +1,6 @@
-from django.urls import path
-from .views import PasswordResetConfirmView
+from django.contrib.auth import authenticate
 from rest_framework import serializers
 
-# Module docstring
-"""
-URL patterns for handling password reset confirmations.
-
-This module defines the URL patterns for the password reset confirmation feature within a Django application.
-"""
-
-urlpatterns = [
-    # URL pattern for the password reset confirmation view
-    path('password_reset/confirm/', PasswordResetConfirmView.as_view(), name='password_reset_confirm'),
-]
 
 # Serializer for handling password reset confirmation requests
 class PasswordResetConfirmSerializer(serializers.Serializer):
@@ -39,21 +27,37 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
             raise serializers.ValidationError("Passwords must match.")
         return data
 
-# Update the views.py to use the serializer
-from django.urls import path
-from .views import PasswordResetConfirmView
-from .serializers import PasswordResetConfirmSerializer
 
-class CustomPasswordResetConfirmView(PasswordResetConfirmView):
+class LoginUserSerializer(serializers.Serializer):
     """
-    Custom view for password reset confirmation.
+    Serializer for logging in a user.
 
-    This view uses a custom serializer to validate the input data.
+    This serializer validates user credentials and returns an authentication token.
     """
 
-    serializer_class = PasswordResetConfirmSerializer
+    username = serializers.CharField(required=True)
+    password = serializers.CharField(write_only=True, required=True)
 
-urlpatterns = [
-    # URL pattern for the password reset confirmation view
-    path('password_reset/confirm/', CustomPasswordResetConfirmView.as_view(), name='password_reset_confirm'),
-]
+    def validate(self, data):
+        """
+        Validate the user credentials and return an authentication token.
+
+        Args:
+            data (dict): A dictionary containing 'username' and 'password'.
+
+        Returns:
+            dict: A dictionary containing the authentication token.
+        """
+        username = data.get('username')
+        password = data.get('password')
+
+        if not username or not password:
+            raise serializers.ValidationError("Both username and password are required.")
+
+        # Assuming `authenticate` is a function that checks credentials
+        user = authenticate(username=username, password=password)
+        if not user:
+            raise serializers.ValidationError("Invalid credentials.")
+
+        data['user'] = user
+        return data

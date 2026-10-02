@@ -1,0 +1,7 @@
+<!-- frontend/src/components/demand-alerts.component.html -->
+<div>
+  <h2>Demand Alerts</h2>
+  <div *ngFor="let alert of demandAlerts">
+    <app-alert-card [alert]="alert"></app-alert-card>
+  </div>
+</div>

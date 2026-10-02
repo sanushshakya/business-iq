@@ -25,6 +25,7 @@ class SyncTask(models.Model):
         ('failed', 'Failed'),
     ]
 
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='sync_tasks')
     task_id = models.CharField(max_length=100, unique=True)
     source_system = models.CharField(max_length=100)
     target_system = models.CharField(max_length=100)

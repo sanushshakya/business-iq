@@ -25,6 +25,7 @@ class Demand(models.Model):
         ('REJECTED', 'Rejected'),
     ]
 
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='demands')
     product_name = models.CharField(max_length=255)
     quantity = models.IntegerField()
     description = models.TextField(blank=True, null=True)

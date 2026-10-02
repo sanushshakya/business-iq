@@ -10,7 +10,7 @@ from rest_framework.test import APIClient
 from common.models import DemandAlert, StockAlert
 from common.tasks import check_low_stock, scan_demand_alerts
 
-from .factories import ProductFactory, UserFactory
+from .factories import CompanyFactory, ProductFactory, UserFactory
 
 
 class DemandAlertModelTests(TestCase):
@@ -19,15 +19,16 @@ class DemandAlertModelTests(TestCase):
         self.assertEqual(str(alert), 'Product A in Branch X - 10 units requested')
 
     def test_defaults(self):
-        alert = DemandAlert.objects.create(product='B', branch='Y', requested_qty=5)
+        alert = DemandAlert.objects.create(company=CompanyFactory(), product='B', branch='Y', requested_qty=5)
         self.assertFalse(alert.is_handled)
         self.assertLess(abs(timezone.now() - alert.created_at), timedelta(seconds=5))
 
 
 class ScanDemandAlertsTests(TestCase):
     def test_only_stale_unhandled_alerts_are_handled(self):
-        old = DemandAlert.objects.create(product='A', branch='X', requested_qty=1)
-        new = DemandAlert.objects.create(product='B', branch='X', requested_qty=1)
+        company = CompanyFactory()
+        old = DemandAlert.objects.create(company=company, product='A', branch='X', requested_qty=1)
+        new = DemandAlert.objects.create(company=company, product='B', branch='X', requested_qty=1)
         DemandAlert.objects.filter(pk=old.pk).update(created_at=timezone.now() - timedelta(days=2))
 
         self.assertEqual(scan_demand_alerts(), 1)
@@ -55,15 +56,16 @@ class CheckLowStockTests(TestCase):
 
 class AlertApiTests(TestCase):
     def setUp(self):
+        self.user = UserFactory()
         self.client = APIClient()
-        self.client.force_authenticate(UserFactory())
+        self.client.force_authenticate(self.user)
 
     def test_requires_authentication(self):
         response = APIClient().get(reverse('stock-alert-list'))
         self.assertIn(response.status_code, (401, 403))
 
     def test_stock_alert_list_hides_dismissed(self):
-        product = ProductFactory()
+        product = ProductFactory(company=self.user.company)
         StockAlert.objects.create(product=product, current_qty=1, threshold=5)
         StockAlert.objects.create(product=product, current_qty=1, threshold=5, is_dismissed=True)
         response = self.client.get(reverse('stock-alert-list'))
@@ -77,6 +79,7 @@ class AlertApiTests(TestCase):
         self.assertEqual(response.status_code, 201)
         pk = response.json()['id']
         self.assertFalse(response.json()['is_handled'])
+        self.assertEqual(DemandAlert.objects.get(pk=pk).company, self.user.company)
 
         response = self.client.post(reverse('demand-alert-dismiss', args=[pk]))
         self.assertEqual(response.status_code, 200)

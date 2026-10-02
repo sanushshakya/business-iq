@@ -15,9 +15,10 @@ from logistics.tasks import check_freight_rates
 class FreightAlertApiTests(TestCase):
     def test_dismiss(self):
         client = APIClient()
-        client.force_authenticate(UserFactory())
+        user = UserFactory()
+        client.force_authenticate(user)
         alert = FreightAlert.objects.create(
-            company=CompanyFactory(), shipping_lane='CN-UK', current_rate=110, baseline_rate=100, change_percent=10
+            company=user.company, shipping_lane='CN-UK', current_rate=110, baseline_rate=100, change_percent=10
         )
         response = client.post(reverse('freightalert-dismiss', args=[alert.pk]))
         self.assertEqual(response.status_code, 200)

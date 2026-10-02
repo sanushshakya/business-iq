@@ -1,6 +1,8 @@
 # pricing/views.py
 
 from rest_framework import viewsets
+
+from common.tenancy import IsStaffOrReadOnly, TenantScopedMixin
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
@@ -15,26 +17,27 @@ from .serializers import (
 
 
 class PricingPlanViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsStaffOrReadOnly]
     queryset = PricingPlan.objects.all()
     serializer_class = PricingPlanSerializer
 
 
-class SubscriptionViewSet(viewsets.ModelViewSet):
+class SubscriptionViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     queryset = Subscription.objects.all()
     serializer_class = SubscriptionSerializer
 
 
-class SupplierInvoiceViewSet(viewsets.ModelViewSet):
+class SupplierInvoiceViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     queryset = SupplierInvoice.objects.all()
     serializer_class = SupplierInvoiceSerializer
 
 
-class InvoiceLineItemViewSet(viewsets.ModelViewSet):
+class InvoiceLineItemViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     queryset = InvoiceLineItem.objects.all()
     serializer_class = InvoiceLineItemSerializer
 
 
-class PriceChangeLogViewSet(viewsets.ModelViewSet):
+class PriceChangeLogViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     queryset = PriceChangeLog.objects.all()
     serializer_class = PriceChangeLogSerializer
 

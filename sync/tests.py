@@ -11,7 +11,7 @@ from sync.tasks import process_sync_task
 
 class SyncTaskTests(TestCase):
     def test_process_sync_task_completes(self):
-        SyncTask.objects.create(task_id='t1', source_system='a', target_system='b')
+        SyncTask.objects.create(company=CompanyFactory(), task_id='t1', source_system='a', target_system='b')
         self.assertTrue(process_sync_task('t1'))
         task = SyncTask.objects.get(task_id='t1')
         self.assertEqual(task.status, 'completed')

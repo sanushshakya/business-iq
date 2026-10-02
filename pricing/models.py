@@ -53,6 +53,7 @@ class SupplierInvoice(models.Model):
         ('overdue', 'Overdue'),
     ]
 
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='supplier_invoices')
     invoice_number = models.CharField(max_length=50, unique=True)
     supplier = models.ForeignKey('tenants.Company', on_delete=models.CASCADE)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2)

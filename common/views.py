@@ -2,25 +2,24 @@
 
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import generics, serializers, status
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import DemandAlert, StockAlert
+from .tenancy import HasCompany, TenantScopedMixin, scope_queryset
 from .serializers import DemandAlertSerializer, StockAlertSerializer, VerificationTokenSerializer
 from .services.verification_token_service import VerificationTokenService
 
 
-class StockAlertListAPIView(generics.ListAPIView):
-    """Undismissed stock alerts, newest first."""
+class StockAlertListAPIView(TenantScopedMixin, generics.ListAPIView):
+    """Undismissed stock alerts for the user's company, newest first."""
 
+    queryset = StockAlert.objects.filter(is_dismissed=False).order_by('-created_at')
     serializer_class = StockAlertSerializer
 
-    def get_queryset(self):
-        return StockAlert.objects.filter(is_dismissed=False).order_by('-created_at')
 
-
-class DemandAlertCreateAPIView(generics.CreateAPIView):
+class DemandAlertCreateAPIView(TenantScopedMixin, generics.CreateAPIView):
     queryset = DemandAlert.objects.all()
     serializer_class = DemandAlertSerializer
 
@@ -28,10 +27,12 @@ class DemandAlertCreateAPIView(generics.CreateAPIView):
 class DemandAlertDismissAPIView(APIView):
     """Mark a demand alert as handled."""
 
+    permission_classes = [IsAuthenticated, HasCompany]
+
     @extend_schema(request=None, responses=DemandAlertSerializer)
     def post(self, request, pk):
         try:
-            alert = DemandAlert.objects.get(pk=pk)
+            alert = scope_queryset(DemandAlert.objects.all(), request.user).get(pk=pk)
         except DemandAlert.DoesNotExist:
             return Response({'error': 'Demand alert not found'}, status=status.HTTP_404_NOT_FOUND)
         alert.is_handled = True

@@ -32,8 +32,9 @@ class InventoryApiTests(TestCase):
         self.assertEqual(self.client.delete(reverse('product-detail', args=[pk])).status_code, 204)
 
     def test_stock_batch_and_movement(self):
-        self.client.force_authenticate(UserFactory())
-        batch = StockBatchFactory()
+        user = UserFactory()
+        self.client.force_authenticate(user)
+        batch = StockBatchFactory(product__company=user.company)
         response = self.client.post(
             reverse('stockmovement-list'), {'batch': batch.pk, 'quantity': 3, 'movement_type': 'inbound'}
         )

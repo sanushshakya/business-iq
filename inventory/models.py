@@ -39,9 +39,7 @@ class Product(models.Model):
     category = models.ForeignKey(
         ProductCategory, null=True, blank=True, on_delete=models.SET_NULL, related_name='products'
     )
-    company = models.ForeignKey(
-        'tenants.Company', null=True, blank=True, on_delete=models.CASCADE, related_name='products'
-    )
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='products')
     shopify_product_id = models.BigIntegerField(null=True, blank=True)
 
     def __str__(self):
@@ -72,6 +70,7 @@ class Supplier(models.Model):
         contact_info (str): Contact information for the supplier.
         address (str): Address of the supplier's warehouse or office.
     """
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='suppliers')
     name = models.CharField(max_length=255)
     contact_info = models.TextField()
     address = models.TextField()

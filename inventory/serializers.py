@@ -2,40 +2,42 @@
 
 from rest_framework import serializers
 
+from common.tenancy import TenantModelSerializer
+
 from .models import ProductCategory, Product, Order, Supplier, StockBatch, StockMovement
 
 
-class ProductCategorySerializer(serializers.ModelSerializer):
+class ProductCategorySerializer(TenantModelSerializer):
     class Meta:
         model = ProductCategory
         fields = '__all__'
 
 
-class ProductSerializer(serializers.ModelSerializer):
+class ProductSerializer(TenantModelSerializer):
     class Meta:
         model = Product
         fields = '__all__'
 
 
-class OrderSerializer(serializers.ModelSerializer):
+class OrderSerializer(TenantModelSerializer):
     class Meta:
         model = Order
         fields = '__all__'
 
 
-class SupplierSerializer(serializers.ModelSerializer):
+class SupplierSerializer(TenantModelSerializer):
     class Meta:
         model = Supplier
         fields = '__all__'
 
 
-class StockBatchSerializer(serializers.ModelSerializer):
+class StockBatchSerializer(TenantModelSerializer):
     class Meta:
         model = StockBatch
         fields = '__all__'
 
 
-class StockMovementSerializer(serializers.ModelSerializer):
+class StockMovementSerializer(TenantModelSerializer):
     class Meta:
         model = StockMovement
         fields = '__all__'

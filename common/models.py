@@ -10,9 +10,7 @@ class DemandAlert(models.Model):
     ``scan_demand_alerts`` marks alerts as handled once they have been open for 24 hours.
     """
 
-    company = models.ForeignKey(
-        'tenants.Company', null=True, blank=True, on_delete=models.CASCADE, related_name='demand_alerts'
-    )
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='demand_alerts')
     product = models.CharField(max_length=255)
     branch = models.CharField(max_length=255)
     requested_qty = models.PositiveIntegerField()

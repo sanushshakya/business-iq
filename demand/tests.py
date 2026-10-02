@@ -33,6 +33,7 @@ class DemandApiTests(TestCase):
         self.assertIn('due_date', response.json())
 
     def test_cultural_event_dates_must_be_ordered(self):
+        self.client.force_authenticate(UserFactory(is_staff=True))
         now = timezone.now()
         response = self.client.post(
             reverse('culturalevent-list'),

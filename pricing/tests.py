@@ -15,8 +15,9 @@ from pricing.tasks import sync_approved_prices
 class PriceChangeApiTests(TestCase):
     def test_approve(self):
         client = APIClient()
-        client.force_authenticate(UserFactory())
-        log = PriceChangeLog.objects.create(product=ProductFactory(), old_price=10, new_price=9)
+        user = UserFactory()
+        client.force_authenticate(user)
+        log = PriceChangeLog.objects.create(product=ProductFactory(company=user.company), old_price=10, new_price=9)
         self.assertFalse(log.is_approved)
         response = client.post(reverse('pricechangelog-approve', args=[log.pk]))
         self.assertEqual(response.status_code, 200)

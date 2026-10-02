@@ -38,6 +38,7 @@ class LogisticProvider(models.Model):
         phone_number (str): The phone number of the logistic provider.
     """
 
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='logistic_providers')
     name = models.CharField(max_length=255)
     address = models.TextField()
     phone_number = models.CharField(max_length=15)

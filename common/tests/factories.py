@@ -42,6 +42,7 @@ class ProductFactory(factory.django.DjangoModelFactory):
 
     name = factory.Sequence(lambda n: f'Product {n}')
     description = 'A product'
+    company = factory.SubFactory(CompanyFactory)
     price = Decimal('100.00')
     stock_quantity = 50
 

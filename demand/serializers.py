@@ -3,10 +3,12 @@
 from django.utils import timezone
 from rest_framework import serializers
 
+from common.tenancy import TenantModelSerializer
+
 from .models import CulturalEvent, Demand, EventProductKeyword
 
 
-class DemandSerializer(serializers.ModelSerializer):
+class DemandSerializer(TenantModelSerializer):
     class Meta:
         model = Demand
         fields = '__all__'
@@ -23,7 +25,7 @@ class DemandSerializer(serializers.ModelSerializer):
         return value
 
 
-class CulturalEventSerializer(serializers.ModelSerializer):
+class CulturalEventSerializer(TenantModelSerializer):
     class Meta:
         model = CulturalEvent
         fields = '__all__'
@@ -36,7 +38,7 @@ class CulturalEventSerializer(serializers.ModelSerializer):
         return data
 
 
-class EventProductKeywordSerializer(serializers.ModelSerializer):
+class EventProductKeywordSerializer(TenantModelSerializer):
     class Meta:
         model = EventProductKeyword
         fields = '__all__'

@@ -17,13 +17,52 @@ from django.utils.translation import gettext as _
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers as drf_serializers
 from rest_framework.permissions import AllowAny
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from authentication.models import UserInvitation
-from authentication.serializers import PasswordResetConfirmSerializer
+from authentication.jwt_handler import access_token_ttl, encode_token
+from authentication.serializers import LoginUserSerializer, PasswordResetConfirmSerializer
 
 User = get_user_model()
+
+class LoginView(APIView):
+    """
+    Exchange credentials for an access token.
+
+    POST ``{"username": <email>, "password": ...}`` -> ``{"access_token", "token_type", "expires_in"}``.
+    Send the token as ``Authorization: Bearer <access_token>``.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'login'
+
+    @extend_schema(
+        request=LoginUserSerializer,
+        responses=inline_serializer(
+            'LoginResponse',
+            {
+                'access_token': drf_serializers.CharField(),
+                'token_type': drf_serializers.CharField(),
+                'expires_in': drf_serializers.IntegerField(),
+            },
+        ),
+    )
+    def post(self, request):
+        serializer = LoginUserSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({'detail': _('Invalid credentials')}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = serializer.validated_data['user']
+        return Response({
+            'access_token': encode_token(user),
+            'token_type': 'Bearer',
+            'expires_in': int(access_token_ttl().total_seconds()),
+        })
+
 
 class PasswordResetConfirmView(APIView):
     """

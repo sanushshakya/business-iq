@@ -16,6 +16,7 @@ from rest_framework import permissions, serializers
 
 TENANT_LOOKUPS = {
     'tenants.Branch': 'company',
+    'tenants.Till': 'branch__company',
     'tenants.CustomUser': 'company',
     'inventory.Product': 'company',
     'inventory.Supplier': 'company',
@@ -72,6 +73,20 @@ class IsStaffOrReadOnly(permissions.BasePermission):
         return request.method in permissions.SAFE_METHODS or user.is_staff
 
 
+def _stable_order(queryset):
+    """Paginated lists need a deterministic order; fall back to primary key."""
+    return queryset if queryset.ordered else queryset.order_by('pk')
+
+
+class SharedReferenceMixin:
+    """For shared reference data: readable by any signed-in user, writable by staff only."""
+
+    permission_classes = [IsStaffOrReadOnly]
+
+    def get_queryset(self):
+        return _stable_order(super().get_queryset())
+
+
 class TenantScopedMixin:
     """
     For DRF generic views / viewsets over a tenant-owned model.
@@ -85,7 +100,7 @@ class TenantScopedMixin:
     def get_queryset(self):
         if getattr(self, 'swagger_fake_view', False):
             return super().get_queryset().none()
-        return scope_queryset(super().get_queryset(), self.request.user)
+        return _stable_order(scope_queryset(super().get_queryset(), self.request.user))
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -122,3 +137,39 @@ class TenantModelSerializer(serializers.ModelSerializer):
             company.read_only = True
             company.required = False
         return fields
+
+
+class TenantAdminMixin:
+    """
+    Django admin counterpart of ``TenantScopedMixin``: staff who belong to a company only see and
+    edit that company's rows, can only pick that company's objects in foreign-key widgets, and
+    don't see the ``company`` field (it is filled in on save). Superusers are unrestricted.
+    """
+
+    def _scoped(self, request):
+        return not request.user.is_superuser and request.user.company_id is not None
+
+    def get_queryset(self, request):
+        return scope_queryset(super().get_queryset(request), request.user)
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        queryset = kwargs.get('queryset', db_field.remote_field.model._default_manager.all())
+        kwargs['queryset'] = scope_queryset(queryset, request.user)
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+    def formfield_for_manytomany(self, db_field, request, **kwargs):
+        queryset = kwargs.get('queryset', db_field.remote_field.model._default_manager.all())
+        kwargs['queryset'] = scope_queryset(queryset, request.user)
+        return super().formfield_for_manytomany(db_field, request, **kwargs)
+
+    def get_exclude(self, request, obj=None):
+        exclude = list(super().get_exclude(request, obj) or [])
+        if self._scoped(request) and any(f.name == 'company' for f in self.model._meta.concrete_fields):
+            exclude.append('company')
+        return exclude
+
+    def save_model(self, request, obj, form, change):
+        has_company = any(f.name == 'company' for f in obj._meta.concrete_fields)
+        if has_company and self._scoped(request) and obj.company_id is None:
+            obj.company = request.user.company
+        super().save_model(request, obj, form, change)

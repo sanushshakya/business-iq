@@ -2,14 +2,13 @@
 
 from rest_framework import viewsets
 
-from common.tenancy import IsStaffOrReadOnly, TenantScopedMixin
+from common.tenancy import SharedReferenceMixin, TenantScopedMixin
 
 from .models import ProductCategory, Product, Order, Supplier, StockBatch, StockMovement
 from .serializers import ProductCategorySerializer, ProductSerializer, OrderSerializer, SupplierSerializer, StockBatchSerializer, StockMovementSerializer
 
 
-class ProductCategoryViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsStaffOrReadOnly]
+class ProductCategoryViewSet(SharedReferenceMixin, viewsets.ModelViewSet):
     queryset = ProductCategory.objects.all()
     serializer_class = ProductCategorySerializer
 

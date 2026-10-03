@@ -6,6 +6,8 @@ Module for Django models in the sync app of the iq project.
 
 from django.db import models
 
+from common.fields import EncryptedTextField
+
 class SyncTask(models.Model):
     """
     Model representing a synchronization task.
@@ -41,12 +43,12 @@ class ShopifyConnection(models.Model):
     """
     Credentials for a company's Shopify store.
 
-    NOTE: ``access_token`` is stored as-is; encrypt it at rest before storing real tokens.
+    ``access_token`` is encrypted at rest (see ``common.fields.EncryptedTextField``).
     """
 
     company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='shopify_connections')
     shop_domain = models.CharField(max_length=255, unique=True)
-    access_token = models.CharField(max_length=255)
+    access_token = EncryptedTextField()
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

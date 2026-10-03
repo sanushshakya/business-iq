@@ -70,7 +70,7 @@ class AlertApiTests(TestCase):
         StockAlert.objects.create(product=product, current_qty=1, threshold=5, is_dismissed=True)
         response = self.client.get(reverse('stock-alert-list'))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.json()), 1)
+        self.assertEqual(len(response.json()['results']), 1)
 
     def test_create_and_dismiss_demand_alert(self):
         response = self.client.post(
@@ -111,3 +111,52 @@ class VerifyEmailTokenTests(TestCase):
         response = self.client.post(self.url, {})
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json(), {'error': 'Token is required'})
+
+
+class PaginationAndErrorShapeTests(TestCase):
+    def setUp(self):
+        self.user = UserFactory()
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+
+    def test_lists_are_paginated_in_stable_order(self):
+        ProductFactory.create_batch(30, company=self.user.company)
+        url = reverse('product-list')
+        first = self.client.get(url).json()
+        second = self.client.get(url, {'page': 2}).json()
+        self.assertEqual(first['count'], 30)
+        self.assertEqual(len(first['results']), 25)
+        self.assertEqual(len(second['results']), 5)
+        ids = [p['id'] for p in first['results'] + second['results']]
+        self.assertEqual(ids, sorted(ids))
+        self.assertEqual(len(self.client.get(url, {'page_size': 1000}).json()['results']), 30)  # capped at 100
+
+    def test_not_found_uses_uniform_error_shape(self):
+        response = self.client.get(reverse('product-detail', args=[99999]))
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()['status_code'], 404)
+        self.assertEqual(response.json()['code'], 'Http404')
+        self.assertIn('message', response.json())
+
+    def test_permission_denied_uses_uniform_error_shape(self):
+        orphan = APIClient()
+        orphan.force_authenticate(UserFactory(company=None))
+        response = orphan.get(reverse('product-list'))
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(set(response.json()), {'code', 'message', 'status_code'})
+
+    def test_validation_errors_keep_field_shape(self):
+        response = self.client.post(reverse('product-list'), {})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('name', response.json())
+
+    def test_custom_api_exception(self):
+        from rest_framework.test import APIRequestFactory
+
+        from common.exceptions import CustomAPIException, custom_exception_handler
+
+        exc = CustomAPIException('boom', status_code=418, code='teapot')
+        response = custom_exception_handler(exc, {'request': APIRequestFactory().get('/'), 'view': None})
+        self.assertEqual(response.status_code, 418)
+        self.assertEqual(response.data['code'], 'teapot')
+        self.assertEqual(str(response.data['message']), 'boom')

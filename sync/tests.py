@@ -34,3 +34,33 @@ class ShopifyConnectionApiTests(TestCase):
         self.assertEqual(response.status_code, 201, response.content)
         self.assertNotIn('access_token', response.json())
         self.assertEqual(ShopifyConnection.objects.get().access_token, 'secret')
+
+
+class EncryptedTokenTests(TestCase):
+    def test_token_is_encrypted_in_the_database_but_readable_in_python(self):
+        from django.db import connection
+
+        conn = ShopifyConnection.objects.create(company=CompanyFactory(), shop_domain='e.myshopify.com', access_token='shpat_secret')
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT access_token FROM sync_shopifyconnection WHERE id = %s', [conn.pk])
+            raw = cursor.fetchone()[0]
+        self.assertNotIn('shpat_secret', raw)
+        self.assertEqual(ShopifyConnection.objects.get(pk=conn.pk).access_token, 'shpat_secret')
+
+    def test_legacy_plaintext_rows_are_still_readable(self):
+        from django.db import connection
+
+        conn = ShopifyConnection.objects.create(company=CompanyFactory(), shop_domain='l.myshopify.com', access_token='x')
+        with connection.cursor() as cursor:
+            cursor.execute('UPDATE sync_shopifyconnection SET access_token = %s WHERE id = %s', ['plain-old-token', conn.pk])
+        self.assertEqual(ShopifyConnection.objects.get(pk=conn.pk).access_token, 'plain-old-token')
+
+    def test_key_rotation(self):
+        from cryptography.fernet import Fernet
+        from django.test import override_settings
+
+        old, new = Fernet.generate_key().decode(), Fernet.generate_key().decode()
+        with override_settings(FIELD_ENCRYPTION_KEYS=[old]):
+            conn = ShopifyConnection.objects.create(company=CompanyFactory(), shop_domain='r.myshopify.com', access_token='tok')
+        with override_settings(FIELD_ENCRYPTION_KEYS=[new, old]):  # new key first, old still accepted
+            self.assertEqual(ShopifyConnection.objects.get(pk=conn.pk).access_token, 'tok')

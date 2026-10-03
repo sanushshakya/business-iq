@@ -13,6 +13,6 @@ class StandardResultsSetPagination(PageNumberPagination):
         page_size_query_param (str): The query parameter used to specify the page size.
         max_page_size (int): The maximum number of items allowed per page.
     """
-    page_size = 10
+    page_size = 25
     page_size_query_param = 'page_size'
-    max_page_size = 100
+    max_page_size = 250

@@ -45,3 +45,17 @@ class DemandApiTests(TestCase):
             },
         )
         self.assertEqual(response.status_code, 400)
+
+
+class SeedCulturalEventsTests(TestCase):
+    def test_is_idempotent(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        from demand.models import CulturalEvent
+
+        for _ in range(2):
+            call_command('seed_cultural_events', stdout=StringIO())
+        self.assertEqual(CulturalEvent.objects.count(), 3)
+        self.assertTrue(all(e.end_date > e.start_date for e in CulturalEvent.objects.all()))

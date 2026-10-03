@@ -5,27 +5,21 @@ from datetime import timedelta
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework import viewsets
-
-from common.tenancy import IsStaffOrReadOnly
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from common.tenancy import IsStaffOrReadOnly
+from common.tenancy import SharedReferenceMixin
 
 from .models import DemandAlert, Event
 from .serializers import DemandAlertSerializer, EventSerializer
 
 
-class EventViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsStaffOrReadOnly]
-    permission_classes = [IsStaffOrReadOnly]
+class EventViewSet(SharedReferenceMixin, viewsets.ModelViewSet):
     queryset = Event.objects.all()
     serializer_class = EventSerializer
 
 
-class DemandAlertViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsStaffOrReadOnly]
-    permission_classes = [IsStaffOrReadOnly]
+class DemandAlertViewSet(SharedReferenceMixin, viewsets.ModelViewSet):
     queryset = DemandAlert.objects.all()
     serializer_class = DemandAlertSerializer
 

@@ -20,21 +20,26 @@ pytest --cov=authentication --cov=common --cov-fail-under=70   # the CI gate
 python manage.py makemigrations --check --dry-run
 python manage.py spectacular --file schema.yml                 # OpenAPI; should print no errors/warnings
 celery -A config worker -l info       # needs Redis; `celery -A config beat` for the schedule
-ruff check .                          # CI lint step
+ruff check .                          # CI lint step (config in ruff.toml)
 ```
 
-Bare `manage.py test` skips `common/tests/` (unittest discovery), so use pytest. A local `venv/` is git-ignored; API docs are served at `/api/docs/`.
+`manage.py test` also works, but CI and the Makefile use pytest. A local `venv/` is git-ignored; API docs are served at `/api/docs/`.
 
 ## Architecture
 
-Django 5.2+/DRF monolith. `config/` is only the project package (settings, urls, asgi, wsgi, celery); every app is a top-level directory. `README.md` is stale (it describes `ShopifyStore`, `celery_app/`); trust the code.
+Django 5.2+/DRF monolith. `config/` is only the project package (settings, urls, asgi, wsgi, celery); every app is a top-level directory. 
 
 **Multi-tenancy is by company, not by schema.** `tenants.Company` is the tenant; `AUTH_USER_MODEL = tenants.CustomUser` (email login, has a `company` FK). `common/tenancy.py` is the single source of truth: `TENANT_LOOKUPS` maps each tenant-owned model to the ORM path reaching its company (e.g. `StockMovement -> batch__product__company`).
 - Viewsets for tenant data must use `TenantScopedMixin` (filters the queryset, stamps `company` on create, requires a company) and serializers must extend `TenantModelSerializer` (limits related-object fields to the user's company, makes `company` read-only). Other companies' rows are 404, never 403.
 - Adding a tenant-owned model means adding it to `TENANT_LOOKUPS`; a test in `common/tests/test_tenancy.py` fails if a lookup path is wrong.
 - Shared reference data (`ProductCategory`, `CulturalEvent`, `PricingPlan`, `demand_calendar`) is unscoped: viewsets use `IsStaffOrReadOnly`.
-- Superusers bypass scoping; users with no company get 403. `authentication.middleware.TenantMiddleware` (JWT -> `request.company`) exists but is **not** in `MIDDLEWARE`; scoping uses `request.user.company`.
-- Default DRF permission is `IsAuthenticated`. Only password-reset confirm, invitation accept and verify-email-token are `AllowAny`.
+- Superusers bypass scoping; users with no company get 403. The company always comes from `request.user.company` (loaded from the DB), never from a token claim.
+- The Django admin is scoped the same way: `TenantAdminMixin`, applied to explicit admins and auto-registered for every other `TENANT_LOOKUPS` model in `common.apps.CommonConfig.ready()` (`CustomUser` is excluded).
+- Default DRF permission is `IsAuthenticated`. Only login, password-reset confirm, invitation accept and verify-email-token are `AllowAny`.
+
+**Auth.** `POST /auth/login/` (throttled, scope `login`) returns an HS256 token signed with `SECRET_KEY` (`authentication/jwt_handler.py`); `authentication.authentication.JWTAuthentication` is the first DRF authenticator, followed by session and basic. Unauthenticated requests therefore get 401.
+
+**API conventions.** Lists are paginated (`StandardResultsSetPagination`: `count/next/previous/results`, `page_size` capped at 100) and viewsets must have a deterministic order (the tenancy mixins fall back to `pk`). Non-validation errors are `{code, message, status_code}` via `common.exceptions.custom_exception_handler`; validation errors keep DRF's per-field shape.
 
 **App layout.** Each app follows models / serializers / views (ModelViewSets) / urls (`DefaultRouter`). URL prefixes are in `config/urls.py` (`auth/`, `inventory/`, `demand/`, `calendar/`, `logistics/`, `pricing/`, `sync/`, `common/`). `common` also holds cross-app pieces: `DemandAlert`/`StockAlert` models, business `services/` (price recommendation, cost calculation, HMRC tariff, Hijri calendar, Shopify, verification tokens), the websocket consumer (`consumers.py`, `routing.py`), and `tenancy.py`.
 
@@ -42,11 +47,13 @@ Django 5.2+/DRF monolith. `config/` is only the project package (settings, urls,
 
 **Realtime.** `config/asgi.py` routes websockets through `common/routing.py` (`/ws/sync/`). The channel layer is in-memory unless `USE_REDIS_CHANNELS=True`.
 
+**Encrypted fields.** `common.fields.EncryptedTextField` (Fernet, keys from `FIELD_ENCRYPTION_KEYS`, falling back to a key derived from `SECRET_KEY`) is used for `ShopifyConnection.access_token`; it cannot be filtered on, and legacy plaintext values still read fine.
+
 **Settings** read everything through `python-decouple` (`.env`). External-service settings (`HMRC_*`, `FREIGHT_RATES_API_URL`, `RATE_CHANGE_THRESHOLD`, `DEFAULT_CUSTOMS_DUTY_RATE`, `REDIS_*`) are listed in `.env.example`.
 
 ## Gotchas
 
-- Migrations were regenerated as a fresh initial set; most apps have a `0001_initial` plus `0002_initial` because of cross-app foreign keys. Delete any old local DB rather than trying to migrate it forward.
+- Migrations are a fresh initial set; most apps have a `0001_initial` plus `0002_initial` because of cross-app foreign keys. Delete any old local DB rather than migrating it forward.
 - Tests build data with factories in `common/tests/factories.py`. A test acting as a user must create its data under `user.company`, otherwise the scoped API correctly hides it.
-- `PriceRecommendationService.apply_decay_pricing` compounds markdowns if run repeatedly; it is not scheduled for that reason.
-- Shopify access tokens are stored unencrypted in `sync.ShopifyConnection`.
+- `PriceRecommendationService.apply_decay_pricing` is idempotent: markdowns are computed from the pre-markdown price recorded in `PriceChangeLog`, so it is safe to run repeatedly.
+- The Shopify variant payload and the Hijri/HMRC endpoint URLs are unverified against the real services; they are only covered by mocked tests.

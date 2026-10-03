@@ -48,7 +48,7 @@ INSTALLED_APPS = [
     "logistics",  # Added the 'logistics' app to INSTALLED_APPS
     "pricing",  # Added the 'pricing' app to INSTALLED_APPS
     "sync",  # Added the 'sync' app to INSTALLED_APPS
-    "common",  # Added the 'common' app to INSTALLED_APPS
+    "common.apps.CommonConfig",
     "rest_framework",  # Added REST Framework to INSTALLED_APPS
     "tenants",  # Added 'tenants' app to INSTALLED_APPS
     "authentication",
@@ -89,10 +89,14 @@ ASGI_APPLICATION = 'config.asgi.application'  # Added ASGI application setting
 # Django REST framework
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
+        "authentication.authentication.JWTAuthentication",
         "rest_framework.authentication.SessionAuthentication",
         "rest_framework.authentication.BasicAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
+    "DEFAULT_THROTTLE_RATES": {"login": config("LOGIN_THROTTLE_RATE", default="10/min")},
+    "DEFAULT_PAGINATION_CLASS": "common.pagination.StandardResultsSetPagination",
+    "EXCEPTION_HANDLER": "common.exceptions.custom_exception_handler",
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
 
@@ -101,12 +105,20 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "1.0.0",
 }
 
+# Access token lifetime for authentication.jwt_handler
+JWT_ACCESS_TOKEN_TTL_SECONDS = config('JWT_ACCESS_TOKEN_TTL_SECONDS', default=3600, cast=int)
+
 # External services
 HMRC_API_KEY = config('HMRC_API_KEY', default='')
 HMRC_API_URL = config('HMRC_API_URL', default='https://api.hmrc.gov.uk/tariffs')
 DEFAULT_CUSTOMS_DUTY_RATE = config('DEFAULT_CUSTOMS_DUTY_RATE', default=0.0, cast=float)
 FREIGHT_RATES_API_URL = config('FREIGHT_RATES_API_URL', default='')
 RATE_CHANGE_THRESHOLD = config('RATE_CHANGE_THRESHOLD', default=5.0, cast=float)  # percent
+
+# Encryption key(s) for EncryptedTextField, comma separated Fernet keys (first one encrypts).
+# Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Defaults to a key derived from SECRET_KEY.
+FIELD_ENCRYPTION_KEYS = config('FIELD_ENCRYPTION_KEYS', default='', cast=lambda v: [k.strip() for k in v.split(',') if k.strip()])
 
 # Redis
 REDIS_HOST = config('REDIS_HOST', default='127.0.0.1')

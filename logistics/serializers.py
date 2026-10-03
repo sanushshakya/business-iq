@@ -1,6 +1,5 @@
 # logistics/serializers.py
 
-from rest_framework import serializers
 
 from common.tenancy import TenantModelSerializer
 

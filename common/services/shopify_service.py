@@ -1,7 +1,6 @@
 # common/services/shopify_service.py
 
 import requests
-from django.conf import settings
 from sync.models import ShopifyConnection
 
 

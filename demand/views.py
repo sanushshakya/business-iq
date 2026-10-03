@@ -2,7 +2,7 @@
 
 from rest_framework import viewsets
 
-from common.tenancy import IsStaffOrReadOnly, TenantScopedMixin
+from common.tenancy import SharedReferenceMixin, TenantScopedMixin
 
 from .models import Demand, CulturalEvent, EventProductKeyword
 from .serializers import DemandSerializer, CulturalEventSerializer, EventProductKeywordSerializer
@@ -13,8 +13,7 @@ class DemandViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     serializer_class = DemandSerializer
 
 
-class CulturalEventViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsStaffOrReadOnly]
+class CulturalEventViewSet(SharedReferenceMixin, viewsets.ModelViewSet):
     queryset = CulturalEvent.objects.all()
     serializer_class = CulturalEventSerializer
 

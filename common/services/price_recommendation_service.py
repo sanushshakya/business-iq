@@ -51,23 +51,49 @@ class PriceRecommendationService:
         remaining_days = (stock_batch.expiration_date - today).days
         return max(remaining_days, 0) / total_days * 100
 
+    DECAY_REASON = 'decay_markdown'
+
+    def base_price_for(self, stock_batch):
+        """
+        The price a batch's markdown should be calculated from.
+
+        If the batch has already been marked down and nobody has changed the price since, that is
+        the price before the first markdown (so repeated runs, or moving to a deeper tier, never
+        compound). Otherwise it is the product's current price.
+        """
+        product = stock_batch.product
+        logs = list(
+            PriceChangeLog.objects.filter(stock_batch=stock_batch, product=product, reason=self.DECAY_REASON)
+            .order_by('changed_at', 'pk')
+        )
+        if logs and logs[-1].new_price == product.price:
+            return logs[0].old_price
+        return product.price
+
     def apply_markdown_discounts(self, stock_batch):
         """
         Mark down the batch's product according to remaining shelf life.
 
-        Returns ``(old_price, new_price)``; both are equal when no markdown applies.
+        Idempotent: running it again with the same shelf life leaves the price unchanged.
+        Returns ``(old_price, new_price)``; both are equal when nothing changes.
         """
         discount = calculate_markdown_percentage(self.shelf_life_remaining_percent(stock_batch))
         product = stock_batch.product
-        old_price = product.price
+        current_price = product.price
         if discount == 0:
-            return old_price, old_price
+            return current_price, current_price
 
-        new_price = (old_price * (Decimal(100) - discount) / Decimal(100)).quantize(Decimal('0.01'))
+        base = self.base_price_for(stock_batch)
+        new_price = (base * (Decimal(100) - discount) / Decimal(100)).quantize(Decimal('0.01'))
+        if new_price == current_price:
+            return current_price, current_price
+
         product.price = new_price
         product.save(update_fields=['price'])
-        self.logger.info("Applied %s%% markdown to %s: %s -> %s", discount, product.name, old_price, new_price)
-        return old_price, new_price
+        self.logger.info(
+            "Applied %s%% markdown to %s: %s -> %s", discount, product.name, current_price, new_price
+        )
+        return current_price, new_price
 
     def create_price_change_log_entry(self, stock_batch, old_price, new_price, reason):
         return PriceChangeLog.objects.create(
@@ -86,9 +112,9 @@ class PriceRecommendationService:
         """
         Apply markdowns to all eligible batches and log each price change.
 
-        Note: markdowns compound if this runs repeatedly while a batch stays in the same tier.
+        Safe to run repeatedly (e.g. daily): only a change of tier produces a new price and log.
         """
         for batch in self.query_stock_batches_for_decay_pricing():
             old_price, new_price = self.apply_markdown_discounts(batch)
             if old_price != new_price:
-                self.create_price_change_log_entry(batch, old_price, new_price, reason='decay_markdown')
+                self.create_price_change_log_entry(batch, old_price, new_price, reason=self.DECAY_REASON)

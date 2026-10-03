@@ -127,36 +127,94 @@ class LoginUserSerializerTests(TestCase):
         self.assertFalse(serializer.is_valid())
 
 
-class TenantMiddlewareTests(TestCase):
+class LoginAndJwtTests(TestCase):
     def setUp(self):
-        from django.test import RequestFactory
-        from authentication.middleware import TenantMiddleware
+        from django.core.cache import cache
 
-        self.factory = RequestFactory()
-        self.company = Company.objects.create(name='Mw Co', registration_number='R2', address='Here')
-        self.middleware = TenantMiddleware(lambda request: request)
+        cache.clear()  # login is rate limited per client
+        self.company_a = Company.objects.create(name='A', registration_number='JA', address='x')
+        self.company_b = Company.objects.create(name='B', registration_number='JB', address='x')
+        self.user = User.objects.create_user(email='a@example.com', password='pw-12345678', company=self.company_a)
+        self.client = APIClient()
+        self.login_url = reverse('login')
 
-    def call(self, token=None):
-        extra = {'HTTP_AUTHORIZATION': f'Bearer {token}'} if token else {}
-        return self.middleware(self.factory.get('/', **extra))
+    def login(self, **overrides):
+        data = {'username': 'a@example.com', 'password': 'pw-12345678'}
+        data.update(overrides)
+        return self.client.post(self.login_url, data)
 
-    def encode(self, **payload):
+    def test_login_returns_a_usable_bearer_token(self):
+        response = self.login()
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['token_type'], 'Bearer')
+        self.assertEqual(body['expires_in'], 3600)
+
+        api = APIClient()
+        api.credentials(HTTP_AUTHORIZATION=f"Bearer {body['access_token']}")
+        self.assertEqual(api.get(reverse('product-list')).status_code, 200)
+
+    def test_token_is_scoped_to_the_users_company(self):
+        from inventory.models import Product
+
+        for company, name in ((self.company_a, 'mine'), (self.company_b, 'theirs')):
+            Product.objects.create(company=company, name=name, description='d', price=1)
+        token = self.login().json()['access_token']
+        api = APIClient()
+        api.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+        names = [p['name'] for p in api.get(reverse('product-list')).json()['results']]
+        self.assertEqual(names, ['mine'])
+
+    def test_bad_credentials(self):
+        self.assertEqual(self.login(password='wrong').status_code, 400)
+        self.assertEqual(self.login(username='nobody@example.com').status_code, 400)
+        self.assertEqual(self.client.post(self.login_url, {}).status_code, 400)
+
+    def test_login_is_rate_limited(self):
+        statuses = [self.login(password='wrong').status_code for _ in range(12)]
+        self.assertEqual(statuses[:10], [400] * 10)
+        self.assertIn(429, statuses[10:])
+
+    def _call_with(self, token):
+        api = APIClient()
+        api.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+        return api.get(reverse('product-list'))
+
+    def test_garbage_and_missing_tokens_are_rejected(self):
+        self.assertEqual(self._call_with('garbage').status_code, 401)
+        self.assertEqual(APIClient().get(reverse('product-list')).status_code, 401)  # no credentials at all
+
+    def test_expired_token_is_rejected(self):
+        from datetime import timedelta
+        from unittest import mock
+
+        from django.utils import timezone
+
+        with mock.patch('authentication.jwt_handler.timezone.now', return_value=timezone.now() - timedelta(hours=2)):
+            token = self.login().json()['access_token']
+        self.assertEqual(self._call_with(token).status_code, 401)
+
+    def test_token_signed_with_another_key_is_rejected(self):
+        import jwt
+
+        forged = jwt.encode({'user_id': self.user.pk, 'exp': 9999999999}, 'not-the-secret-key-not-the-secret-key', algorithm='HS256')
+        self.assertEqual(self._call_with(forged).status_code, 401)
+
+    def test_token_without_expiry_is_rejected(self):
         import jwt
         from django.conf import settings
-        return jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
 
-    def test_valid_token_attaches_company(self):
-        request = self.call(self.encode(company_id=self.company.id))
-        self.assertEqual(request.company, self.company)
+        forever = jwt.encode({'user_id': self.user.pk}, settings.SECRET_KEY, algorithm='HS256')
+        self.assertEqual(self._call_with(forever).status_code, 401)
 
-    def test_no_header_passes_through(self):
-        self.assertFalse(hasattr(self.call(), 'company'))
+    def test_deactivated_user_loses_access_immediately(self):
+        token = self.login().json()['access_token']
+        self.user.is_active = False
+        self.user.save()
+        self.assertEqual(self._call_with(token).status_code, 401)
+        self.assertEqual(self.login().status_code, 400)
 
-    def test_invalid_token_is_401(self):
-        self.assertEqual(self.call('garbage').status_code, 401)
-
-    def test_missing_company_claim_is_401(self):
-        self.assertEqual(self.call(self.encode(sub='x')).status_code, 401)
-
-    def test_unknown_company_is_404(self):
-        self.assertEqual(self.call(self.encode(company_id=99999)).status_code, 404)
+    def test_unknown_user_in_token_is_rejected(self):
+        token = self.login().json()['access_token']
+        self.user.delete()
+        self.assertEqual(self._call_with(token).status_code, 401)

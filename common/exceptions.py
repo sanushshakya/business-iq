@@ -1,58 +1,51 @@
-# apps/common/exceptions.py
+# common/exceptions.py
 
 import logging
+
+from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.views import exception_handler as drf_exception_handler
-from rest_framework.exceptions import APIException
 
 logger = logging.getLogger(__name__)
 
+
 class CustomAPIException(APIException):
     """
-    Base custom exception class for the application.
-    
+    Base class for application errors.
+
     Attributes:
-        detail (str): The error message.
-        status_code (int): The HTTP status code.
-        code (str): A unique code representing the error.
+        detail: the error message.
+        status_code: HTTP status (defaults to 500).
+        code: a stable, machine-readable error code.
     """
+
     def __init__(self, detail=None, status_code=None, code=None):
-        self.detail = detail
-        self.status_code = status_code
-        self.code = code
+        super().__init__(detail=detail, code=code)
+        if status_code is not None:
+            self.status_code = status_code
+
 
 def custom_exception_handler(exc, context):
     """
-    Custom exception handler for the application.
-    
-    Args:
-        exc (Exception): The exception that occurred.
-        context (dict): The context in which the exception occurred.
-        
-    Returns:
-        Response: A response object with the appropriate status and data.
+    DRF exception handler giving every non-validation error the same shape:
+    ``{"code": ..., "message": ..., "status_code": ...}``.
+
+    Validation errors keep DRF's default ``{"field": ["error"]}`` shape so clients can map
+    messages onto form fields.
     """
     response = drf_exception_handler(exc, context)
-    
-    # If no response was returned by DRF's default handler, create one
     if response is None:
-        logger.error(f"Unhandled exception: {exc}")
+        logger.exception("Unhandled exception: %s", exc)
+        return None
+
+    if isinstance(exc, ValidationError):
         return response
-    
-    # Log the error details
-    logger.error(f"Handled exception: {exc}, Status Code: {response.status_code}")
-    
-    # Customize the response data
-    if isinstance(exc, CustomAPIException):
-        response.data = {
-            'code': exc.code,
-            'message': exc.detail,
-            'status_code': response.status_code
-        }
-    else:
-        response.data = {
-            'code': str(exc.__class__.__name__),
-            'message': exc.detail,
-            'status_code': response.status_code
-        }
-    
+
+    if isinstance(exc, APIException):
+        code = getattr(exc.detail, 'code', None) or exc.default_code
+        message = exc.detail
+    else:  # Http404, PermissionDenied: DRF converted them but they carry no ``detail``
+        code = exc.__class__.__name__
+        message = response.data.get('detail', str(exc)) if isinstance(response.data, dict) else str(exc)
+
+    response.data = {'code': code, 'message': message, 'status_code': response.status_code}
     return response

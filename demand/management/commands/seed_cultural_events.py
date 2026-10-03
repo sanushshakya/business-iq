@@ -1,53 +1,41 @@
 # demand/management/commands/seed_cultural_events.py
 
 """
-Django management command to seed cultural events into the database.
+Seed placeholder cultural events (shared reference data). Safe to run more than once.
+
+Product keywords are not seeded: an ``EventProductKeyword`` must point at a company's product,
+so keywords are created through the API (``/demand/keywords/``).
 """
 
+from datetime import timedelta
+
 from django.core.management.base import BaseCommand
-from demand.models import CulturalEvent, EventProductKeyword
+from django.utils import timezone
+
+from demand.models import CulturalEvent
+
+EVENTS = [
+    ('Cultural Festival', 'Annual cultural festival celebrating diversity and traditions.', 30, 3),
+    ('Art Exhibition', 'Exhibition showcasing local and international art pieces.', 60, 14),
+    ('Science Workshop', 'Interactive workshop on various scientific topics for kids.', 90, 1),
+]
+
 
 class Command(BaseCommand):
-    """
-    Management command to insert predefined cultural events into the database.
-    """
-
     help = 'Seed cultural events into the database'
 
-    def handle(self, *args, **kwargs):
-        """
-        Handle the logic for seeding cultural events.
-        """
-        # Define a list of cultural events with their keywords
-        cultural_events_data = [
-            {
-                'name': 'Cultural Festival',
-                'description': 'Annual cultural festival celebrating diversity and traditions.',
-                'keywords': ['cultural', 'festival', 'diversity']
-            },
-            {
-                'name': 'Art Exhibition',
-                'description': 'Exhibition showcasing local and international art pieces.',
-                'keywords': ['art', 'exhibition', 'local']
-            },
-            {
-                'name': 'Science Workshop',
-                'description': 'Interactive workshop on various scientific topics for kids.',
-                'keywords': ['science', 'workshop', 'kids']
-            }
-        ]
-
-        # Create cultural events and associate them with keywords
-        for event_data in cultural_events_data:
-            cultural_event = CulturalEvent.objects.create(
-                name=event_data['name'],
-                description=event_data['description']
+    def handle(self, *args, **options):
+        now = timezone.now()
+        created = 0
+        for name, description, starts_in_days, length_days in EVENTS:
+            start = now + timedelta(days=starts_in_days)
+            _, was_created = CulturalEvent.objects.get_or_create(
+                name=name,
+                defaults={
+                    'description': description,
+                    'start_date': start,
+                    'end_date': start + timedelta(days=length_days),
+                },
             )
-
-            for keyword in event_data['keywords']:
-                EventProductKeyword.objects.get_or_create(
-                    cultural_event=cultural_event,
-                    keyword=keyword
-                )
-
-        self.stdout.write(self.style.SUCCESS('Successfully seeded cultural events'))
+            created += was_created
+        self.stdout.write(self.style.SUCCESS(f'Seeded cultural events ({created} new)'))

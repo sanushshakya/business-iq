@@ -18,7 +18,7 @@ from common.services.verification_token_service import VerificationTokenService
 from inventory.models import StockBatch
 from pricing.models import PriceChangeLog
 
-from .factories import ProductFactory, ShopifyConnectionFactory, StockBatchFactory
+from .factories import ShopifyConnectionFactory, StockBatchFactory
 
 
 class VerificationTokenServiceTests(SimpleTestCase):
@@ -86,6 +86,35 @@ class PriceRecommendationServiceTests(TestCase):
         self.assertEqual(log.stock_batch, stale)
         self.assertEqual((log.old_price, log.new_price), (Decimal('100.00'), Decimal('85.00')))
         self.assertEqual(log.reason, 'decay_markdown')
+
+    def test_repeated_runs_do_not_compound(self):
+        batch = self._batch(days_total=100, days_left=40)  # 15% off
+        self.service.apply_decay_pricing()
+        self.service.apply_decay_pricing()
+        self.service.apply_decay_pricing()
+        batch.product.refresh_from_db()
+        self.assertEqual(batch.product.price, Decimal('85.00'))
+        self.assertEqual(PriceChangeLog.objects.count(), 1)
+
+    def test_moving_to_a_deeper_tier_is_calculated_from_the_original_price(self):
+        batch = self._batch(days_total=100, days_left=40)  # 15% off -> 85
+        self.service.apply_decay_pricing()
+        StockBatch.objects.filter(pk=batch.pk).update(expiration_date=timezone.localdate() + timedelta(days=10))
+        batch.refresh_from_db()
+        self.service.apply_decay_pricing()  # now 20% off the ORIGINAL 100, not off 85
+
+        batch.product.refresh_from_db()
+        self.assertEqual(batch.product.price, Decimal('80.00'))
+        self.assertEqual(PriceChangeLog.objects.count(), 2)
+
+    def test_manual_price_change_resets_the_base(self):
+        batch = self._batch(days_total=100, days_left=40)
+        self.service.apply_decay_pricing()  # 100 -> 85
+        batch.product.price = Decimal('200.00')  # someone re-prices the product
+        batch.product.save()
+        self.service.apply_decay_pricing()
+        batch.product.refresh_from_db()
+        self.assertEqual(batch.product.price, Decimal('170.00'))
 
     def test_empty_batches_are_ignored(self):
         batch = self._batch(days_total=100, days_left=10)

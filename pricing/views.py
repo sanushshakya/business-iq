@@ -2,7 +2,7 @@
 
 from rest_framework import viewsets
 
-from common.tenancy import IsStaffOrReadOnly, TenantScopedMixin
+from common.tenancy import SharedReferenceMixin, TenantScopedMixin
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
@@ -16,8 +16,7 @@ from .serializers import (
 )
 
 
-class PricingPlanViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsStaffOrReadOnly]
+class PricingPlanViewSet(SharedReferenceMixin, viewsets.ModelViewSet):
     queryset = PricingPlan.objects.all()
     serializer_class = PricingPlanSerializer
 

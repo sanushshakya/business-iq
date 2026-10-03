@@ -24,6 +24,10 @@ app.conf.beat_schedule = {
         'task': 'logistics.tasks.check_freight_rates',
         'schedule': crontab(minute=30),
     },
+    'prune-refresh-tokens-daily': {
+        'task': 'authentication.tasks.prune_refresh_tokens',
+        'schedule': crontab(hour=3, minute=15),
+    },
     'sync-approved-prices-every-15-minutes': {
         'task': 'pricing.tasks.sync_approved_prices',
         'schedule': crontab(minute='*/15'),

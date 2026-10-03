@@ -22,17 +22,30 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from authentication.models import UserInvitation
-from authentication.jwt_handler import access_token_ttl, encode_token
-from authentication.serializers import LoginUserSerializer, PasswordResetConfirmSerializer
+from authentication import refresh_tokens
+from authentication.serializers import LoginUserSerializer, PasswordResetConfirmSerializer, RefreshTokenSerializer
 
 User = get_user_model()
 
+TokenPairResponse = inline_serializer(
+    'TokenPairResponse',
+    {
+        'access_token': drf_serializers.CharField(),
+        'refresh_token': drf_serializers.CharField(),
+        'token_type': drf_serializers.CharField(),
+        'expires_in': drf_serializers.IntegerField(),
+        'refresh_expires_in': drf_serializers.IntegerField(),
+    },
+)
+
+
 class LoginView(APIView):
     """
-    Exchange credentials for an access token.
+    Exchange credentials for an access token and a refresh token.
 
-    POST ``{"username": <email>, "password": ...}`` -> ``{"access_token", "token_type", "expires_in"}``.
-    Send the token as ``Authorization: Bearer <access_token>``.
+    POST ``{"username": <email>, "password": ...}``. Send ``access_token`` as
+    ``Authorization: Bearer <access_token>``; when it expires, trade ``refresh_token`` for a new
+    pair at ``/auth/token/refresh/``.
     """
 
     permission_classes = [AllowAny]
@@ -40,28 +53,54 @@ class LoginView(APIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = 'login'
 
-    @extend_schema(
-        request=LoginUserSerializer,
-        responses=inline_serializer(
-            'LoginResponse',
-            {
-                'access_token': drf_serializers.CharField(),
-                'token_type': drf_serializers.CharField(),
-                'expires_in': drf_serializers.IntegerField(),
-            },
-        ),
-    )
+    @extend_schema(request=LoginUserSerializer, responses=TokenPairResponse)
     def post(self, request):
         serializer = LoginUserSerializer(data=request.data)
         if not serializer.is_valid():
             return Response({'detail': _('Invalid credentials')}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(refresh_tokens.issue_token_pair(serializer.validated_data['user']))
 
-        user = serializer.validated_data['user']
-        return Response({
-            'access_token': encode_token(user),
-            'token_type': 'Bearer',
-            'expires_in': int(access_token_ttl().total_seconds()),
-        })
+
+class RefreshView(APIView):
+    """
+    Trade a refresh token for a new access + refresh token.
+
+    Refresh tokens are single use: the one you send is revoked and replaced. Sending a token that
+    was already used revokes the whole session, so always store the newest ``refresh_token``.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'refresh'
+
+    @extend_schema(request=RefreshTokenSerializer, responses=TokenPairResponse)
+    def post(self, request):
+        serializer = RefreshTokenSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            _user, pair = refresh_tokens.rotate(serializer.validated_data['refresh_token'])
+        except refresh_tokens.InvalidRefreshToken:
+            response = Response({'detail': _('Invalid or expired refresh token')}, status=status.HTTP_401_UNAUTHORIZED)
+            response['WWW-Authenticate'] = 'Bearer error="invalid_token"'
+            return response
+        return Response(pair)
+
+
+class LogoutView(APIView):
+    """Revoke the session a refresh token belongs to. Always returns 204, even for unknown tokens."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'refresh'
+
+    @extend_schema(request=RefreshTokenSerializer, responses={204: None})
+    def post(self, request):
+        serializer = RefreshTokenSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        refresh_tokens.logout(serializer.validated_data['refresh_token'])
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class PasswordResetConfirmView(APIView):
@@ -87,6 +126,7 @@ class PasswordResetConfirmView(APIView):
 
         user.set_password(data['new_password1'])
         user.save()
+        refresh_tokens.revoke_all_for_user(user)  # a reset must end every existing session
         return Response({'detail': _('Password reset successful')}, status=status.HTTP_200_OK)
 
     @staticmethod

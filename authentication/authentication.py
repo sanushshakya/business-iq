@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from drf_spectacular.extensions import OpenApiAuthenticationExtension
 from rest_framework import authentication, exceptions
 
-from .jwt_handler import decode_token
+from .jwt_handler import decode_token, password_stamp
 
 
 class JWTAuthentication(authentication.BaseAuthentication):
@@ -34,6 +34,8 @@ class JWTAuthentication(authentication.BaseAuthentication):
             user = get_user_model().objects.get(pk=payload['user_id'], is_active=True)
         except get_user_model().DoesNotExist:
             raise exceptions.AuthenticationFailed('User not found or inactive.')
+        if payload['pw'] != password_stamp(user):
+            raise exceptions.AuthenticationFailed('Password changed; please log in again.')
         return user, header[1].decode()
 
     def authenticate_header(self, request):

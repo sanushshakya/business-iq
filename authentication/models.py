@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 
@@ -16,3 +17,24 @@ class UserInvitation(models.Model):
 
     def __str__(self):
         return f"Invitation for {self.invited_email} to join {self.company.name}"
+
+
+class RefreshToken(models.Model):
+    """
+    A server-side record of an issued refresh token.
+
+    Only a hash of the token is stored. Tokens are single use: refreshing revokes the presented
+    token and issues a new one in the same ``family``. Presenting a token that was already
+    revoked means it was replayed, so the whole family is revoked.
+    """
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='refresh_tokens')
+    token_hash = models.CharField(max_length=64, unique=True)
+    family = models.UUIDField(db_index=True)
+    password_stamp = models.CharField(max_length=16)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"Refresh token for {self.user} (family {self.family})"

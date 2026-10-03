@@ -55,3 +55,7 @@ class LoginUserSerializer(serializers.Serializer):
 
         data['user'] = user
         return data
+
+
+class RefreshTokenSerializer(serializers.Serializer):
+    refresh_token = serializers.CharField()

@@ -94,7 +94,10 @@ REST_FRAMEWORK = {
         "rest_framework.authentication.BasicAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
-    "DEFAULT_THROTTLE_RATES": {"login": config("LOGIN_THROTTLE_RATE", default="10/min")},
+    "DEFAULT_THROTTLE_RATES": {
+        "login": config("LOGIN_THROTTLE_RATE", default="10/min"),
+        "refresh": config("REFRESH_THROTTLE_RATE", default="30/min"),
+    },
     "DEFAULT_PAGINATION_CLASS": "common.pagination.StandardResultsSetPagination",
     "EXCEPTION_HANDLER": "common.exceptions.custom_exception_handler",
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
@@ -105,8 +108,9 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "1.0.0",
 }
 
-# Access token lifetime for authentication.jwt_handler
+# Token lifetimes for authentication.jwt_handler / refresh_tokens
 JWT_ACCESS_TOKEN_TTL_SECONDS = config('JWT_ACCESS_TOKEN_TTL_SECONDS', default=3600, cast=int)
+JWT_REFRESH_TOKEN_TTL_SECONDS = config('JWT_REFRESH_TOKEN_TTL_SECONDS', default=14 * 24 * 3600, cast=int)
 
 # External services
 HMRC_API_KEY = config('HMRC_API_KEY', default='')

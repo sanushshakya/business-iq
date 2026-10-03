@@ -12,6 +12,7 @@ pip install -r requirements.txt
 cp .env.example .env            # set SECRET_KEY at minimum
 python manage.py migrate
 python manage.py seed_demo_data # demo company + owner (owner@m18foods.example / change-me-please)
+python manage.py seed_cultural_events  # optional placeholder events for the calendar
 python manage.py runserver
 ```
 
@@ -24,7 +25,15 @@ celery -A config worker -l info
 celery -A config beat -l info
 ```
 
-`docker-compose.yml` starts Postgres, Redis, the API and a Celery worker.
+### Docker
+
+`docker-compose.yml` defines Postgres, Redis, the API, a Celery worker and a beat container, but it is
+not fully wired up yet:
+
+- `settings.py` only reads `DB_ENGINE` and `DB_NAME`, so the app uses SQLite; the Postgres service is
+  unused until host/user/password settings are added.
+- The `celery-beat` service uses `django_celery_beat`, which is not installed. The schedule lives in
+  `config/celery.py`; run it with `celery -A config beat`.
 
 ## Authentication
 

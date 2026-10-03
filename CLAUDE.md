@@ -11,6 +11,7 @@ export SECRET_KEY=dev-secret          # or copy .env.example to .env
 python manage.py migrate              # SQLite by default (db.sqlite3)
 python manage.py runserver
 python manage.py seed_demo_data       # idempotent demo company + owner (lives in tenants/)
+python manage.py seed_cultural_events # idempotent placeholder CulturalEvents (lives in demand/)
 
 pytest                                # whole suite (use this, not `manage.py test`)
 pytest authentication/tests.py::PasswordResetConfirmTests::test_valid_token_resets_password
@@ -43,7 +44,7 @@ Django 5.2+/DRF monolith. `config/` is only the project package (settings, urls,
 
 **App layout.** Each app follows models / serializers / views (ModelViewSets) / urls (`DefaultRouter`). URL prefixes are in `config/urls.py` (`auth/`, `inventory/`, `demand/`, `calendar/`, `logistics/`, `pricing/`, `sync/`, `common/`). `common` also holds cross-app pieces: `DemandAlert`/`StockAlert` models, business `services/` (price recommendation, cost calculation, HMRC tariff, Hijri calendar, Shopify, verification tokens), the websocket consumer (`consumers.py`, `routing.py`), and `tenancy.py`.
 
-**Background work.** Celery tasks live in each app's `tasks.py` (autodiscovered): `common` (low-stock and demand alerts), `logistics` (freight rates), `pricing` (`sync_approved_prices` pushes approved `PriceChangeLog`s to Shopify via `ShopifyService`), `sync`. The beat schedule is defined in `config/celery.py`. `config/__init__.py` imports the Celery app.
+**Background work.** Celery tasks live in each app's `tasks.py` (autodiscovered): `common` (low-stock and demand alerts), `logistics` (freight rates), `pricing` (`sync_approved_prices` pushes approved `PriceChangeLog`s to Shopify via `ShopifyService`), `sync`, `authentication` (prunes dead refresh tokens). The beat schedule is defined in `config/celery.py`. `config/__init__.py` imports the Celery app.
 
 **Realtime.** `config/asgi.py` routes websockets through `common/routing.py` (`/ws/sync/`). The channel layer is in-memory unless `USE_REDIS_CHANNELS=True`.
 
@@ -53,7 +54,8 @@ Django 5.2+/DRF monolith. `config/` is only the project package (settings, urls,
 
 ## Gotchas
 
-- Migrations are a fresh initial set; most apps have a `0001_initial` plus `0002_initial` because of cross-app foreign keys. Delete any old local DB rather than migrating it forward.
+- Migrations are a fresh initial set; most apps have a `0001_initial` plus `0002_initial` because of cross-app foreign keys (`authentication` and `sync` add later migrations on top). Delete any old local DB rather than migrating it forward.
+- Docker/Postgres is not wired up: settings only read `DB_ENGINE`/`DB_NAME` (SQLite), and the compose `celery-beat` service references an uninstalled scheduler. See the README.
 - Tests build data with factories in `common/tests/factories.py`. A test acting as a user must create its data under `user.company`, otherwise the scoped API correctly hides it.
 - `PriceRecommendationService.apply_decay_pricing` is idempotent: markdowns are computed from the pre-markdown price recorded in `PriceChangeLog`, so it is safe to run repeatedly.
 - The Shopify variant payload and the Hijri/HMRC endpoint URLs are unverified against the real services; they are only covered by mocked tests.

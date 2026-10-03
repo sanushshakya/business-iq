@@ -34,7 +34,7 @@ Django 5.2+/DRF monolith. `config/` is only the project package (settings, urls,
 - Adding a tenant-owned model means adding it to `TENANT_LOOKUPS`; a test in `common/tests/test_tenancy.py` fails if a lookup path is wrong.
 - Shared reference data (`ProductCategory`, `CulturalEvent`, `PricingPlan`, `demand_calendar`) is unscoped: viewsets use `IsStaffOrReadOnly`.
 - Superusers bypass scoping; users with no company get 403. The company always comes from `request.user.company` (loaded from the DB), never from a token claim.
-- The Django admin is scoped the same way: `TenantAdminMixin`, applied to explicit admins and auto-registered for every other `TENANT_LOOKUPS` model in `common.apps.CommonConfig.ready()` (`CustomUser` is excluded).
+- The Django admin is scoped the same way: `TenantAdminMixin`, applied to explicit admins and auto-registered for every other `TENANT_LOOKUPS` model in `common.apps.CommonConfig.ready()`; `CustomUser` has a dedicated `CustomUserAdmin` in `tenants/admin.py` that hides superusers, `is_superuser`, groups, permissions and `company` from company staff (anti-escalation; covered by `CustomUserAdminTests`).
 - Default DRF permission is `IsAuthenticated`. Only login, password-reset confirm, invitation accept and verify-email-token are `AllowAny`.
 
 **Auth.** `POST /auth/login/` (throttled, scope `login`) returns an HS256 token signed with `SECRET_KEY` (`authentication/jwt_handler.py`); `authentication.authentication.JWTAuthentication` is the first DRF authenticator, followed by session and basic. Unauthenticated requests therefore get 401.

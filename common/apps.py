@@ -18,8 +18,7 @@ class CommonConfig(AppConfig):
 
         for label in TENANT_LOOKUPS:
             model = apps.get_model(label)
-            # Users need a purpose-built admin (password handling); not auto-registered.
-            if label == 'tenants.CustomUser' or model in admin.site._registry:
+            if model in admin.site._registry:
                 continue
             admin_class = type(f'{model.__name__}Admin', (TenantAdminMixin, admin.ModelAdmin), {})
             admin.site.register(model, admin_class)

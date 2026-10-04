@@ -50,12 +50,15 @@ Django 5.2+/DRF monolith. `config/` is only the project package (settings, urls,
 
 **Encrypted fields.** `common.fields.EncryptedTextField` (Fernet, keys from `FIELD_ENCRYPTION_KEYS`, falling back to a key derived from `SECRET_KEY`) is used for `ShopifyConnection.access_token`; it cannot be filtered on, and legacy plaintext values still read fine.
 
+**Static files** are served by WhiteNoise (`STATIC_ROOT=staticfiles/`, collected in the Docker build).
+
 **Settings** read everything through `python-decouple` (`.env`). External-service settings (`HMRC_*`, `FREIGHT_RATES_API_URL`, `RATE_CHANGE_THRESHOLD`, `DEFAULT_CUSTOMS_DUTY_RATE`, `REDIS_*`) are listed in `.env.example`.
 
 ## Gotchas
 
 - Migrations are a fresh initial set; most apps have a `0001_initial` plus `0002_initial` because of cross-app foreign keys (`authentication` and `sync` add later migrations on top). Delete any old local DB rather than migrating it forward.
-- Docker/Postgres is not wired up: settings only read `DB_ENGINE`/`DB_NAME` (SQLite), and the compose `celery-beat` service references an uninstalled scheduler. See the README.
+- Docker: `docker compose up --build` runs Postgres, Redis, daphne, a worker and beat; compose overrides `DB_*`/`REDIS_*` to the containers and requires `SECRET_KEY` and `DB_PASSWORD`. Code is baked into the image (no bind mount), so rebuild after changes. `scripts/healthcheck.py` sends the first `ALLOWED_HOSTS` entry as the Host header. `.github/workflows/deploy.yml` builds a `Dockerfile.dev` that does not exist.
+- Dependencies are split: `requirements.txt` (runtime/image) and `requirements-dev.txt` (tests, lint). Settings support Postgres via `DB_ENGINE`/`DB_*`; the full test suite passes on both SQLite and Postgres.
 - Tests build data with factories in `common/tests/factories.py`. A test acting as a user must create its data under `user.company`, otherwise the scoped API correctly hides it.
 - `PriceRecommendationService.apply_decay_pricing` is idempotent: markdowns are computed from the pre-markdown price recorded in `PriceChangeLog`, so it is safe to run repeatedly.
 - The Shopify variant payload and the Hijri/HMRC endpoint URLs are unverified against the real services; they are only covered by mocked tests.

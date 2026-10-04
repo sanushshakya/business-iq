@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import re
 from pathlib import Path
 from decouple import config
 
@@ -26,7 +27,8 @@ SECRET_KEY = config('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=False, cast=bool)
 
-ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='127.0.0.1', cast=lambda v: [s.strip() for s in v.split(',')])
+# Comma- or whitespace-separated, e.g. "localhost,127.0.0.1" or "localhost 127.0.0.1 [::1]".
+ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='127.0.0.1', cast=lambda v: [h for h in re.split(r'[,\s]+', v) if h])
 
 
 # Custom user model (email login, linked to a Company)
@@ -57,6 +59,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -146,13 +149,27 @@ else:
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
-    "default": {
-        "ENGINE": config('DB_ENGINE', default='django.db.backends.sqlite3'),
-        "NAME": BASE_DIR / config('DB_NAME', default='db.sqlite3'),
-        # Add any additional database configurations here
+DB_ENGINE = config('DB_ENGINE', default='django.db.backends.sqlite3')
+if 'sqlite3' in DB_ENGINE:
+    # DB_NAME is a file path, relative to the project root.
+    DATABASES = {
+        "default": {
+            "ENGINE": DB_ENGINE,
+            "NAME": BASE_DIR / config('DB_NAME', default='db.sqlite3'),
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": DB_ENGINE,
+            "NAME": config('DB_NAME', default='iq_db'),
+            "USER": config('DB_USER', default='iq_user'),
+            "PASSWORD": config('DB_PASSWORD', default=''),
+            "HOST": config('DB_HOST', default='localhost'),
+            "PORT": config('DB_PORT', default='5432'),
+            "CONN_MAX_AGE": config('DB_CONN_MAX_AGE', default=60, cast=int),
+        }
+    }
 
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
@@ -172,6 +189,11 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
+}
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field

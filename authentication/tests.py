@@ -391,3 +391,18 @@ class RefreshTokenTests(TestCase):
         self.login()
         self.user.delete()
         self.assertFalse(RefreshToken.objects.exists())
+
+
+class AllowedHostsParsingTests(TestCase):
+    def test_commas_and_whitespace_are_both_accepted(self):
+        import importlib
+        import os
+        from unittest import mock
+
+        for raw in ('localhost,127.0.0.1', 'localhost 127.0.0.1', 'localhost, 127.0.0.1  [::1]'):
+            with mock.patch.dict(os.environ, {'ALLOWED_HOSTS': raw}):
+                module = importlib.import_module('config.settings')
+                importlib.reload(module)
+                self.assertTrue(all(' ' not in h and ',' not in h for h in module.ALLOWED_HOSTS), raw)
+                self.assertIn('localhost', module.ALLOWED_HOSTS)
+        importlib.reload(importlib.import_module('config.settings'))

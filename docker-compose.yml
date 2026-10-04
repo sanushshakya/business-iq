@@ -1,66 +1,93 @@
-version: '3.8'
+# Business IQ: API + Celery worker/beat + Postgres + Redis.
+#
+#   cp .env.example .env     # then set SECRET_KEY and DB_PASSWORD
+#   docker compose up --build
+#
+# API:        http://localhost:8000 (set API_PORT in .env to change); docs at /api/docs/, admin at /admin/
+# Create an admin user:  docker compose exec backend python manage.py createsuperuser
+name: business-iq
+
+x-app: &app
+  build: .
+  image: business-iq:latest
+  restart: unless-stopped
+  env_file:
+    - path: .env
+      required: false
+  environment: &app-env
+    # Values below override .env so the containers always talk to each other,
+    # whatever DB_*/REDIS_* say for running outside Docker.
+    DB_ENGINE: django.db.backends.postgresql
+    DB_HOST: db
+    DB_PORT: "5432"
+    DB_NAME: ${DB_NAME:-iq_db}
+    DB_USER: ${DB_USER:-iq_user}
+    DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+    SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
+    ALLOWED_HOSTS: ${ALLOWED_HOSTS:-127.0.0.1,localhost}
+    REDIS_HOST: redis
+    CELERY_BROKER_URL: redis://redis:6379/0
+    CELERY_RESULT_BACKEND: redis://redis:6379/0
+    USE_REDIS_CHANNELS: "True"
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
 
 services:
   db:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: iqdb
-      POSTGRES_USER: iquser
-      POSTGRES_PASSWORD: iqpwd
+      POSTGRES_DB: ${DB_NAME:-iq_db}
+      POSTGRES_USER: ${DB_USER:-iq_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: python manage.py runserver 0.0.0.0:8000
-    depends_on:
-      - db
-      - redis
+    <<: *app
+    command: sh -c "python manage.py migrate --noinput && daphne -b 0.0.0.0 -p 8000 config.asgi:application"
     ports:
-      - "8000:8000"
-    volumes:
-      - .:/app
-    env_file:
-      - .env
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "scripts/healthcheck.py"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   celery:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    <<: *app
     command: celery -A config worker --loglevel=info
     depends_on:
-      - db
-      - redis
-    volumes:
-      - .:/app
-    env_file:
-      - .env
+      backend:
+        condition: service_healthy   # migrations have run
 
   celery-beat:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: celery -A config beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    <<: *app
+    command: celery -A config beat --loglevel=info --schedule /tmp/celerybeat-schedule
     depends_on:
-      - db
-      - redis
-    volumes:
-      - .:/app
-    env_file:
-      - .env
+      backend:
+        condition: service_healthy
 
 volumes:
   postgres_data:
   redis_data:
-
-# Environment variables file to be created in the project root directory
-# Example content of .env:
-# DJANGO_SECRET_KEY=your_secret_key_here
-# DATABASE_URL=postgres://iquser:iqpwd@db:5432/iqdb

@@ -8,7 +8,7 @@ Data is scoped per company.
 
 ```bash
 python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # requirements.txt is runtime only (what the Docker image uses)
 cp .env.example .env            # set SECRET_KEY at minimum
 python manage.py migrate
 python manage.py seed_demo_data # demo company + owner (owner@m18foods.example / change-me-please)
@@ -25,15 +25,28 @@ celery -A config worker -l info
 celery -A config beat -l info
 ```
 
-### Docker
+### Docker (Postgres + Redis + API + worker + beat)
 
-`docker-compose.yml` defines Postgres, Redis, the API, a Celery worker and a beat container, but it is
-not fully wired up yet:
+```bash
+cp .env.example .env     # set SECRET_KEY and DB_PASSWORD (and ALLOWED_HOSTS if not on localhost)
+docker compose up --build
+docker compose exec backend python manage.py createsuperuser   # optional: admin login
+```
 
-- `settings.py` only reads `DB_ENGINE` and `DB_NAME`, so the app uses SQLite; the Postgres service is
-  unused until host/user/password settings are added.
-- The `celery-beat` service uses `django_celery_beat`, which is not installed. The schedule lives in
-  `config/celery.py`; run it with `celery -A config beat`.
+The API is on <http://localhost:8000> (`API_PORT` in `.env` changes the host port), with docs at
+`/api/docs/` and the admin at `/admin/`. Services:
+
+| Service | What it runs |
+| --- | --- |
+| `db` | Postgres 16 (data in the `postgres_data` volume; not published to the host) |
+| `redis` | Redis 7: Celery broker/results and the websocket channel layer |
+| `backend` | `migrate`, then `daphne` (HTTP + websockets); static files via WhiteNoise |
+| `celery` / `celery-beat` | Worker and scheduler (`config/celery.py`), started once `backend` is healthy |
+
+Inside Compose the database and Redis settings are fixed to the containers; only `DB_NAME`, `DB_USER`
+and `DB_PASSWORD` are read from `.env`. Code is baked into the image, so rebuild after changes
+(`docker compose up --build`). To use Postgres without Docker, set `DB_ENGINE=django.db.backends.postgresql`
+and the `DB_*` values in `.env`.
 
 ## Authentication
 

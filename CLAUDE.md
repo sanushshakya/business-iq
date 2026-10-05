@@ -54,10 +54,14 @@ Django 5.2+/DRF monolith. `config/` is only the project package (settings, urls,
 
 **Settings** read everything through `python-decouple` (`.env`). External-service settings (`HMRC_*`, `FREIGHT_RATES_API_URL`, `RATE_CHANGE_THRESHOLD`, `DEFAULT_CUSTOMS_DUTY_RATE`, `REDIS_*`) are listed in `.env.example`.
 
+## CI/CD
+
+GitHub Actions only (there is no CircleCI config). `ci.yml` has `test` (Postgres, missing-migration check, coverage gate), `lint` and `docker` jobs. `deploy.yml` runs via `workflow_run` after CI passes on `main`: build, push to ECR (tag = commit SHA), rewrite the ECS task definition's images with `jq`, update the service. It skips with a warning unless `AWS_ROLE_ARN`, `AWS_ECR_REPOSITORY_URL`, `AWS_ECS_CLUSTER`, `AWS_ECS_SERVICE` (secrets) and `AWS_REGION` (variable) are set. It does not run migrations. Validate workflow edits with `docker run --rm -v "$PWD":/repo -w /repo rhysd/actionlint:latest`. Setup details are in the README.
+
 ## Gotchas
 
 - Migrations are a fresh initial set; most apps have a `0001_initial` plus `0002_initial` because of cross-app foreign keys (`authentication` and `sync` add later migrations on top). Delete any old local DB rather than migrating it forward.
-- Docker: `docker compose up --build` runs Postgres, Redis, daphne, a worker and beat; compose overrides `DB_*`/`REDIS_*` to the containers and requires `SECRET_KEY` and `DB_PASSWORD`. Code is baked into the image (no bind mount), so rebuild after changes. `scripts/healthcheck.py` sends the first `ALLOWED_HOSTS` entry as the Host header. `.github/workflows/deploy.yml` builds a `Dockerfile.dev` that does not exist.
+- Docker: `docker compose up --build` runs Postgres, Redis, daphne, a worker and beat; compose overrides `DB_*`/`REDIS_*` to the containers and requires `SECRET_KEY` and `DB_PASSWORD`. Code is baked into the image (no bind mount), so rebuild after changes. `scripts/healthcheck.py` sends the first `ALLOWED_HOSTS` entry as the Host header. 
 - Dependencies are split: `requirements.txt` (runtime/image) and `requirements-dev.txt` (tests, lint). Settings support Postgres via `DB_ENGINE`/`DB_*`; the full test suite passes on both SQLite and Postgres.
 - Tests build data with factories in `common/tests/factories.py`. A test acting as a user must create its data under `user.company`, otherwise the scoped API correctly hides it.
 - `PriceRecommendationService.apply_decay_pricing` is idempotent: markdowns are computed from the pre-markdown price recorded in `PriceChangeLog`, so it is safe to run repeatedly.

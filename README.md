@@ -110,3 +110,58 @@ pytest path/to/test_file.py::Class::test # one test
 pytest --cov=authentication --cov=common # coverage (CI requires 70%)
 ruff check .                             # lint (also run in CI)
 ```
+
+## CI/CD (GitHub Actions)
+
+**CI** (`.github/workflows/ci.yml`) runs on every push:
+
+| Job | What it checks |
+| --- | --- |
+| `test` | Missing migrations, migrations on Postgres 16, the test suite with a 70% coverage gate |
+| `lint` | `ruff check .` |
+| `docker` | The image builds, the Compose file is valid, and `manage.py check` passes inside the image |
+
+**Deploy** (`.github/workflows/deploy.yml`) runs after CI succeeds on `main` (or manually from the Actions
+tab, `main` only). It builds the image, pushes it to Amazon ECR tagged with the commit SHA, registers a new
+ECS task definition revision that points every container using that repository at the new image, updates the
+service and waits for it to become stable. The previous and new task definitions are listed in the run summary
+for rollbacks. Deployments never overlap, and the job uses the `production` environment, so you can add
+required reviewers under *Settings > Environments*.
+
+Until the setup below is done the deploy job skips itself with a warning annotation rather than failing.
+
+### One-time AWS setup
+
+1. In AWS IAM, add the OIDC identity provider `token.actions.githubusercontent.com` (audience `sts.amazonaws.com`)
+   and create a role it can assume. Trust it for this repository's `production` environment only:
+
+   ```json
+   {"Effect": "Allow", "Action": "sts:AssumeRoleWithWebIdentity",
+    "Principal": {"Federated": "arn:aws:iam::<account>:oidc-provider/token.actions.githubusercontent.com"},
+    "Condition": {
+      "StringEquals": {"token.actions.githubusercontent.com:aud": "sts.amazonaws.com"},
+      "StringLike":   {"token.actions.githubusercontent.com:sub": "repo:sanushshakya/business-iq:environment:production"}}}
+   ```
+
+   The role needs: `ecr:GetAuthorizationToken`; push access to the repository (`ecr:BatchCheckLayerAvailability`,
+   `InitiateLayerUpload`, `UploadLayerPart`, `CompleteLayerUpload`, `PutImage`); `ecs:DescribeServices`,
+   `ecs:DescribeTaskDefinition`, `ecs:RegisterTaskDefinition`, `ecs:UpdateService`; and `iam:PassRole` for the
+   task and execution roles.
+2. In GitHub, *Settings > Secrets and variables > Actions*:
+
+   | Kind | Name | Value |
+   | --- | --- | --- |
+   | Secret | `AWS_ROLE_ARN` | ARN of the role above |
+   | Secret | `AWS_ECR_REPOSITORY_URL` | `<account>.dkr.ecr.<region>.amazonaws.com/<repo>` (no tag) |
+   | Secret | `AWS_ECS_CLUSTER` | ECS cluster name |
+   | Secret | `AWS_ECS_SERVICE` | ECS service name |
+   | Variable | `AWS_REGION` | e.g. `eu-west-2` |
+
+### Things the pipeline does not do
+
+- **Database migrations.** The image's default command only starts the server. Run `python manage.py migrate --noinput`
+  from the task definition's command or, better, as a one-off ECS task before the rollout; avoid having every
+  replica migrate at once.
+- **Secrets for the app.** `SECRET_KEY`, `DB_PASSWORD`, `FIELD_ENCRYPTION_KEYS` and the rest belong in the task
+  definition (ideally from Secrets Manager), not in this repository.
+- **Automatic rollback.** Enable the ECS deployment circuit breaker on the service so a failing rollout reverts itself.

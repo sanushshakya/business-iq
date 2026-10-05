@@ -1,53 +1,132 @@
-# .github/workflows/deploy.yml
+name: Deploy
 
-name: Deploy Django Project with Docker and Push to AWS ECR
+# Ships the app to AWS: build the image, push it to ECR, then roll the ECS service onto it.
+#
+# Runs automatically after CI succeeds on main, or manually from the Actions tab (main only).
+# Until AWS is configured (see "Setup" in README.md) the job skips itself with a warning instead of failing.
 
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+# Never run two deployments at once, and never cancel one half way through.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write   # lets the job assume the AWS role with OIDC (no long-lived AWS keys)
 
 jobs:
   deploy:
+    name: Build, push to ECR, deploy to ECS
+    # CI must have passed; a manual run is only allowed from main.
+    if: >-
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+      || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
-
-    services:
-      db:
-        image: postgres:12
-        env:
-          POSTGRES_DB: django_project
-          POSTGRES_USER: user
-          POSTGRES_PASSWORD: password
-        ports:
-          - "5432:5432"
+    timeout-minutes: 30
+    environment: production
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
+      - uses: actions/checkout@v4
+        with:
+          # For workflow_run, deploy the exact commit CI tested rather than whatever main is now.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
-    - name: Set up Python
-      uses: actions/setup-python@v2
-      with:
-        python-version: '3.8'
+      - name: Check deployment is configured
+        id: config
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+          AWS_ECR_REPOSITORY_URL: ${{ secrets.AWS_ECR_REPOSITORY_URL }}
+          AWS_ECS_CLUSTER: ${{ secrets.AWS_ECS_CLUSTER }}
+          AWS_ECS_SERVICE: ${{ secrets.AWS_ECS_SERVICE }}
+        run: |
+          missing=""
+          for name in AWS_REGION AWS_ROLE_ARN AWS_ECR_REPOSITORY_URL AWS_ECS_CLUSTER AWS_ECS_SERVICE; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Deployment skipped::AWS is not configured. Missing:$missing. See 'Deployment' in README.md."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
 
-    - name: Build Docker image
-      run: |
-        docker build . --file Dockerfile.dev -t django_project:$GITHUB_SHA
+      - name: Configure AWS credentials
+        if: steps.config.outputs.configured == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
 
-    - name: Login to AWS ECR
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v1
-      with:
-        registry-url: ${{ secrets.AWS_ECR_REGISTRY_URL }}
+      - name: Log in to Amazon ECR
+        if: steps.config.outputs.configured == 'true'
+        uses: aws-actions/amazon-ecr-login@v2
 
-    - name: Push Docker image to AWS ECR
-      run: |
-        docker tag django_project:$GITHUB_SHA ${{ secrets.AWS_ECR_REPOSITORY_URL }}
-        docker push ${{ secrets.AWS_ECR_REPOSITORY_URL }}
+      - uses: docker/setup-buildx-action@v3
+        if: steps.config.outputs.configured == 'true'
 
-    - name: Deploy to ECS service
-      run: aws ecs update-service --cluster ${{ secrets.AWS_ECS_CLUSTER }} --service ${{ secrets.AWS_ECS_SERVICE }} --force-new-deployment
+      - name: Build and push image
+        if: steps.config.outputs.configured == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          provenance: false
+          # Tagged with the commit so every deployment is traceable and rollbacks are exact.
+          tags: ${{ secrets.AWS_ECR_REPOSITORY_URL }}:${{ github.event.workflow_run.head_sha || github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-    # - name: Restart Gunicorn service (no longer needed with ECS)
-    #   run: |
-    #     ssh -i /home/runner/.ssh/id_rsa ${{ secrets.PRODUCTION_SERVER_USERNAME }}@${{ secrets.PRODUCTION_SERVER_HOST }} 'sudo systemctl restart gunicorn.service'
+      - name: Deploy to ECS
+        if: steps.config.outputs.configured == 'true'
+        env:
+          IMAGE_REPO: ${{ secrets.AWS_ECR_REPOSITORY_URL }}
+          IMAGE_TAG: ${{ github.event.workflow_run.head_sha || github.sha }}
+          CLUSTER: ${{ secrets.AWS_ECS_CLUSTER }}
+          SERVICE: ${{ secrets.AWS_ECS_SERVICE }}
+        run: |
+          set -euo pipefail
+          IMAGE="$IMAGE_REPO:$IMAGE_TAG"
+
+          # 1. Start from the task definition the service runs today.
+          CURRENT_ARN=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --query 'services[0].taskDefinition' --output text)
+          if [ -z "$CURRENT_ARN" ] || [ "$CURRENT_ARN" = "None" ]; then
+            echo "::error::Service $SERVICE not found in cluster $CLUSTER"; exit 1
+          fi
+          aws ecs describe-task-definition --task-definition "$CURRENT_ARN" --query taskDefinition > current.json
+
+          # 2. Point every container that uses our repository at the new image, and drop the
+          #    read-only fields register-task-definition rejects.
+          jq --arg repo "$IMAGE_REPO" --arg image "$IMAGE" '
+            del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities,
+                .registeredAt, .registeredBy)
+            | .containerDefinitions |= map(
+                if (.image == $repo) or (.image | startswith($repo + ":")) then .image = $image else . end)
+          ' current.json > new.json
+
+          if ! jq -e --arg image "$IMAGE" 'any(.containerDefinitions[]; .image == $image)' new.json > /dev/null; then
+            echo "::error::No container in $CURRENT_ARN uses the ECR repository, so there is nothing to update."; exit 1
+          fi
+
+          # 3. Register the new revision, roll the service onto it and wait until it is stable.
+          NEW_ARN=$(aws ecs register-task-definition --cli-input-json file://new.json \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --task-definition "$NEW_ARN" > /dev/null
+          echo "Waiting for $SERVICE to become stable on $NEW_ARN ..."
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+
+          {
+            echo "### Deployed"
+            echo "- Commit: \`$IMAGE_TAG\`"
+            echo "- Previous task definition: \`$CURRENT_ARN\`"
+            echo "- New task definition: \`$NEW_ARN\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -3,7 +3,7 @@ name: Deploy
 # Ships the app to AWS: build the image, push it to ECR, then roll the ECS service onto it.
 #
 # Runs automatically after CI succeeds on main, or manually from the Actions tab (main only).
-# Until AWS is configured (see "Setup" in README.md) the job skips itself with a warning instead of failing.
+# Until AWS is configured (see "CI/CD" in README.md) the job skips itself with a warning instead of failing.
 
 on:
   workflow_run:
@@ -53,7 +53,7 @@ jobs:
           done
           if [ -n "$missing" ]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::warning title=Deployment skipped::AWS is not configured. Missing:$missing. See 'Deployment' in README.md."
+            echo "::warning title=Deployment skipped::AWS is not configured. Missing:$missing. See 'CI/CD' in README.md."
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi

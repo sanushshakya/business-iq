@@ -40,7 +40,8 @@ class SupplierInvoice(models.Model):
     
     Fields:
     - invoice_number: CharField representing the unique identifier of the invoice.
-    - supplier: ForeignKey to the Company model, representing the supplier.
+    - company: the tenant company that owns (received) the invoice.
+    - supplier: ForeignKey to inventory.Supplier, the supplier that issued it. Protected from deletion while it has invoices.
     - total_amount: DecimalField representing the total amount due on the invoice.
     - issued_date: DateField representing the date when the invoice was issued.
     - due_date: DateField representing the date by which the invoice is due.
@@ -54,12 +55,17 @@ class SupplierInvoice(models.Model):
     ]
 
     company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='supplier_invoices')
-    invoice_number = models.CharField(max_length=50, unique=True)
-    supplier = models.ForeignKey('tenants.Company', on_delete=models.CASCADE)
+    invoice_number = models.CharField(max_length=50)
+    supplier = models.ForeignKey('inventory.Supplier', on_delete=models.PROTECT, related_name='invoices')
     total_amount = models.DecimalField(max_digits=10, decimal_places=2)
     issued_date = models.DateField()
     due_date = models.DateField(null=True, blank=True)
     payment_status = models.CharField(max_length=10, choices=INVOICE_STATUS_CHOICES, default='pending')
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'invoice_number'], name='unique_invoice_number_per_company'),
+        ]
 
     def __str__(self):
         return self.invoice_number

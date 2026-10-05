@@ -122,8 +122,9 @@ class CreateAndWriteIsolationTests(TenancyTestCase):
         self.assertEqual(response.status_code, 400)
 
     def test_cannot_move_own_object_under_another_companys_parent(self):
+        supplier_b = Supplier.objects.create(company=self.company_b, name='S', contact_info='c', address='a')
         invoice_b = SupplierInvoice.objects.create(
-            company=self.company_b, supplier=self.company_b, invoice_number='B1',
+            company=self.company_b, supplier=supplier_b, invoice_number='B1',
             total_amount=1, issued_date=date.today(),
         )
         response = self.client_a.post(

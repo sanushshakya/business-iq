@@ -1,53 +1,69 @@
 # common/services/cost_calculation_service.py
 
+import logging
+from dataclasses import dataclass
 from decimal import Decimal
+from typing import Optional
 
 from django.conf import settings
 
+from .hmrctariff_service import HMRCTariffService, TariffLookupError
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class LandedCost:
+    goods_cost: Decimal
+    duty_rate: Decimal        # as a fraction, e.g. 0.06 for 6%
+    duty_amount: Decimal
+    total: Decimal
+    duty_source: str          # 'tariff', 'tariff_preference' or 'default' (see ``note``)
+    note: str = ''
+
+
 class CostCalculationService:
     """
-    Service class for calculating various costs associated with a product or transaction.
+    Landed cost of a product: its price plus import duty.
+
+    Duty comes from the UK Trade Tariff via ``HMRCTariffService`` using the product's 10 digit
+    ``commodity_code``. When that is not possible (no code, service unreachable, duty that is not a plain
+    percentage) the configured ``DEFAULT_CUSTOMS_DUTY_RATE`` is used and the result says so, because that
+    is only an estimate.
     """
 
-    def calculate_landed_cost(self, product, quantity):
-        """
-        Calculate the total landed cost of a product based on its price and other factors.
+    def __init__(self, tariff_service: Optional[HMRCTariffService] = None):
+        self.tariff_service = tariff_service or HMRCTariffService()
 
-        Args:
-            product (Product): The product object for which to calculate the landed cost.
-            quantity (int): The quantity of the product being considered.
+    def _default_rate(self) -> Decimal:
+        return Decimal(str(settings.DEFAULT_CUSTOMS_DUTY_RATE))
 
-        Returns:
-            float: The calculated landed cost.
-        """
-        # Base landed cost is the product's price multiplied by the quantity
-        base_cost = product.price * quantity
+    def get_customs_duty_rate(self, commodity_code: str, origin: Optional[str] = None) -> Decimal:
+        """Duty as a fraction (0.06 = 6%), falling back to the default rate."""
+        return self._duty_rate(commodity_code, origin)[0]
 
-        # Add customs duty based on the commodity code
-        customs_duty_rate = self.get_customs_duty_rate(product.commodity_code)
-        customs_duty_amount = base_cost * Decimal(str(customs_duty_rate))
+    def _duty_rate(self, commodity_code, origin):
+        """Return ``(rate, source, note)``."""
+        if not commodity_code:
+            return self._default_rate(), 'default', 'Product has no commodity code.'
+        try:
+            duty = self.tariff_service.get_duty(commodity_code, origin=origin)
+        except (TariffLookupError, ValueError) as exc:
+            logger.warning("Using the default duty rate for %s: %s", commodity_code, exc)
+            return self._default_rate(), 'default', str(exc)
+        if duty.rate_percent is None:
+            note = f"Duty '{duty.expression}' is not a plain percentage."
+            logger.warning("Using the default duty rate for %s: %s", commodity_code, note)
+            return self._default_rate(), 'default', note
+        source = 'tariff_preference' if duty.source == 'preference' else 'tariff'
+        return duty.rate_percent / Decimal(100), source, ''
 
-        # Calculate total landed cost
-        total_landed_cost = base_cost + customs_duty_amount
+    def landed_cost_breakdown(self, product, quantity, origin: Optional[str] = None) -> LandedCost:
+        goods_cost = product.price * quantity
+        rate, source, note = self._duty_rate(product.commodity_code, origin)
+        duty_amount = (goods_cost * rate).quantize(Decimal('0.01'))
+        return LandedCost(goods_cost, rate, duty_amount, goods_cost + duty_amount, source, note)
 
-        return total_landed_cost
-
-    def get_customs_duty_rate(self, commodity_code):
-        """
-        Retrieve the customs duty rate for a given commodity code.
-
-        Args:
-            commodity_code (str): The commodity code to retrieve the duty rate for.
-
-        Returns:
-            float: The customs duty rate.
-        """
-        # Mock implementation using a dictionary. In production, this would likely
-        # interact with an external API or database to fetch the correct rate.
-        duty_rates = {
-            '123': 0.15,
-            '456': 0.10,
-            '789': 0.20,
-        }
-
-        return duty_rates.get(commodity_code, settings.DEFAULT_CUSTOMS_DUTY_RATE)
+    def calculate_landed_cost(self, product, quantity, origin: Optional[str] = None) -> Decimal:
+        """Total cost (goods plus duty) for ``quantity`` units."""
+        return self.landed_cost_breakdown(product, quantity, origin).total

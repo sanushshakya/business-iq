@@ -29,6 +29,7 @@ x-app: &app
     CELERY_BROKER_URL: redis://redis:6379/0
     CELERY_RESULT_BACKEND: redis://redis:6379/0
     USE_REDIS_CHANNELS: "True"
+    USE_REDIS_CACHE: "True"
   depends_on:
     db:
       condition: service_healthy

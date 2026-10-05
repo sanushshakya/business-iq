@@ -14,7 +14,7 @@ COPY --chown=app:app . .
 
 # Collect static files for the admin and API docs (served by WhiteNoise).
 # The key is only needed so settings can load; it is not kept in the image environment.
-RUN SECRET_KEY=build-only python manage.py collectstatic --noinput
+RUN SECRET_KEY=build-only-key-never-used-at-runtime-0123456789 python manage.py collectstatic --noinput
 
 USER app
 EXPOSE 8000

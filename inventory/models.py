@@ -90,10 +90,16 @@ class StockBatch(models.Model):
         expiration_date (datetime): Date when the batch expires.
     """
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
-    batch_number = models.CharField(max_length=50, unique=True)
+    batch_number = models.CharField(max_length=50)
     quantity = models.IntegerField(default=0)
     receive_date = models.DateTimeField(auto_now_add=True)
     expiration_date = models.DateField()
+
+    class Meta:
+        constraints = [
+            # Per product (which belongs to one company), so companies never collide on batch numbers.
+            models.UniqueConstraint(fields=['product', 'batch_number'], name='unique_batch_number_per_product'),
+        ]
 
     def __str__(self):
         return f"{self.product.name} - Batch {self.batch_number}"

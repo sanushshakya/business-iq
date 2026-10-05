@@ -64,3 +64,35 @@ class EncryptedTokenTests(TestCase):
             conn = ShopifyConnection.objects.create(company=CompanyFactory(), shop_domain='r.myshopify.com', access_token='tok')
         with override_settings(FIELD_ENCRYPTION_KEYS=[new, old]):  # new key first, old still accepted
             self.assertEqual(ShopifyConnection.objects.get(pk=conn.pk).access_token, 'tok')
+
+
+class ShopDomainValidationTests(TestCase):
+    """A tenant must not be able to aim the server (and its Shopify token) at an arbitrary host."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = UserFactory()
+        self.client.force_authenticate(self.user)
+
+    def create(self, domain):
+        return self.client.post(
+            reverse('shopifyconnection-list'),
+            {'company': self.user.company.pk, 'shop_domain': domain, 'access_token': 'shpat_x'},
+        )
+
+    def test_real_shopify_domains_are_accepted(self):
+        self.assertEqual(self.create('my-store.myshopify.com').status_code, 201)
+
+    def test_anything_else_is_rejected(self):
+        for bad in ('evil.com', 'localhost:8000', '169.254.169.254', 'my-store.myshopify.com.evil.com',
+                    'evil.com/x.myshopify.com', 'http://my-store.myshopify.com', 'My-Store.myshopify.com'):
+            response = self.create(bad)
+            self.assertEqual(response.status_code, 400, bad)
+            self.assertIn('shop_domain', response.json(), bad)
+        self.assertFalse(ShopifyConnection.objects.exists())
+
+    def test_it_cannot_be_changed_to_a_bad_domain_later(self):
+        pk = self.create('my-store.myshopify.com').json()['id']
+        response = self.client.patch(reverse('shopifyconnection-detail', args=[pk]), {'shop_domain': 'evil.com'})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(ShopifyConnection.objects.get(pk=pk).shop_domain, 'my-store.myshopify.com')

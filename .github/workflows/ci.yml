@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 15
 
     env:
-      SECRET_KEY: ci-only-secret-key
+      SECRET_KEY: ci-only-secret-key-for-tests-0123456789-abcdef
       DEBUG: 'True'
       # Test against Postgres, as in production (the same suite also passes on SQLite)
       DB_ENGINE: django.db.backends.postgresql
@@ -46,9 +46,9 @@ jobs:
           --health-retries 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: pip
@@ -72,9 +72,9 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: pip
@@ -92,13 +92,13 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # Builds exactly what deploy.yml ships, without pushing it.
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
@@ -109,9 +109,9 @@ jobs:
 
       - name: Validate docker-compose.yml
         env:
-          SECRET_KEY: ci-only-secret-key
+          SECRET_KEY: ci-only-secret-key-for-tests-0123456789-abcdef
           DB_PASSWORD: ci-only-password
         run: docker compose config --quiet
 
       - name: Smoke-test the image
-        run: docker run --rm -e SECRET_KEY=ci-only-secret-key business-iq:ci python manage.py check
+        run: docker run --rm -e SECRET_KEY=ci-only-secret-key-for-tests-0123456789-abcdef business-iq:ci python manage.py check

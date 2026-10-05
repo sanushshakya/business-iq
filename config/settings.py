@@ -10,9 +10,12 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import hashlib
 import re
+import warnings
 from pathlib import Path
 from decouple import config
+from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -26,6 +29,24 @@ SECRET_KEY = config('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=False, cast=bool)
+
+# The key (and anything derived from it: JWTs, signed tokens, the default field-encryption key) must
+# not be guessable. This refuses the placeholder that was once committed to this public repository
+# (only its hash is kept here) and anything too short, unless DEBUG is on.
+_PUBLISHED_SECRET_KEY_HASHES = {'b7fc4838f5a36c8d1940b56fe2df734293434da17cca35a4e3f82d66ead6aa0d'}
+_secret_key_problem = None
+if hashlib.sha256(SECRET_KEY.encode()).hexdigest() in _PUBLISHED_SECRET_KEY_HASHES:
+    _secret_key_problem = 'SECRET_KEY is the placeholder that was committed to the public repository'
+elif len(SECRET_KEY) < 32:
+    _secret_key_problem = 'SECRET_KEY is shorter than 32 characters'
+if _secret_key_problem:
+    _advice = (
+        "Generate one with: python -c \"from django.core.management.utils import "
+        "get_random_secret_key; print(get_random_secret_key())\""
+    )
+    if not DEBUG:
+        raise ImproperlyConfigured(f'{_secret_key_problem}. {_advice}')
+    warnings.warn(f'{_secret_key_problem}. {_advice}', stacklevel=1)
 
 # Comma- or whitespace-separated, e.g. "localhost,127.0.0.1" or "localhost 127.0.0.1 [::1]".
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='127.0.0.1', cast=lambda v: [h for h in re.split(r'[,\s]+', v) if h])
@@ -115,9 +136,12 @@ SPECTACULAR_SETTINGS = {
 JWT_ACCESS_TOKEN_TTL_SECONDS = config('JWT_ACCESS_TOKEN_TTL_SECONDS', default=3600, cast=int)
 JWT_REFRESH_TOKEN_TTL_SECONDS = config('JWT_REFRESH_TOKEN_TTL_SECONDS', default=14 * 24 * 3600, cast=int)
 
-# External services
-HMRC_API_KEY = config('HMRC_API_KEY', default='')
-HMRC_API_URL = config('HMRC_API_URL', default='https://api.hmrc.gov.uk/tariffs')
+# External services. The Hijri calendar (AlAdhan) and UK Trade Tariff APIs are public and need no key.
+HTTP_TIMEOUT_SECONDS = config('HTTP_TIMEOUT_SECONDS', default=10, cast=int)
+ALADHAN_API_URL = config('ALADHAN_API_URL', default='https://api.aladhan.com/v1')
+HMRC_API_URL = config('HMRC_API_URL', default='https://www.trade-tariff.service.gov.uk/api/v2')
+# Shopify retires API versions after 12 months; keep this on a supported one (https://shopify.dev/docs/api/usage/versioning).
+SHOPIFY_API_VERSION = config('SHOPIFY_API_VERSION', default='2026-10')
 DEFAULT_CUSTOMS_DUTY_RATE = config('DEFAULT_CUSTOMS_DUTY_RATE', default=0.0, cast=float)
 FREIGHT_RATES_API_URL = config('FREIGHT_RATES_API_URL', default='')
 RATE_CHANGE_THRESHOLD = config('RATE_CHANGE_THRESHOLD', default=5.0, cast=float)  # percent
@@ -126,6 +150,15 @@ RATE_CHANGE_THRESHOLD = config('RATE_CHANGE_THRESHOLD', default=5.0, cast=float)
 # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 # Defaults to a key derived from SECRET_KEY.
 FIELD_ENCRYPTION_KEYS = config('FIELD_ENCRYPTION_KEYS', default='', cast=lambda v: [k.strip() for k in v.split(',') if k.strip()])
+
+# Cache (tariff and calendar lookups). Local memory by default; Redis when USE_REDIS_CACHE is set.
+if config('USE_REDIS_CACHE', default=False, cast=bool):
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": f"redis://{config('REDIS_HOST', default='127.0.0.1')}:{config('REDIS_PORT', default=6379, cast=int)}/1",
+        }
+    }
 
 # Redis
 REDIS_HOST = config('REDIS_HOST', default='127.0.0.1')

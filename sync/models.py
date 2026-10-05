@@ -4,6 +4,9 @@
 Module for Django models in the sync app of the iq project.
 """
 
+import re
+
+from django.core.validators import RegexValidator
 from django.db import models
 
 from common.fields import EncryptedTextField
@@ -39,6 +42,11 @@ class SyncTask(models.Model):
         return f"SyncTask {self.task_id} from {self.source_system} to {self.target_system} - Status: {self.status}"
 
 
+# Shopify store domains look like "my-store.myshopify.com". This is also what stops a tenant pointing the
+# server (and the access token it sends) at an arbitrary host.
+SHOP_DOMAIN_PATTERN = re.compile(r'^[a-z0-9][a-z0-9-]*\.myshopify\.com$')
+
+
 class ShopifyConnection(models.Model):
     """
     Credentials for a company's Shopify store.
@@ -47,7 +55,11 @@ class ShopifyConnection(models.Model):
     """
 
     company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='shopify_connections')
-    shop_domain = models.CharField(max_length=255, unique=True)
+    shop_domain = models.CharField(
+        max_length=255,
+        unique=True,
+        validators=[RegexValidator(SHOP_DOMAIN_PATTERN, "Enter a Shopify domain like 'my-store.myshopify.com'.")],
+    )
     access_token = EncryptedTextField()
     created_at = models.DateTimeField(auto_now_add=True)
 

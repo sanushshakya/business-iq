@@ -1,0 +1,794 @@
+{
+ "data": {
+  "id": "96671",
+  "type": "commodity",
+  "attributes": {
+   "goods_nomenclature_item_id": "0804100099",
+   "description": "Other",
+   "formatted_description": "Other",
+   "declarable": true
+  },
+  "relationships": {
+   "import_measures": {
+    "data": [
+     {
+      "id": "20262890",
+      "type": "measure"
+     },
+     {
+      "id": "20232655",
+      "type": "measure"
+     },
+     {
+      "id": "20125842",
+      "type": "measure"
+     },
+     {
+      "id": "-1012549486",
+      "type": "measure"
+     },
+     {
+      "id": "20284349",
+      "type": "measure"
+     },
+     {
+      "id": "20079581",
+      "type": "measure"
+     },
+     {
+      "id": "20065052",
+      "type": "measure"
+     }
+    ]
+   }
+  }
+ },
+ "included": [
+  {
+   "id": "20262890",
+   "type": "measure",
+   "attributes": {
+    "origin": "eu",
+    "import": true,
+    "export": false,
+    "id": 20262890,
+    "effective_start_date": "2025-05-20T00:00:00.000Z",
+    "effective_end_date": null,
+    "excise": false,
+    "vat": false,
+    "reduction_indicator": null,
+    "meursing": false,
+    "resolved_duty_expression": "",
+    "universal_waiver_applies": false
+   },
+   "relationships": {
+    "duty_expression": {
+     "data": {
+      "id": "20262890-duty_expression",
+      "type": "duty_expression"
+     }
+    },
+    "measure_type": {
+     "data": {
+      "id": "103",
+      "type": "measure_type"
+     }
+    },
+    "geographical_area": {
+     "data": {
+      "id": "1011",
+      "type": "geographical_area"
+     }
+    },
+    "measure_components": {
+     "data": [
+      {
+       "id": "20262890-01",
+       "type": "measure_component"
+      }
+     ]
+    },
+    "excluded_countries": {
+     "data": []
+    }
+   }
+  },
+  {
+   "id": "20262890-duty_expression",
+   "type": "duty_expression",
+   "attributes": {
+    "base": "6.00 %",
+    "formatted_base": "<span>6.00</span> %",
+    "verbose_duty": "6.00%"
+   }
+  },
+  {
+   "id": "103",
+   "type": "measure_type",
+   "attributes": {
+    "description": "Third country duty",
+    "measure_type_series_id": "C",
+    "measure_component_applicable_code": 1,
+    "order_number_capture_code": 2,
+    "trade_movement_code": 0,
+    "validity_end_date": null,
+    "validity_start_date": "1972-01-01T00:00:00.000Z",
+    "semantic_roles": [
+     "mfn_no_authorized_use",
+     "provides_unit_context"
+    ],
+    "id": "103",
+    "measure_type_series_description": "Applicable duty"
+   }
+  },
+  {
+   "id": "1011",
+   "type": "geographical_area",
+   "attributes": {
+    "id": "1011",
+    "description": "ERGA OMNES",
+    "geographical_area_id": "1011"
+   }
+  },
+  {
+   "id": "20262890-01",
+   "type": "measure_component",
+   "attributes": {
+    "duty_expression_id": "01",
+    "duty_amount": 6.0,
+    "monetary_unit_code": null,
+    "monetary_unit_abbreviation": null,
+    "measurement_unit_code": null,
+    "measurement_unit_qualifier_code": null,
+    "duty_expression_description": "% or amount",
+    "duty_expression_abbreviation": "%"
+   }
+  },
+  {
+   "id": "20232655",
+   "type": "measure",
+   "attributes": {
+    "origin": "eu",
+    "import": true,
+    "export": false,
+    "id": 20232655,
+    "effective_start_date": "2024-02-01T00:00:00.000Z",
+    "effective_end_date": null,
+    "excise": false,
+    "vat": false,
+    "reduction_indicator": null,
+    "meursing": false,
+    "resolved_duty_expression": "",
+    "universal_waiver_applies": false
+   },
+   "relationships": {
+    "duty_expression": {
+     "data": {
+      "id": "20232655-duty_expression",
+      "type": "duty_expression"
+     }
+    },
+    "measure_type": {
+     "data": {
+      "id": "750",
+      "type": "measure_type"
+     }
+    },
+    "geographical_area": {
+     "data": {
+      "id": "1011",
+      "type": "geographical_area"
+     }
+    },
+    "measure_components": {
+     "data": []
+    },
+    "excluded_countries": {
+     "data": [
+      {
+       "id": "AT",
+       "type": "geographical_area"
+      },
+      {
+       "id": "BE",
+       "type": "geographical_area"
+      },
+      {
+       "id": "BG",
+       "type": "geographical_area"
+      },
+      {
+       "id": "CH",
+       "type": "geographical_area"
+      },
+      {
+       "id": "CY",
+       "type": "geographical_area"
+      },
+      {
+       "id": "CZ",
+       "type": "geographical_area"
+      },
+      {
+       "id": "DE",
+       "type": "geographical_area"
+      },
+      {
+       "id": "DK",
+       "type": "geographical_area"
+      },
+      {
+       "id": "EE",
+       "type": "geographical_area"
+      },
+      {
+       "id": "ES",
+       "type": "geographical_area"
+      },
+      {
+       "id": "EU",
+       "type": "geographical_area"
+      },
+      {
+       "id": "FI",
+       "type": "geographical_area"
+      },
+      {
+       "id": "FR",
+       "type": "geographical_area"
+      },
+      {
+       "id": "GB",
+       "type": "geographical_area"
+      },
+      {
+       "id": "GR",
+       "type": "geographical_area"
+      },
+      {
+       "id": "HR",
+       "type": "geographical_area"
+      },
+      {
+       "id": "HU",
+       "type": "geographical_area"
+      },
+      {
+       "id": "IE",
+       "type": "geographical_area"
+      },
+      {
+       "id": "IS",
+       "type": "geographical_area"
+      },
+      {
+       "id": "IT",
+       "type": "geographical_area"
+      },
+      {
+       "id": "LT",
+       "type": "geographical_area"
+      },
+      {
+       "id": "LU",
+       "type": "geographical_area"
+      },
+      {
+       "id": "LV",
+       "type": "geographical_area"
+      },
+      {
+       "id": "MT",
+       "type": "geographical_area"
+      },
+      {
+       "id": "NL",
+       "type": "geographical_area"
+      },
+      {
+       "id": "NO",
+       "type": "geographical_area"
+      },
+      {
+       "id": "PL",
+       "type": "geographical_area"
+      },
+      {
+       "id": "PT",
+       "type": "geographical_area"
+      },
+      {
+       "id": "RO",
+       "type": "geographical_area"
+      },
+      {
+       "id": "SE",
+       "type": "geographical_area"
+      },
+      {
+       "id": "SI",
+       "type": "geographical_area"
+      },
+      {
+       "id": "SK",
+       "type": "geographical_area"
+      },
+      {
+       "id": "XI",
+       "type": "geographical_area"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "20232655-duty_expression",
+   "type": "duty_expression",
+   "attributes": {
+    "base": "",
+    "formatted_base": "",
+    "verbose_duty": ""
+   }
+  },
+  {
+   "id": "750",
+   "type": "measure_type",
+   "attributes": {
+    "description": "Import control of organic products",
+    "measure_type_series_id": "B",
+    "measure_component_applicable_code": 0,
+    "order_number_capture_code": 2,
+    "trade_movement_code": 0,
+    "validity_end_date": null,
+    "validity_start_date": "2017-01-01T00:00:00.000Z",
+    "semantic_roles": [
+     "prohibitive"
+    ],
+    "id": "750",
+    "measure_type_series_description": "Entry into free circulation or exportation subject to conditions"
+   }
+  },
+  {
+   "id": "20125842",
+   "type": "measure",
+   "attributes": {
+    "origin": "eu",
+    "import": true,
+    "export": false,
+    "id": 20125842,
+    "effective_start_date": "2021-01-01T00:00:00.000Z",
+    "effective_end_date": null,
+    "excise": false,
+    "vat": false,
+    "reduction_indicator": null,
+    "meursing": false,
+    "resolved_duty_expression": "",
+    "universal_waiver_applies": false
+   },
+   "relationships": {
+    "duty_expression": {
+     "data": {
+      "id": "20125842-duty_expression",
+      "type": "duty_expression"
+     }
+    },
+    "measure_type": {
+     "data": {
+      "id": "142",
+      "type": "measure_type"
+     }
+    },
+    "geographical_area": {
+     "data": {
+      "id": "1013",
+      "type": "geographical_area"
+     }
+    },
+    "measure_components": {
+     "data": [
+      {
+       "id": "20125842-01",
+       "type": "measure_component"
+      }
+     ]
+    },
+    "excluded_countries": {
+     "data": []
+    }
+   }
+  },
+  {
+   "id": "20125842-duty_expression",
+   "type": "duty_expression",
+   "attributes": {
+    "base": "0.00 %",
+    "formatted_base": "<span>0.00</span> %",
+    "verbose_duty": "0.00%"
+   }
+  },
+  {
+   "id": "142",
+   "type": "measure_type",
+   "attributes": {
+    "description": "Tariff preference",
+    "measure_type_series_id": "C",
+    "measure_component_applicable_code": 1,
+    "order_number_capture_code": 2,
+    "trade_movement_code": 0,
+    "validity_end_date": null,
+    "validity_start_date": "1972-01-01T00:00:00.000Z",
+    "semantic_roles": [
+     "provides_unit_context",
+     "cds_proofs_of_origin"
+    ],
+    "id": "142",
+    "measure_type_series_description": "Applicable duty"
+   }
+  },
+  {
+   "id": "1013",
+   "type": "geographical_area",
+   "attributes": {
+    "id": "1013",
+    "description": "European Union",
+    "geographical_area_id": "1013"
+   }
+  },
+  {
+   "id": "20125842-01",
+   "type": "measure_component",
+   "attributes": {
+    "duty_expression_id": "01",
+    "duty_amount": 0.0,
+    "monetary_unit_code": null,
+    "monetary_unit_abbreviation": null,
+    "measurement_unit_code": null,
+    "measurement_unit_qualifier_code": null,
+    "duty_expression_description": "% or amount",
+    "duty_expression_abbreviation": "%"
+   }
+  },
+  {
+   "id": "-1012549486",
+   "type": "measure",
+   "attributes": {
+    "origin": "uk",
+    "import": true,
+    "export": false,
+    "id": -1012549486,
+    "effective_start_date": "2024-09-25T00:00:00.000Z",
+    "effective_end_date": null,
+    "excise": false,
+    "vat": true,
+    "reduction_indicator": null,
+    "meursing": false,
+    "resolved_duty_expression": "",
+    "universal_waiver_applies": false
+   },
+   "relationships": {
+    "duty_expression": {
+     "data": {
+      "id": "-1012549486-duty_expression",
+      "type": "duty_expression"
+     }
+    },
+    "measure_type": {
+     "data": {
+      "id": "305",
+      "type": "measure_type"
+     }
+    },
+    "geographical_area": {
+     "data": {
+      "id": "1400",
+      "type": "geographical_area"
+     }
+    },
+    "measure_components": {
+     "data": [
+      {
+       "id": "-1012549486-01",
+       "type": "measure_component"
+      }
+     ]
+    },
+    "excluded_countries": {
+     "data": []
+    }
+   }
+  },
+  {
+   "id": "-1012549486-duty_expression",
+   "type": "duty_expression",
+   "attributes": {
+    "base": "0.00 %",
+    "formatted_base": "<span>0.00</span> %",
+    "verbose_duty": "0.00%"
+   }
+  },
+  {
+   "id": "305",
+   "type": "measure_type",
+   "attributes": {
+    "description": "Value added tax",
+    "measure_type_series_id": "P",
+    "measure_component_applicable_code": 0,
+    "order_number_capture_code": 2,
+    "trade_movement_code": 0,
+    "validity_end_date": null,
+    "validity_start_date": "1972-01-01T00:00:00.000Z",
+    "semantic_roles": [],
+    "id": "305",
+    "measure_type_series_description": "VAT"
+   }
+  },
+  {
+   "id": "1400",
+   "type": "geographical_area",
+   "attributes": {
+    "id": "1400",
+    "description": "Areas subject to VAT or Excise",
+    "geographical_area_id": "1400"
+   }
+  },
+  {
+   "id": "-1012549486-01",
+   "type": "measure_component",
+   "attributes": {
+    "duty_expression_id": "01",
+    "duty_amount": 0.0,
+    "monetary_unit_code": null,
+    "monetary_unit_abbreviation": null,
+    "measurement_unit_code": null,
+    "measurement_unit_qualifier_code": null,
+    "duty_expression_description": "% or amount",
+    "duty_expression_abbreviation": "%"
+   }
+  },
+  {
+   "id": "20284349",
+   "type": "measure",
+   "attributes": {
+    "origin": "eu",
+    "import": true,
+    "export": false,
+    "id": 20284349,
+    "effective_start_date": "2026-07-15T00:00:00.000Z",
+    "effective_end_date": null,
+    "excise": false,
+    "vat": false,
+    "reduction_indicator": null,
+    "meursing": false,
+    "resolved_duty_expression": "",
+    "universal_waiver_applies": false
+   },
+   "relationships": {
+    "duty_expression": {
+     "data": {
+      "id": "20284349-duty_expression",
+      "type": "duty_expression"
+     }
+    },
+    "measure_type": {
+     "data": {
+      "id": "142",
+      "type": "measure_type"
+     }
+    },
+    "geographical_area": {
+     "data": {
+      "id": "IN",
+      "type": "geographical_area"
+     }
+    },
+    "measure_components": {
+     "data": [
+      {
+       "id": "20284349-01",
+       "type": "measure_component"
+      }
+     ]
+    },
+    "excluded_countries": {
+     "data": []
+    }
+   }
+  },
+  {
+   "id": "20284349-duty_expression",
+   "type": "duty_expression",
+   "attributes": {
+    "base": "0.00 %",
+    "formatted_base": "<span>0.00</span> %",
+    "verbose_duty": "0.00%"
+   }
+  },
+  {
+   "id": "IN",
+   "type": "geographical_area",
+   "attributes": {
+    "id": "IN",
+    "description": "India",
+    "geographical_area_id": "IN",
+    "geographical_area_sid": 154
+   }
+  },
+  {
+   "id": "20284349-01",
+   "type": "measure_component",
+   "attributes": {
+    "duty_expression_id": "01",
+    "duty_amount": 0.0,
+    "monetary_unit_code": null,
+    "monetary_unit_abbreviation": null,
+    "measurement_unit_code": null,
+    "measurement_unit_qualifier_code": null,
+    "duty_expression_description": "% or amount",
+    "duty_expression_abbreviation": "%"
+   }
+  },
+  {
+   "id": "20079581",
+   "type": "measure",
+   "attributes": {
+    "origin": "eu",
+    "import": true,
+    "export": false,
+    "id": 20079581,
+    "effective_start_date": "2021-01-01T00:00:00.000Z",
+    "effective_end_date": null,
+    "excise": false,
+    "vat": false,
+    "reduction_indicator": null,
+    "meursing": false,
+    "resolved_duty_expression": "",
+    "universal_waiver_applies": false
+   },
+   "relationships": {
+    "duty_expression": {
+     "data": {
+      "id": "20079581-duty_expression",
+      "type": "duty_expression"
+     }
+    },
+    "measure_type": {
+     "data": {
+      "id": "142",
+      "type": "measure_type"
+     }
+    },
+    "geographical_area": {
+     "data": {
+      "id": "KE",
+      "type": "geographical_area"
+     }
+    },
+    "measure_components": {
+     "data": [
+      {
+       "id": "20079581-01",
+       "type": "measure_component"
+      }
+     ]
+    },
+    "excluded_countries": {
+     "data": []
+    }
+   }
+  },
+  {
+   "id": "20079581-duty_expression",
+   "type": "duty_expression",
+   "attributes": {
+    "base": "0.00 %",
+    "formatted_base": "<span>0.00</span> %",
+    "verbose_duty": "0.00%"
+   }
+  },
+  {
+   "id": "KE",
+   "type": "geographical_area",
+   "attributes": {
+    "id": "KE",
+    "description": "Kenya",
+    "geographical_area_id": "KE",
+    "geographical_area_sid": 157
+   }
+  },
+  {
+   "id": "20079581-01",
+   "type": "measure_component",
+   "attributes": {
+    "duty_expression_id": "01",
+    "duty_amount": 0.0,
+    "monetary_unit_code": null,
+    "monetary_unit_abbreviation": null,
+    "measurement_unit_code": null,
+    "measurement_unit_qualifier_code": null,
+    "duty_expression_description": "% or amount",
+    "duty_expression_abbreviation": "%"
+   }
+  },
+  {
+   "id": "20065052",
+   "type": "measure",
+   "attributes": {
+    "origin": "eu",
+    "import": true,
+    "export": false,
+    "id": 20065052,
+    "effective_start_date": "2021-01-01T00:00:00.000Z",
+    "effective_end_date": null,
+    "excise": false,
+    "vat": false,
+    "reduction_indicator": null,
+    "meursing": false,
+    "resolved_duty_expression": "",
+    "universal_waiver_applies": false
+   },
+   "relationships": {
+    "duty_expression": {
+     "data": {
+      "id": "20065052-duty_expression",
+      "type": "duty_expression"
+     }
+    },
+    "measure_type": {
+     "data": {
+      "id": "277",
+      "type": "measure_type"
+     }
+    },
+    "geographical_area": {
+     "data": {
+      "id": "KP",
+      "type": "geographical_area"
+     }
+    },
+    "measure_components": {
+     "data": []
+    },
+    "excluded_countries": {
+     "data": []
+    }
+   }
+  },
+  {
+   "id": "20065052-duty_expression",
+   "type": "duty_expression",
+   "attributes": {
+    "base": "",
+    "formatted_base": "",
+    "verbose_duty": ""
+   }
+  },
+  {
+   "id": "277",
+   "type": "measure_type",
+   "attributes": {
+    "description": "Import prohibition",
+    "measure_type_series_id": "A",
+    "measure_component_applicable_code": 2,
+    "order_number_capture_code": 2,
+    "trade_movement_code": 0,
+    "validity_end_date": null,
+    "validity_start_date": "1972-01-01T00:00:00.000Z",
+    "semantic_roles": [
+     "prohibitive"
+    ],
+    "id": "277",
+    "measure_type_series_description": "Importation and/or exportation prohibited"
+   }
+  },
+  {
+   "id": "KP",
+   "type": "geographical_area",
+   "attributes": {
+    "id": "KP",
+    "description": "North Korea",
+    "geographical_area_id": "KP",
+    "geographical_area_sid": 115
+   }
+  }
+ ]
+}

@@ -2,7 +2,10 @@
 
 import logging
 
+from django.db.models import ProtectedError
+from rest_framework import status
 from rest_framework.exceptions import APIException, ValidationError
+from rest_framework.response import Response
 from rest_framework.views import exception_handler as drf_exception_handler
 
 logger = logging.getLogger(__name__)
@@ -32,6 +35,16 @@ def custom_exception_handler(exc, context):
     Validation errors keep DRF's default ``{"field": ["error"]}`` shape so clients can map
     messages onto form fields.
     """
+    if isinstance(exc, ProtectedError):
+        return Response(
+            {
+                'code': 'Protected',
+                'message': 'This record is still referenced by other records and cannot be deleted.',
+                'status_code': status.HTTP_409_CONFLICT,
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
     response = drf_exception_handler(exc, context)
     if response is None:
         logger.exception("Unhandled exception: %s", exc)

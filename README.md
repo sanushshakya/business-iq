@@ -100,7 +100,20 @@ Hijri calendar, Shopify, verification tokens). Periodic jobs are in each app's `
 ## Configuration
 
 All settings come from environment variables / `.env` (see `.env.example`): database, Redis, Celery,
-token lifetimes, login/refresh throttles, field-encryption keys, and the external services (HMRC, freight rates).
+token lifetimes, login/refresh throttles, field-encryption keys, and the external services (below).
+
+## External services
+
+| Service | Used for | Notes |
+| --- | --- | --- |
+| [AlAdhan](https://aladhan.com/islamic-calendar-api) | Next Islamic event (Ramadan, Eids, ...) for the demand calendar | Public, no key. Dates follow the Umm al-Qura calendar, so moon-sighting dates can differ by a day |
+| [UK Trade Tariff](https://www.trade-tariff.service.gov.uk/api/v2) | Import duty for a product's 10 digit `commodity_code` | Public, no key. Standard duty, plus a lower trade-deal rate when an `origin` country is given. Duty groups (EU, DCTS) are not expanded to member countries, and duties that are not a plain percentage fall back to `DEFAULT_CUSTOMS_DUTY_RATE` |
+| Shopify Admin GraphQL | Pushing approved price changes | Needs a store connection with the `write_products` scope. Pinned by `SHOPIFY_API_VERSION` (Shopify retires versions after 12 months, so keep it current). The store domain must look like `my-store.myshopify.com` |
+
+Responses from the first two are cached (`USE_REDIS_CACHE` switches the cache to Redis). The mocked tests use
+real response shapes; to check the code against the live public APIs run
+`RUN_LIVE_TESTS=1 pytest common/tests/test_live_integrations.py`. Shopify needs a real store, so it is covered by
+mocked tests only.
 
 ## Development
 

@@ -4,21 +4,15 @@ from datetime import timedelta
 from decimal import Decimal
 from unittest import mock
 
-import requests
-from django.core.cache import cache
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
-from common.services.cost_calculation_service import CostCalculationService
-from common.services.hijri_calendar_service import HijriCalendarService
-from common.services.hmrctariff_service import HMRCTariffService
 from common.services.price_recommendation_service import PriceRecommendationService, calculate_markdown_percentage
-from common.services.shopify_service import ShopifyService
 from common.services.verification_token_service import VerificationTokenService
 from inventory.models import StockBatch
 from pricing.models import PriceChangeLog
 
-from .factories import ShopifyConnectionFactory, StockBatchFactory
+from .factories import StockBatchFactory
 
 
 class VerificationTokenServiceTests(SimpleTestCase):
@@ -121,76 +115,3 @@ class PriceRecommendationServiceTests(TestCase):
         StockBatch.objects.filter(pk=batch.pk).update(quantity=0)
         self.service.apply_decay_pricing()
         self.assertFalse(PriceChangeLog.objects.exists())
-
-
-@override_settings(DEFAULT_CUSTOMS_DUTY_RATE=0.05)
-class CostCalculationServiceTests(SimpleTestCase):
-    def test_landed_cost_with_known_and_default_duty(self):
-        service = CostCalculationService()
-        known = mock.Mock(price=Decimal('10.00'), commodity_code='123')    # 15% duty
-        unknown = mock.Mock(price=Decimal('10.00'), commodity_code='000')  # default 5%
-        self.assertEqual(service.calculate_landed_cost(known, 2), Decimal('23.00'))
-        self.assertEqual(service.calculate_landed_cost(unknown, 2), Decimal('21.00'))
-
-
-@override_settings(HMRC_API_KEY='test-key', HMRC_API_URL='https://hmrc.test')
-class HMRCTariffServiceTests(SimpleTestCase):
-    @mock.patch('common.services.hmrctariff_service.requests.get')
-    def test_success(self, mock_get):
-        mock_get.return_value.json.return_value = {'rate': 15.0}
-        result = HMRCTariffService().fetch_tariff_rate('1234')
-        self.assertEqual(result, {'rate': 15.0})
-        args, kwargs = mock_get.call_args
-        self.assertEqual(args[0], 'https://hmrc.test/tariff-rate/1234')
-        self.assertEqual(kwargs['headers']['Authorization'], 'Bearer test-key')
-
-    @mock.patch('common.services.hmrctariff_service.requests.get')
-    def test_http_error_is_reported(self, mock_get):
-        mock_get.return_value.raise_for_status.side_effect = requests.HTTPError('404')
-        self.assertEqual(HMRCTariffService().fetch_tariff_rate('5678'), {'error': '404'})
-
-    @override_settings(HMRC_API_KEY='')
-    def test_requires_api_key(self):
-        with self.assertRaises(ValueError):
-            HMRCTariffService()
-
-
-class HijriCalendarServiceTests(SimpleTestCase):
-    def setUp(self):
-        cache.clear()
-
-    @mock.patch('common.services.hijri_calendar_service.requests.get')
-    def test_parses_and_caches_next_event(self, mock_get):
-        mock_get.return_value.json.return_value = {
-            'data': {'events': [{'date': {'hijri': {'readable': '01 January 2030'}}}]}
-        }
-        service = HijriCalendarService()
-        first = service.get_next_event_date()
-        second = service.get_next_event_date()
-        self.assertEqual(str(first), '2030-01-01')
-        self.assertEqual(first, second)
-        self.assertEqual(mock_get.call_count, 1)
-
-    @mock.patch('common.services.hijri_calendar_service.requests.get')
-    def test_no_events(self, mock_get):
-        mock_get.return_value.json.return_value = {'data': {'events': []}}
-        self.assertIsNone(HijriCalendarService().get_next_event_date())
-
-    @mock.patch('common.services.hijri_calendar_service.requests.get', side_effect=requests.ConnectionError('down'))
-    def test_request_failure_returns_none(self, _):
-        self.assertIsNone(HijriCalendarService().get_next_event_date())
-
-
-class ShopifyServiceTests(TestCase):
-    def test_unknown_domain(self):
-        with self.assertRaises(ValueError):
-            ShopifyService('missing.myshopify.com')
-
-    @mock.patch('common.services.shopify_service.requests.put')
-    def test_update_product_price(self, mock_put):
-        conn = ShopifyConnectionFactory()
-        mock_put.return_value.json.return_value = {'product': {'id': 1}}
-        result = ShopifyService(conn.shop_domain).update_product_price(1, Decimal('9.99'))
-        self.assertEqual(result, {'id': 1})
-        _, kwargs = mock_put.call_args
-        self.assertEqual(kwargs['headers']['X-Shopify-Access-Token'], 'test-token')

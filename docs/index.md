@@ -92,9 +92,6 @@ The project is built using Django, a high-level Python web framework that encour
 #### common/urls.py
 - Common URL patterns used across different modules.
 
-#### common/utils/redis_cache.py
-- Module for caching API responses using Redis.
-
 ### Dependencies
 
 - Django, asgiref, pytz, sqlparse, psycopg2-binary, django-allauth, django-tenants, pytest, black, flake8, sphinx, djangorestframework

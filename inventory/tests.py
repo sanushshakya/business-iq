@@ -43,3 +43,34 @@ class InventoryApiTests(TestCase):
 
     def test_str(self):
         self.assertEqual(str(ProductFactory(name='Pear')), 'Pear')
+
+
+class BatchNumberUniquenessTests(TestCase):
+    def setUp(self):
+        self.user = UserFactory()
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        self.product = ProductFactory(company=self.user.company)
+
+    def payload(self, product, number='B-1'):
+        return {'product': product.pk, 'batch_number': number, 'quantity': 5, 'expiration_date': '2027-01-01'}
+
+    def test_other_companies_can_use_the_same_batch_number(self):
+        self.assertEqual(self.client.post(reverse('stockbatch-list'), self.payload(self.product)).status_code, 201)
+
+        other = UserFactory()
+        other_client = APIClient()
+        other_client.force_authenticate(other)
+        theirs = ProductFactory(company=other.company)
+        response = other_client.post(reverse('stockbatch-list'), self.payload(theirs))
+        self.assertEqual(response.status_code, 201, response.content)
+
+    def test_duplicates_within_a_product_are_a_clean_400(self):
+        self.client.post(reverse('stockbatch-list'), self.payload(self.product))
+        response = self.client.post(reverse('stockbatch-list'), self.payload(self.product))
+        self.assertEqual(response.status_code, 400, response.content)
+
+    def test_the_same_number_on_two_of_my_products_is_allowed(self):
+        second = ProductFactory(company=self.user.company)
+        self.assertEqual(self.client.post(reverse('stockbatch-list'), self.payload(self.product)).status_code, 201)
+        self.assertEqual(self.client.post(reverse('stockbatch-list'), self.payload(second)).status_code, 201)

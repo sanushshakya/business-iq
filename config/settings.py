@@ -135,6 +135,11 @@ SPECTACULAR_SETTINGS = {
 # Token lifetimes for authentication.jwt_handler / refresh_tokens
 JWT_ACCESS_TOKEN_TTL_SECONDS = config('JWT_ACCESS_TOKEN_TTL_SECONDS', default=3600, cast=int)
 JWT_REFRESH_TOKEN_TTL_SECONDS = config('JWT_REFRESH_TOKEN_TTL_SECONDS', default=14 * 24 * 3600, cast=int)
+# Hard cap on a login session however often it is refreshed.
+JWT_REFRESH_SESSION_MAX_AGE_SECONDS = config('JWT_REFRESH_SESSION_MAX_AGE_SECONDS', default=90 * 24 * 3600, cast=int)
+# A refresh token used again within this many seconds of being exchanged is treated as a concurrent request
+# (e.g. two browser tabs) and answered with a fresh token, instead of as theft. 0 disables the allowance.
+JWT_REFRESH_REUSE_LEEWAY_SECONDS = config('JWT_REFRESH_REUSE_LEEWAY_SECONDS', default=10, cast=int)
 
 # External services. The Hijri calendar (AlAdhan) and UK Trade Tariff APIs are public and need no key.
 HTTP_TIMEOUT_SECONDS = config('HTTP_TIMEOUT_SECONDS', default=10, cast=int)

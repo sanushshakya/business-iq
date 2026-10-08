@@ -5,7 +5,7 @@ from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.encoding import force_bytes
@@ -220,6 +220,7 @@ class LoginAndJwtTests(TestCase):
         self.assertEqual(self._call_with(token).status_code, 401)
 
 
+@override_settings(JWT_REFRESH_REUSE_LEEWAY_SECONDS=0)  # strict: any reuse is treated as theft
 class RefreshTokenTests(TestCase):
     def setUp(self):
         from django.core.cache import cache
@@ -406,3 +407,111 @@ class AllowedHostsParsingTests(TestCase):
                 self.assertTrue(all(' ' not in h and ',' not in h for h in module.ALLOWED_HOSTS), raw)
                 self.assertIn('localhost', module.ALLOWED_HOSTS)
         importlib.reload(importlib.import_module('config.settings'))
+
+
+class RefreshTokenSessionLimitTests(TestCase):
+    """The reuse allowance for racing requests, and the hard cap on a session's lifetime."""
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
+        self.company = Company.objects.create(name='L', registration_number='LL', address='x')
+        self.user = User.objects.create_user(email='l@example.com', password='pw-12345678', company=self.company)
+        self.client = APIClient()
+
+    def login(self):
+        return self.client.post(reverse('login'), {'username': 'l@example.com', 'password': 'pw-12345678'}).json()
+
+    def refresh(self, token):
+        return self.client.post(reverse('token-refresh'), {'refresh_token': token})
+
+    def api_status(self, access_token):
+        api = APIClient()
+        api.credentials(HTTP_AUTHORIZATION=f'Bearer {access_token}')
+        return api.get(reverse('product-list')).status_code
+
+    def age_session(self, **delta):
+        """Pretend the login behind these tokens happened ``delta`` ago (the tokens themselves stay valid)."""
+        from datetime import timedelta
+
+        from django.db.models import F
+
+        from authentication.models import RefreshToken
+
+        RefreshToken.objects.update(session_started_at=F('session_started_at') - timedelta(**delta))
+
+    # ---- two requests racing with the same token
+    def test_a_token_used_twice_at_once_gets_a_second_working_pair(self):
+        first = self.login()
+        winner = self.refresh(first['refresh_token'])
+        loser = self.refresh(first['refresh_token'])  # e.g. a second browser tab
+        self.assertEqual((winner.status_code, loser.status_code), (200, 200))
+        self.assertNotEqual(winner.json()['refresh_token'], loser.json()['refresh_token'])
+        for response in (winner, loser):
+            self.assertEqual(self.api_status(response.json()['access_token']), 200)
+            self.assertEqual(self.refresh(response.json()['refresh_token']).status_code, 200)
+
+    def test_the_allowance_expires(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from authentication.models import RefreshToken
+
+        first, = [self.login()]
+        newest = self.refresh(first['refresh_token']).json()['refresh_token']
+        RefreshToken.objects.filter(rotated_at__isnull=False).update(rotated_at=timezone.now() - timedelta(seconds=60))
+        self.assertEqual(self.refresh(first['refresh_token']).status_code, 401)  # now it is a replay
+        self.assertEqual(self.refresh(newest).status_code, 401)                  # and the whole session is gone
+
+    @override_settings(JWT_REFRESH_REUSE_LEEWAY_SECONDS=0)
+    def test_the_allowance_can_be_switched_off(self):
+        first = self.login()
+        self.refresh(first['refresh_token'])
+        self.assertEqual(self.refresh(first['refresh_token']).status_code, 401)
+
+    def test_the_allowance_never_revives_a_logged_out_session(self):
+        first = self.login()
+        newest = self.refresh(first['refresh_token']).json()['refresh_token']
+        self.client.post(reverse('logout'), {'refresh_token': newest})
+        self.assertEqual(self.refresh(first['refresh_token']).status_code, 401)
+
+    def test_the_allowance_never_revives_a_session_after_a_password_change(self):
+        first = self.login()
+        self.refresh(first['refresh_token'])
+        self.user.set_password('a-different-pw-123')
+        self.user.save()
+        self.assertEqual(self.refresh(first['refresh_token']).status_code, 401)
+
+    # ---- hard cap on a session
+    def test_a_session_cannot_be_refreshed_forever(self):
+        body = self.login()
+        for _ in range(3):  # a diligent client keeps rotating, so each token is young...
+            body = self.refresh(body['refresh_token']).json()
+        self.age_session(days=91)  # ...but the session itself started 91 days ago
+        self.assertEqual(self.refresh(body['refresh_token']).status_code, 401)
+
+    def test_the_session_start_is_carried_across_rotations(self):
+        from authentication.models import RefreshToken
+
+        body = self.login()
+        started = RefreshToken.objects.get().session_started_at
+        self.refresh(body['refresh_token'])
+        self.assertEqual(set(RefreshToken.objects.values_list('session_started_at', flat=True)), {started})
+
+    def test_a_token_never_outlives_the_session_cap(self):
+        body = self.login()
+        self.age_session(days=89, hours=23)  # one hour of the 90 day session is left
+        refreshed = self.refresh(body['refresh_token'])
+        self.assertEqual(refreshed.status_code, 200)
+        self.assertLessEqual(refreshed.json()['refresh_expires_in'], 3600)
+        self.assertGreater(refreshed.json()['refresh_expires_in'], 0)
+
+    @override_settings(JWT_REFRESH_SESSION_MAX_AGE_SECONDS=3600)
+    def test_the_cap_is_configurable(self):
+        body = self.login()
+        self.assertLessEqual(body['refresh_expires_in'], 3600)
+        self.age_session(hours=2)
+        self.assertEqual(self.refresh(body['refresh_token']).status_code, 401)
+

@@ -42,6 +42,16 @@ class LiveIntegrationTests(SimpleTestCase):
         self.assertIsInstance(duty.rate_percent, Decimal)
         self.assertGreaterEqual(duty.rate_percent, 0)
 
+    def test_tariff_group_preferences_are_resolved(self):
+        # Germany is not named in any measure; its preference (if any) comes through the EU group.
+        service = HMRCTariffService()
+        standard = service.get_duty('0804100099')
+        duty = service.get_duty('0804100099', origin='DE')
+        self.assertLessEqual(duty.rate_percent, standard.rate_percent)
+        members = service.fetch_group_members('1013')
+        self.assertIn('DE', members)
+        self.assertNotIn('US', members)
+
     def test_tariff_unknown_code_is_reported(self):
         with self.assertRaises(TariffLookupError):
             HMRCTariffService().get_duty('0804100000')

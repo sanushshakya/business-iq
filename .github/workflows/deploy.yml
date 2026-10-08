@@ -85,13 +85,15 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Deploy to ECS
+      - name: Register new task definition
+        id: taskdef
         if: steps.config.outputs.configured == 'true'
         env:
           IMAGE_REPO: ${{ secrets.AWS_ECR_REPOSITORY_URL }}
           IMAGE_TAG: ${{ github.event.workflow_run.head_sha || github.sha }}
           CLUSTER: ${{ secrets.AWS_ECS_CLUSTER }}
           SERVICE: ${{ secrets.AWS_ECS_SERVICE }}
+          ECS_APP_CONTAINER: ${{ vars.ECS_APP_CONTAINER }}
         run: |
           set -euo pipefail
           IMAGE="$IMAGE_REPO:$IMAGE_TAG"
@@ -117,12 +119,100 @@ jobs:
             echo "::error::No container in $CURRENT_ARN uses the ECR repository, so there is nothing to update."; exit 1
           fi
 
-          # 3. Register the new revision, roll the service onto it and wait until it is stable.
+          # 3. Register the new revision. Nothing is running on it yet.
           NEW_ARN=$(aws ecs register-task-definition --cli-input-json file://new.json \
             --query 'taskDefinition.taskDefinitionArn' --output text)
-          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --task-definition "$NEW_ARN" > /dev/null
+
+          # The container to run one-off commands in: the one named in ECS_APP_CONTAINER, else the first
+          # container that uses our image.
+          APP_CONTAINER="${ECS_APP_CONTAINER:-$(jq -r --arg image "$IMAGE" '[.containerDefinitions[] | select(.image == $image)][0].name' new.json)}"
+
+          {
+            echo "current_arn=$CURRENT_ARN"
+            echo "new_arn=$NEW_ARN"
+            echo "app_container=$APP_CONTAINER"
+          } >> "$GITHUB_OUTPUT"
+
+      # Opt-in (set the repository variable ECS_RUN_MIGRATIONS to 'true'). Runs `migrate` once, as a
+      # one-off task on the NEW task definition and with the service's own network settings, and stops the
+      # deployment if it fails, before any running task is replaced.
+      - name: Run database migrations
+        if: steps.config.outputs.configured == 'true' && vars.ECS_RUN_MIGRATIONS == 'true'
+        env:
+          CLUSTER: ${{ secrets.AWS_ECS_CLUSTER }}
+          SERVICE: ${{ secrets.AWS_ECS_SERVICE }}
+          NEW_ARN: ${{ steps.taskdef.outputs.new_arn }}
+          APP_CONTAINER: ${{ steps.taskdef.outputs.app_container }}
+        run: |
+          set -euo pipefail
+          SERVICE_JSON=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0]')
+
+          # Reuse how the service is placed: launch type or capacity providers, and subnets/security groups.
+          RUN_ARGS=()
+          LAUNCH_TYPE=$(jq -r '.launchType // empty' <<< "$SERVICE_JSON")
+          [ -z "$LAUNCH_TYPE" ] || RUN_ARGS+=(--launch-type "$LAUNCH_TYPE")
+          if [ "$(jq '(.capacityProviderStrategy // []) | length' <<< "$SERVICE_JSON")" -gt 0 ]; then
+            RUN_ARGS+=(--capacity-provider-strategy "$(jq -c '.capacityProviderStrategy' <<< "$SERVICE_JSON")")
+          fi
+          if [ "$(jq '.networkConfiguration != null' <<< "$SERVICE_JSON")" = "true" ]; then
+            RUN_ARGS+=(--network-configuration "$(jq -c '.networkConfiguration' <<< "$SERVICE_JSON")")
+          fi
+
+          OVERRIDES=$(jq -nc --arg name "$APP_CONTAINER" \
+            '{containerOverrides: [{name: $name, command: ["python", "manage.py", "migrate", "--noinput"]}]}')
+
+          RUN_JSON=$(aws ecs run-task --cluster "$CLUSTER" --task-definition "$NEW_ARN" --count 1 \
+            "${RUN_ARGS[@]}" --overrides "$OVERRIDES")
+          if [ "$(jq '.failures | length' <<< "$RUN_JSON")" -gt 0 ]; then
+            echo "::error::Could not start the migration task: $(jq -c '.failures' <<< "$RUN_JSON")"; exit 1
+          fi
+          TASK_ARN=$(jq -r '.tasks[0].taskArn' <<< "$RUN_JSON")
+
+          echo "Waiting for migration task $TASK_ARN ..."
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK_ARN"
+          EXIT_CODE=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+            --query "tasks[0].containers[?name=='$APP_CONTAINER'].exitCode | [0]" --output text)
+          if [ "$EXIT_CODE" != "0" ]; then
+            REASON=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" --query 'tasks[0].stoppedReason' --output text)
+            echo "::error title=Migrations failed::Exit code $EXIT_CODE ($REASON). Nothing was deployed; see the task's CloudWatch logs ($TASK_ARN)."
+            exit 1
+          fi
+          echo "Migrations applied." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # The ECS circuit breaker (enabled here on every deployment) rolls a failing rollout back by itself.
+      # A rollback looks like a stable service, so the final check insists the NEW revision is the one
+      # that completed.
+      - name: Roll out and verify
+        if: steps.config.outputs.configured == 'true'
+        env:
+          CLUSTER: ${{ secrets.AWS_ECS_CLUSTER }}
+          SERVICE: ${{ secrets.AWS_ECS_SERVICE }}
+          CURRENT_ARN: ${{ steps.taskdef.outputs.current_arn }}
+          NEW_ARN: ${{ steps.taskdef.outputs.new_arn }}
+          IMAGE_TAG: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          # Keep the service's existing percentages and only switch the circuit breaker on.
+          DEPLOY_CONFIG=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --query 'services[0].deploymentConfiguration' \
+            | jq -c '. + {deploymentCircuitBreaker: {enable: true, rollback: true}}')
+
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --task-definition "$NEW_ARN" \
+            --deployment-configuration "$DEPLOY_CONFIG" > /dev/null
+
           echo "Waiting for $SERVICE to become stable on $NEW_ARN ..."
-          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+          WAIT_FAILED=0
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE" || WAIT_FAILED=1
+
+          PRIMARY=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --query "services[0].deployments[?status=='PRIMARY'] | [0]")
+          STATE=$(jq -r '.rolloutState' <<< "$PRIMARY")
+          RUNNING_ARN=$(jq -r '.taskDefinition' <<< "$PRIMARY")
+
+          if [ "$WAIT_FAILED" = "1" ] || [ "$STATE" != "COMPLETED" ] || [ "$RUNNING_ARN" != "$NEW_ARN" ]; then
+            echo "::error title=Deployment failed::Rollout state is $STATE and the service is running $RUNNING_ARN (wanted $NEW_ARN). ECS has rolled back or the rollout is still not healthy."
+            exit 1
+          fi
 
           {
             echo "### Deployed"

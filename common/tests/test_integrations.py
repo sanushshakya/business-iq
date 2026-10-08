@@ -137,15 +137,37 @@ def set_measure(payload, measure_type, geography, **changes):
     raise AssertionError('measure not found in fixture')
 
 
+def group_fixture():
+    return json.loads((FIXTURES / 'geo_group_1013.json').read_text())
+
+
+def tariff_get(payload, status=200, groups=None):
+    """
+    Fake ``requests.get`` for the tariff API. ``groups`` maps a group id to its response (or an exception
+    to raise); by default group 1013 (the EU) is served from the real-data fixture.
+    """
+    groups = {'1013': response(group_fixture())} if groups is None else groups
+
+    def fake_get(url, **kwargs):
+        if '/commodities/' in url:
+            return response(payload, status)
+        group_id = url.rsplit('/', 1)[1]
+        outcome = groups.get(group_id, response({'errors': [{'detail': 'not found'}]}, 404))
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+    return fake_get
+
+
 @override_settings(HMRC_API_URL='https://tariff.test/api/v2')
 class HMRCTariffServiceTests(SimpleTestCase):
     def setUp(self):
         cache.clear()
         self.service = HMRCTariffService()
 
-    def duty(self, payload=None, status=200, **kwargs):
+    def duty(self, payload=None, status=200, groups=None, **kwargs):
         payload = payload or tariff_fixture()
-        with mock.patch('common.services.hmrctariff_service.requests.get', return_value=response(payload, status)) as get:
+        with mock.patch('common.services.hmrctariff_service.requests.get', side_effect=tariff_get(payload, status, groups)) as get:
             return self.service.get_duty('0804100099', **kwargs), get
 
     def test_standard_third_country_duty(self):
@@ -162,10 +184,44 @@ class HMRCTariffServiceTests(SimpleTestCase):
         duty, _ = self.duty(origin='BR')
         self.assertEqual((duty.rate_percent, duty.source, duty.origin), (Decimal('6.0'), 'third_country', None))
 
-    def test_group_preferences_are_not_expanded_to_member_countries(self):
-        # The fixture has an "EU" group preference; Germany is a member but is not named in the measure.
-        duty, _ = self.duty(origin='DE')
+    def test_group_preferences_apply_to_member_countries(self):
+        # The measure names the EU (group 1013), not Germany: membership comes from the group endpoint.
+        duty, get = self.duty(origin='DE')
+        self.assertEqual((duty.rate_percent, duty.source, duty.origin, duty.via), (Decimal('0.0'), 'preference', 'DE', '1013'))
+        self.assertIn('https://tariff.test/api/v2/geographical_areas/1013', [c.args[0] for c in get.call_args_list])
+
+    def test_direct_country_preferences_do_not_need_the_group_lookup(self):
+        duty, get = self.duty(origin='IN')
+        self.assertEqual((duty.source, duty.via), ('preference', 'IN'))
+        self.assertTrue(all('/commodities/' in c.args[0] or '1013' in c.args[0] for c in get.call_args_list))
+
+    def test_a_country_outside_the_group_pays_the_standard_duty(self):
+        duty, _ = self.duty(origin='US')
+        self.assertEqual((duty.rate_percent, duty.source, duty.via), (Decimal('6.0'), 'third_country', None))
+
+    def test_countries_excluded_from_a_group_preference_pay_the_standard_duty(self):
+        payload = tariff_fixture()
+        eu_measure = set_measure(payload, '142', '1013')
+        eu_measure['relationships']['excluded_countries'] = {'data': [{'id': 'DE', 'type': 'geographical_area'}]}
+        duty, _ = self.duty(payload, origin='DE')
         self.assertEqual(duty.source, 'third_country')
+        cache.clear()
+        duty, _ = self.duty(payload, origin='FR')  # the exclusion is specific to Germany
+        self.assertEqual(duty.source, 'preference')
+
+    def test_a_failed_group_lookup_falls_back_to_the_standard_duty(self):
+        for failure in (requests.ConnectionError('down'), response(status=500), response({'surprise': 1})):
+            cache.clear()
+            duty, _ = self.duty(origin='DE', groups={'1013': failure})
+            self.assertEqual((duty.rate_percent, duty.source), (Decimal('6.0'), 'third_country'), failure)
+
+    def test_group_membership_is_cached(self):
+        payload = tariff_fixture()
+        with mock.patch('common.services.hmrctariff_service.requests.get', side_effect=tariff_get(payload)) as get:
+            self.service.get_duty('0804100099', origin='DE')
+            self.service.get_duty('0804100099', origin='FR')
+        group_calls = [c for c in get.call_args_list if 'geographical_areas' in c.args[0]]
+        self.assertEqual(len(group_calls), 1)
 
     def test_a_preference_is_ignored_if_it_is_not_lower(self):
         payload = tariff_fixture()
@@ -211,10 +267,11 @@ class HMRCTariffServiceTests(SimpleTestCase):
 
     def test_responses_are_cached(self):
         payload = tariff_fixture()
-        with mock.patch('common.services.hmrctariff_service.requests.get', return_value=response(payload)) as get:
+        with mock.patch('common.services.hmrctariff_service.requests.get', side_effect=tariff_get(payload)) as get:
             self.service.get_duty('0804100099')
             self.service.get_duty('0804100099', origin='IN')
-        self.assertEqual(get.call_count, 1)
+        commodity_calls = [c for c in get.call_args_list if '/commodities/' in c.args[0]]
+        self.assertEqual(len(commodity_calls), 1)
 
     def test_the_highest_of_several_standard_duties_is_used(self):
         payload = copy.deepcopy(tariff_fixture())

@@ -63,7 +63,10 @@ curl -X POST localhost:8000/auth/logout/ -d refresh_token=<refresh_token>
 
 Refresh tokens are **single use**: every refresh returns a new `refresh_token`, and the old one stops
 working, so always store the newest. Sending an already-used token is treated as theft and ends that
-whole session. Changing or resetting a password invalidates all of a user's tokens. Logging out revokes
+whole session, with one allowance: a token used again within `JWT_REFRESH_REUSE_LEEWAY_SECONDS` (10 s) of
+being exchanged is treated as a concurrent request (e.g. two browser tabs) and gets its own fresh pair. A
+session also has a hard cap, `JWT_REFRESH_SESSION_MAX_AGE_SECONDS` (90 days) from the original login,
+however often it is refreshed. Changing or resetting a password invalidates all of a user's tokens. Logging out revokes
 the refresh tokens immediately, but an access token already issued stays valid until it expires (at most
 `JWT_ACCESS_TOKEN_TTL_SECONDS`).
 
@@ -107,7 +110,7 @@ token lifetimes, login/refresh throttles, field-encryption keys, and the externa
 | Service | Used for | Notes |
 | --- | --- | --- |
 | [AlAdhan](https://aladhan.com/islamic-calendar-api) | Next Islamic event (Ramadan, Eids, ...) for the demand calendar | Public, no key. Dates follow the Umm al-Qura calendar, so moon-sighting dates can differ by a day |
-| [UK Trade Tariff](https://www.trade-tariff.service.gov.uk/api/v2) | Import duty for a product's 10 digit `commodity_code` | Public, no key. Standard duty, plus a lower trade-deal rate when an `origin` country is given. Duty groups (EU, DCTS) are not expanded to member countries, and duties that are not a plain percentage fall back to `DEFAULT_CUSTOMS_DUTY_RATE` |
+| [UK Trade Tariff](https://www.trade-tariff.service.gov.uk/api/v2) | Import duty for a product's 10 digit `commodity_code` | Public, no key. Standard duty, plus a lower trade-deal rate when an `origin` country is given (named directly or through a group such as the EU or a trade scheme; group membership is looked up and cached). Duties that are not a plain percentage fall back to `DEFAULT_CUSTOMS_DUTY_RATE` |
 | Shopify Admin GraphQL | Pushing approved price changes | Needs a store connection with the `write_products` scope. Pinned by `SHOPIFY_API_VERSION` (Shopify retires versions after 12 months, so keep it current). The store domain must look like `my-store.myshopify.com` |
 
 Responses from the first two are cached (`USE_REDIS_CACHE` switches the cache to Redis). The mocked tests use
@@ -159,7 +162,7 @@ Until the setup below is done the deploy job skips itself with a warning annotat
    The role needs: `ecr:GetAuthorizationToken`; push access to the repository (`ecr:BatchCheckLayerAvailability`,
    `InitiateLayerUpload`, `UploadLayerPart`, `CompleteLayerUpload`, `PutImage`); `ecs:DescribeServices`,
    `ecs:DescribeTaskDefinition`, `ecs:RegisterTaskDefinition`, `ecs:UpdateService`; and `iam:PassRole` for the
-   task and execution roles.
+   task and execution roles. For automatic migrations (below) it also needs `ecs:RunTask` and `ecs:DescribeTasks`.
 2. In GitHub, *Settings > Secrets and variables > Actions*:
 
    | Kind | Name | Value |
@@ -169,12 +172,23 @@ Until the setup below is done the deploy job skips itself with a warning annotat
    | Secret | `AWS_ECS_CLUSTER` | ECS cluster name |
    | Secret | `AWS_ECS_SERVICE` | ECS service name |
    | Variable | `AWS_REGION` | e.g. `eu-west-2` |
+   | Variable (optional) | `ECS_RUN_MIGRATIONS` | `true` to run `migrate` before each rollout (see below) |
+   | Variable (optional) | `ECS_APP_CONTAINER` | Container to run `migrate` in; defaults to the first one using the app image |
+
+### Migrations and rollbacks
+
+- **Rollbacks are automatic.** Every deployment switches on the ECS deployment circuit breaker with rollback,
+  and the job then checks that the *new* task definition is the one that actually completed. A rollout that ECS
+  rolled back (which looks like a stable service) therefore fails the job instead of reporting success.
+- **Migrations are opt-in.** Set the variable `ECS_RUN_MIGRATIONS` to `true` and the deployment first runs
+  `python manage.py migrate --noinput` once, as a one-off task on the new task definition using the service's
+  own launch type and network settings. If it fails, nothing is deployed. Do not also migrate in the task
+  definition's command, or every replica will try to migrate at once. Migrate *before* the rollout means the
+  old code briefly runs against the new schema, so keep migrations backwards compatible.
+- Both were tested against a stand-in for the AWS CLI (success, failed migration, rolled-back rollout, stuck
+  rollout, timeouts), not against a live AWS account. Try the first deployment on a non-production service.
 
 ### Things the pipeline does not do
 
-- **Database migrations.** The image's default command only starts the server. Run `python manage.py migrate --noinput`
-  from the task definition's command or, better, as a one-off ECS task before the rollout; avoid having every
-  replica migrate at once.
-- **Secrets for the app.** `SECRET_KEY`, `DB_PASSWORD`, `FIELD_ENCRYPTION_KEYS` and the rest belong in the task
-  definition (ideally from Secrets Manager), not in this repository.
-- **Automatic rollback.** Enable the ECS deployment circuit breaker on the service so a failing rollout reverts itself.
+- **Secrets for the app.** `SECRET_KEY` (32+ characters), `DB_PASSWORD`, `FIELD_ENCRYPTION_KEYS` and the rest
+  belong in the task definition (ideally from Secrets Manager), not in this repository.

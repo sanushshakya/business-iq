@@ -32,26 +32,35 @@ def _hash(raw):
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def _issue(user, family):
+def session_max_age():
+    return timedelta(seconds=settings.JWT_REFRESH_SESSION_MAX_AGE_SECONDS)
+
+
+def _issue(user, family, session_started_at):
+    """Create a refresh token; it can never outlive the session's hard cap."""
     raw = secrets.token_urlsafe(48)
+    now = timezone.now()
+    lifetime = max(min(refresh_token_ttl(), session_started_at + session_max_age() - now), timedelta(0))
     RefreshToken.objects.create(
         user=user,
         token_hash=_hash(raw),
         family=family,
         password_stamp=password_stamp(user),
-        expires_at=timezone.now() + refresh_token_ttl(),
+        session_started_at=session_started_at,
+        expires_at=now + lifetime,
     )
-    return raw
+    return raw, lifetime
 
 
-def issue_token_pair(user, family=None):
+def issue_token_pair(user, family=None, session_started_at=None):
     """Return the response body for a fresh access + refresh token."""
+    raw, lifetime = _issue(user, family or uuid.uuid4(), session_started_at or timezone.now())
     return {
         'access_token': encode_token(user),
-        'refresh_token': _issue(user, family or uuid.uuid4()),
+        'refresh_token': raw,
         'token_type': 'Bearer',
         'expires_in': int(access_token_ttl().total_seconds()),
-        'refresh_expires_in': int(refresh_token_ttl().total_seconds()),
+        'refresh_expires_in': int(lifetime.total_seconds()),
     }
 
 
@@ -63,12 +72,28 @@ def revoke_all_for_user(user):
     return RefreshToken.objects.filter(user=user, revoked_at__isnull=True).update(revoked_at=timezone.now())
 
 
+def _concurrent_reuse(token, now):
+    """
+    True if a revoked token was only just exchanged for a new one (two requests racing with the same
+    token) and its session has not been ended by a logout or a detected replay.
+    """
+    leeway = timedelta(seconds=settings.JWT_REFRESH_REUSE_LEEWAY_SECONDS)
+    if token.rotated_at is None or now - token.rotated_at > leeway:
+        return False
+    ended_deliberately = RefreshToken.objects.filter(
+        family=token.family, revoked_at__isnull=False, rotated_at__isnull=True
+    ).exists()
+    return not ended_deliberately
+
+
 def rotate(raw):
     """
-    Exchange a refresh token for a new token pair; the presented token can never be used again.
+    Exchange a refresh token for a new token pair; the presented token can then only be used again for a
+    few seconds (see ``JWT_REFRESH_REUSE_LEEWAY_SECONDS``).
 
-    Raises ``InvalidRefreshToken``. A replayed (already used or revoked) token revokes its whole
-    family, since either the legitimate client or an attacker is holding a stolen copy.
+    Raises ``InvalidRefreshToken``. A replayed token revokes its whole family, since either the legitimate
+    client or an attacker is holding a stolen copy. A session older than ``JWT_REFRESH_SESSION_MAX_AGE_SECONDS``
+    cannot be refreshed, however recently its last token was issued.
     """
     family_to_revoke = None
     with transaction.atomic():
@@ -77,15 +102,23 @@ def rotate(raw):
         except RefreshToken.DoesNotExist:
             raise InvalidRefreshToken('unknown token')
 
+        now = timezone.now()
         user = token.user
         if token.revoked_at is not None:
+            if _concurrent_reuse(token, now) and user.is_active and token.password_stamp == password_stamp(user):
+                return user, issue_token_pair(user, family=token.family, session_started_at=token.session_started_at)
             reason = 'token reuse detected'
-        elif token.expires_at <= timezone.now() or not user.is_active or token.password_stamp != password_stamp(user):
+        elif (
+            token.expires_at <= now
+            or now - token.session_started_at >= session_max_age()
+            or not user.is_active
+            or token.password_stamp != password_stamp(user)
+        ):
             reason = 'token no longer valid'
         else:
-            token.revoked_at = timezone.now()
-            token.save(update_fields=['revoked_at'])
-            return user, issue_token_pair(user, family=token.family)
+            token.revoked_at = token.rotated_at = now
+            token.save(update_fields=['revoked_at', 'rotated_at'])
+            return user, issue_token_pair(user, family=token.family, session_started_at=token.session_started_at)
         family_to_revoke = token.family
 
     # Revoke outside the atomic block: raising inside it would roll the revocation back.

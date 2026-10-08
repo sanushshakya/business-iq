@@ -10,10 +10,11 @@ commodity the API lists every import measure; the ones used here are:
 * ``103`` "Third country duty" for ``ERGA OMNES`` (everyone): the standard duty, and
 * ``142`` "Tariff preference" for a specific country: the reduced duty a trade deal gives that country.
 
-Limits: duty groups such as the EU or the Developing Countries Trading Scheme are not expanded into their
-member countries (a preference is only found when the origin country itself is named in the measure), and
-duties that are not a plain percentage (e.g. "12 % + 15 GBP / 100 kg") are reported with ``rate_percent=None``.
-Preferences only apply with valid proof of origin, so only pass ``origin`` when the importer qualifies.
+Preferences are given to single countries and to groups (the EU, the Developing Countries Trading Scheme, ...).
+For a group, its member countries are looked up from ``/geographical_areas/{group}`` (cached for a week); if that
+lookup fails the group is skipped, so the result is the safe, higher, standard duty. Duties that are not a plain
+percentage (e.g. "12 % + 15 GBP / 100 kg") are reported with ``rate_percent=None``. Preferences only apply with
+valid proof of origin, so only pass ``origin`` when the importer qualifies.
 """
 
 import logging
@@ -34,6 +35,7 @@ TARIFF_PREFERENCE = '142'
 ERGA_OMNES = '1011'            # the "all countries" geographical area
 AD_VALOREM = '01'              # duty expression: "% or amount"
 COMMODITY_CODE = re.compile(r'^\d{10}$')
+COUNTRY_CODE = re.compile(r'^[A-Z]{2}$')  # anything else in a measure's geography is a group
 
 
 class TariffLookupError(Exception):
@@ -48,6 +50,7 @@ class TariffDuty:
     expression: str                  # as published, e.g. "6.00 %"
     source: str                      # 'third_country' or 'preference'
     origin: Optional[str]            # set when a country preference was applied
+    via: Optional[str] = None        # the country or group (e.g. '1013' = EU) the preference came from
 
 
 class HMRCTariffService:
@@ -89,6 +92,37 @@ class HMRCTariffService:
 
         cache.set(cache_key, result, self.CACHE_TIMEOUT)
         return result
+
+    def fetch_group_members(self, group_id: str) -> frozenset:
+        """ISO codes of the countries in a geographical group (e.g. '1013' = EU), cached for a week."""
+        cache_key = f"hmrc:group:{group_id}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            response = requests.get(
+                f"{self.base_url}/geographical_areas/{group_id}", timeout=self.timeout, headers={'Accept': 'application/json'}
+            )
+            response.raise_for_status()
+            payload = response.json()
+            members = frozenset(i['id'] for i in payload.get('included', []) if i['type'] == 'geographical_area')
+        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+            raise TariffLookupError(f"Could not read group {group_id}: {exc}") from exc
+        cache.set(cache_key, members, 7 * 24 * 60 * 60)
+        return members
+
+    def _applies_to(self, measure: dict, origin: str) -> bool:
+        """Does this preference measure cover ``origin``, directly or through a group it belongs to?"""
+        if origin in measure['excluded']:
+            return False
+        geography = measure['geography']
+        if COUNTRY_CODE.match(geography):
+            return geography == origin
+        try:
+            return origin in self.fetch_group_members(geography)
+        except TariffLookupError as exc:
+            logger.warning("Ignoring preference for group %s: %s", geography, exc)
+            return False
 
     @staticmethod
     def _parse(payload: dict) -> dict:
@@ -142,16 +176,16 @@ class HMRCTariffService:
         chosen = self._highest(standard)  # several can exist; be conservative and take the highest
         source, applied_origin = 'third_country', None
 
+        via = None
         if origin:
             origin = origin.upper()
             preferences = [
                 m for m in active
-                if m['type'] == TARIFF_PREFERENCE and m['geography'] == origin and origin not in m['excluded']
-                and m['rate_percent'] is not None
+                if m['type'] == TARIFF_PREFERENCE and m['rate_percent'] is not None and self._applies_to(m, origin)
             ]
             best = min(preferences, key=lambda m: Decimal(m['rate_percent'])) if preferences else None
             if best and (chosen['rate_percent'] is None or Decimal(best['rate_percent']) < Decimal(chosen['rate_percent'])):
-                chosen, source, applied_origin = best, 'preference', origin
+                chosen, source, applied_origin, via = best, 'preference', origin, best['geography']
 
         rate = Decimal(chosen['rate_percent']) if chosen['rate_percent'] is not None else None
         return TariffDuty(
@@ -161,6 +195,7 @@ class HMRCTariffService:
             expression=chosen['expression'],
             source=source,
             origin=applied_origin,
+            via=via,
         )
 
     @staticmethod

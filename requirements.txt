@@ -8,8 +8,7 @@ cryptography>=42
 requests>=2.31
 whitenoise>=6.6
 
-# Multi-tenancy / database
-django-tenants>=3.6.0
+# Database
 psycopg2-binary>=2.9.9
 
 # Async / background work

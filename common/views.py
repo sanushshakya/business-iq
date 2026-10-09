@@ -1,14 +1,14 @@
 # common/views.py
 
 from drf_spectacular.utils import extend_schema, inline_serializer
-from rest_framework import generics, serializers, status
+from rest_framework import generics, serializers, status, viewsets
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import DemandAlert, StockAlert
-from .tenancy import HasCompany, TenantScopedMixin, scope_queryset
-from .serializers import DemandAlertSerializer, StockAlertSerializer, VerificationTokenSerializer
+from .models import DemandAlert, Setting, StockAlert
+from .tenancy import HasCompany, IsCompanyStaffOrReadOnly, TenantScopedMixin, scope_queryset
+from .serializers import DemandAlertSerializer, SettingSerializer, StockAlertSerializer, VerificationTokenSerializer
 from .services.verification_token_service import VerificationTokenService
 
 
@@ -55,3 +55,11 @@ class VerifyEmailTokenView(APIView):
         if user_id is None:
             return Response({'error': 'Invalid or expired token'}, status=status.HTTP_400_BAD_REQUEST)
         return Response({'message': 'Token verified successfully', 'user_id': user_id})
+
+
+class SettingViewSet(TenantScopedMixin, viewsets.ModelViewSet):
+    """The company's configuration values. Anyone in the company can read them; only staff can change them."""
+
+    queryset = Setting.objects.all()
+    serializer_class = SettingSerializer
+    permission_classes = [IsCompanyStaffOrReadOnly]

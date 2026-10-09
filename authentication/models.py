@@ -10,11 +10,16 @@ class UserInvitation(models.Model):
     """
 
     company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE)
-    invited_email = models.EmailField(unique=True)
+    invited_email = models.EmailField()
     role = models.CharField(max_length=100)
     token = models.UUIDField(unique=True)
     expires_at = models.DateTimeField()
     accepted_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'invited_email'], name='one_invitation_per_email_per_company'),
+        ]
 
     def __str__(self):
         return f"Invitation for {self.invited_email} to join {self.company.name}"

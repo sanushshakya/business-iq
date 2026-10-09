@@ -121,6 +121,7 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "login": config("LOGIN_THROTTLE_RATE", default="10/min"),
         "refresh": config("REFRESH_THROTTLE_RATE", default="30/min"),
+        "password_reset": config("PASSWORD_RESET_THROTTLE_RATE", default="5/hour"),
     },
     "DEFAULT_PAGINATION_CLASS": "common.pagination.StandardResultsSetPagination",
     "EXCEPTION_HANDLER": "common.exceptions.custom_exception_handler",
@@ -140,6 +141,19 @@ JWT_REFRESH_SESSION_MAX_AGE_SECONDS = config('JWT_REFRESH_SESSION_MAX_AGE_SECOND
 # A refresh token used again within this many seconds of being exchanged is treated as a concurrent request
 # (e.g. two browser tabs) and answered with a fresh token, instead of as theft. 0 disables the allowance.
 JWT_REFRESH_REUSE_LEEWAY_SECONDS = config('JWT_REFRESH_REUSE_LEEWAY_SECONDS', default=10, cast=int)
+
+# Email (invitations, password resets). Prints to the console unless EMAIL_BACKEND is set to the SMTP backend.
+EMAIL_BACKEND = config('EMAIL_BACKEND', default='django.core.mail.backends.console.EmailBackend')
+EMAIL_HOST = config('EMAIL_HOST', default='localhost')
+EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
+EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
+EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='noreply@localhost')
+# Where the emailed links point (your front end). {token}, {uid} are filled in.
+INVITATION_ACCEPT_URL = config('INVITATION_ACCEPT_URL', default='http://localhost:3000/accept-invitation?token={token}')
+PASSWORD_RESET_URL = config('PASSWORD_RESET_URL', default='http://localhost:3000/reset-password?uid={uid}&token={token}')
+INVITATION_TTL_HOURS = config('INVITATION_TTL_HOURS', default=7 * 24, cast=int)
 
 # External services. The Hijri calendar (AlAdhan) and UK Trade Tariff APIs are public and need no key.
 HTTP_TIMEOUT_SECONDS = config('HTTP_TIMEOUT_SECONDS', default=10, cast=int)

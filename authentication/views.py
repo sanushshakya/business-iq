@@ -5,7 +5,9 @@ This file contains the views for handling password reset confirmations within a 
 """
 
 import uuid
+from datetime import timedelta
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.contrib.auth.tokens import default_token_generator
@@ -16,14 +18,23 @@ from django.utils.http import urlsafe_base64_decode
 from django.utils.translation import gettext as _
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers as drf_serializers
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
+from rest_framework import mixins, status, viewsets
 from authentication.models import UserInvitation
+from common.tenancy import HasCompany, TenantScopedMixin
 from authentication import refresh_tokens
-from authentication.serializers import LoginUserSerializer, PasswordResetConfirmSerializer, RefreshTokenSerializer
+from authentication.emails import send_invitation_email, send_password_reset_email
+from authentication.serializers import (
+    InvitationCreateSerializer,
+    InvitationSerializer,
+    LoginUserSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
+    RefreshTokenSerializer,
+)
 
 User = get_user_model()
 
@@ -101,6 +112,30 @@ class LogoutView(APIView):
         serializer.is_valid(raise_exception=True)
         refresh_tokens.logout(serializer.validated_data['refresh_token'])
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PasswordResetRequestView(APIView):
+    """
+    Start a password reset: email the account a link carrying the ``uidb64`` and ``token`` that
+    ``/auth/password_reset/confirm/`` expects.
+
+    The answer is the same whether or not the address has an account, so this cannot be used to find out
+    who is registered. It is rate limited (``PASSWORD_RESET_THROTTLE_RATE``).
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'password_reset'
+
+    @extend_schema(request=PasswordResetRequestSerializer, responses={200: None})
+    def post(self, request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = User.objects.filter(email__iexact=serializer.validated_data['email'], is_active=True).first()
+        if user is not None:
+            send_password_reset_email(user)
+        return Response({'detail': _('If that address has an account, a reset link has been sent.')})
 
 
 class PasswordResetConfirmView(APIView):
@@ -193,3 +228,52 @@ class AcceptInvitationView(APIView):
             invitation.save(update_fields=['accepted_at'])
 
         return Response({'message': 'Invitation accepted successfully'}, status=status.HTTP_201_CREATED)
+
+
+class InvitationViewSet(
+    TenantScopedMixin,
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """
+    Company staff invite new users by email; the link in the email leads to ``/auth/invitations/accept/``.
+
+    Inviting an address again re-sends the invitation if the previous one expired, and is refused while one is
+    still pending or once it has been accepted.
+    """
+
+    queryset = UserInvitation.objects.all()
+    serializer_class = InvitationSerializer
+    permission_classes = [IsAuthenticated, HasCompany, IsAdminUser]
+
+    @extend_schema(request=InvitationCreateSerializer, responses={201: InvitationSerializer})
+    def create(self, request, *args, **kwargs):
+        if request.user.company_id is None:
+            return Response({'detail': _('Your account is not linked to a company.')}, status=status.HTTP_400_BAD_REQUEST)
+        data = InvitationCreateSerializer(data=request.data)
+        data.is_valid(raise_exception=True)
+        email, role = data.validated_data['invited_email'], data.validated_data['role']
+
+        # One generic message: this must not reveal which addresses already have accounts.
+        if User.objects.filter(email__iexact=email).exists():
+            return Response({'invited_email': [_('This email address cannot be invited.')]}, status=status.HTTP_400_BAD_REQUEST)
+
+        existing = UserInvitation.objects.filter(company=request.user.company, invited_email__iexact=email).first()
+        if existing is not None and (existing.accepted_at or existing.expires_at > timezone.now()):
+            return Response({'invited_email': [_('This email address cannot be invited.')]}, status=status.HTTP_400_BAD_REQUEST)
+
+        fields = {'role': role, 'token': uuid.uuid4(), 'expires_at': timezone.now() + timedelta(hours=settings.INVITATION_TTL_HOURS)}
+        if existing is None:
+            invitation = UserInvitation.objects.create(company=request.user.company, invited_email=email, **fields)
+        else:  # the earlier invitation expired: issue a fresh token
+            for name, value in fields.items():
+                setattr(existing, name, value)
+            existing.save()
+            invitation = existing
+
+        body = InvitationSerializer(invitation).data
+        body['email_sent'] = send_invitation_email(invitation)
+        return Response(body, status=status.HTTP_201_CREATED)

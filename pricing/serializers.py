@@ -36,18 +36,11 @@ class SupplierInvoiceSerializer(TenantModelSerializer):
         return company.pk if company else None
 
     def validate(self, attrs):
+        attrs = super().validate(attrs)  # per-company uniqueness (invoice_number)
         company_id = self._company_id(attrs)
         supplier = attrs.get('supplier') or getattr(self.instance, 'supplier', None)
         if supplier is not None and company_id and supplier.company_id != company_id:
             raise serializers.ValidationError({'supplier': 'This supplier belongs to a different company.'})
-
-        number = attrs.get('invoice_number', getattr(self.instance, 'invoice_number', None))
-        if number and company_id:
-            clash = SupplierInvoice.objects.filter(company_id=company_id, invoice_number=number)
-            if self.instance is not None:
-                clash = clash.exclude(pk=self.instance.pk)
-            if clash.exists():
-                raise serializers.ValidationError({'invoice_number': 'An invoice with this number already exists.'})
         return attrs
 
 

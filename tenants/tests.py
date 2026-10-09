@@ -142,3 +142,90 @@ class CustomUserAdminTests(TestCase):
         })
         self.assertEqual(response.status_code, 302)
         self.assertEqual(get_user_model().objects.get(email='for-b@example.com').company, self.company_b)
+
+
+class TenantsApiTests(TestCase):
+    def setUp(self):
+        from rest_framework.test import APIClient
+
+        from common.tests.factories import CompanyFactory, UserFactory
+
+        self.CompanyFactory, self.UserFactory, self.APIClient = CompanyFactory, UserFactory, APIClient
+        self.company = CompanyFactory(name='Alpha Ltd')
+        self.member = UserFactory(company=self.company)
+        self.staff = UserFactory(company=self.company, is_staff=True)
+        self.rival = CompanyFactory(name='Rival Ltd')
+
+    def client_for(self, user):
+        client = self.APIClient()
+        client.force_authenticate(user)
+        return client
+
+    # ---- my company
+    def test_a_member_can_read_their_company(self):
+        from django.urls import reverse
+
+        body = self.client_for(self.member).get(reverse('my-company')).json()
+        self.assertEqual((body['name'], body['registration_number']), ('Alpha Ltd', self.company.registration_number))
+
+    def test_only_staff_can_edit_and_never_the_registration_number(self):
+        from django.urls import reverse
+
+        url = reverse('my-company')
+        self.assertEqual(self.client_for(self.member).patch(url, {'name': 'Hijack'}).status_code, 403)
+        response = self.client_for(self.staff).patch(url, {'name': 'Alpha Group', 'registration_number': 'FAKE-1'})
+        self.assertEqual(response.status_code, 200)
+        self.company.refresh_from_db()
+        self.assertEqual(self.company.name, 'Alpha Group')
+        self.assertNotEqual(self.company.registration_number, 'FAKE-1')
+        self.rival.refresh_from_db()
+        self.assertEqual(self.rival.name, 'Rival Ltd')
+
+    def test_users_without_a_company_are_turned_away(self):
+        from django.urls import reverse
+
+        self.assertEqual(self.client_for(self.UserFactory(company=None)).get(reverse('my-company')).status_code, 403)
+        root = self.UserFactory(company=None, is_superuser=True, is_staff=True)
+        self.assertEqual(self.client_for(root).get(reverse('my-company')).status_code, 404)
+
+    # ---- branches and tills
+    def test_staff_manage_branches_members_only_read(self):
+        from django.urls import reverse
+
+        url = reverse('branch-list')
+        payload = {'name': 'High Street', 'address': '1 High St'}
+        self.assertEqual(self.client_for(self.member).post(url, payload).status_code, 403)
+        response = self.client_for(self.staff).post(url, payload)
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()['company'], self.company.pk)
+        self.assertEqual(self.client_for(self.member).get(url).json()['count'], 1)
+
+    def test_branches_and_tills_are_private_to_their_company(self):
+        from django.urls import reverse
+
+        from tenants.models import Branch, Till
+
+        mine = Branch.objects.create(company=self.company, name='Mine', address='a')
+        theirs = Branch.objects.create(company=self.rival, name='Theirs', address='a')
+        Till.objects.create(branch=theirs, number=1, device_id='RIVAL-DEVICE')
+
+        client = self.client_for(self.staff)
+        self.assertEqual([b['name'] for b in client.get(reverse('branch-list')).json()['results']], ['Mine'])
+        self.assertEqual(client.get(reverse('branch-detail', args=[theirs.pk])).status_code, 404)
+        self.assertEqual(client.get(reverse('till-list')).json()['results'], [])
+
+        # cannot hang a till on someone else's branch
+        response = client.post(reverse('till-list'), {'branch': theirs.pk, 'number': 2, 'device_id': 'SNEAKY'})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('branch', response.json())
+        self.assertEqual(client.post(reverse('till-list'), {'branch': mine.pk, 'number': 1, 'device_id': 'MINE-1'}).status_code, 201)
+
+    def test_a_till_device_id_cannot_be_registered_twice(self):
+        from django.urls import reverse
+
+        from tenants.models import Branch
+
+        branch = Branch.objects.create(company=self.company, name='B', address='a')
+        client = self.client_for(self.staff)
+        self.assertEqual(client.post(reverse('till-list'), {'branch': branch.pk, 'number': 1, 'device_id': 'D-1'}).status_code, 201)
+        self.assertEqual(client.post(reverse('till-list'), {'branch': branch.pk, 'number': 2, 'device_id': 'D-1'}).status_code, 400)

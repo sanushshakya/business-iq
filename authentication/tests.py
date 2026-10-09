@@ -515,3 +515,224 @@ class RefreshTokenSessionLimitTests(TestCase):
         self.age_session(hours=2)
         self.assertEqual(self.refresh(body['refresh_token']).status_code, 401)
 
+
+
+class InvitationApiTests(TestCase):
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
+        self.company = Company.objects.create(name='Inviter Co', registration_number='INV-1', address='x')
+        self.other = Company.objects.create(name='Other Co', registration_number='INV-2', address='x')
+        self.staff = User.objects.create_user(email='boss@example.com', password='pw-12345678', company=self.company, is_staff=True)
+        self.member = User.objects.create_user(email='member@example.com', password='pw-12345678', company=self.company)
+        self.client = APIClient()
+        self.client.force_authenticate(self.staff)
+        self.url = reverse('invitation-list')
+
+    def invite(self, email='new@example.com', role='Buyer', client=None):
+        return (client or self.client).post(self.url, {'invited_email': email, 'role': role})
+
+    def test_staff_invite_by_email_and_the_token_never_appears_in_the_response(self):
+        from django.core import mail
+
+        response = self.invite()
+        self.assertEqual(response.status_code, 201, response.content)
+        body = response.json()
+        self.assertEqual((body['invited_email'], body['role'], body['status'], body['email_sent']), ('new@example.com', 'Buyer', 'pending', True))
+        self.assertNotIn('token', body)
+
+        invitation = UserInvitation.objects.get()
+        self.assertEqual(invitation.company, self.company)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ['new@example.com'])
+        self.assertIn(str(invitation.token), mail.outbox[0].body)
+        self.assertIn('Inviter Co', mail.outbox[0].subject)
+
+    def test_the_full_flow_from_invitation_email_to_a_working_login(self):
+        import re
+
+        from django.core import mail
+
+        self.invite(email='newhire@example.com', role='Buyer')
+        token = re.search(r'token=([0-9a-f-]{36})', mail.outbox[0].body).group(1)
+
+        anonymous = APIClient()
+        accepted = anonymous.post(reverse('accept-invitation'), {'token': token, 'password': 'a-good-password-1'})
+        self.assertEqual(accepted.status_code, 201, accepted.content)
+
+        login = anonymous.post(reverse('login'), {'username': 'newhire@example.com', 'password': 'a-good-password-1'})
+        self.assertEqual(login.status_code, 200)
+        user = User.objects.get(email='newhire@example.com')
+        self.assertEqual(user.company, self.company)
+        self.assertTrue(user.groups.filter(name='Buyer').exists())
+        self.assertEqual(self.client.get(self.url).json()['results'][0]['status'], 'accepted')
+
+    def test_only_company_staff_can_invite_or_list(self):
+        member_client = APIClient()
+        member_client.force_authenticate(self.member)
+        self.assertEqual(self.invite(client=member_client).status_code, 403)
+        self.assertEqual(member_client.get(self.url).status_code, 403)
+        self.assertEqual(APIClient().get(self.url).status_code, 401)
+        self.assertFalse(UserInvitation.objects.exists())
+
+    def test_cannot_invite_twice_while_pending_or_after_acceptance(self):
+        self.assertEqual(self.invite().status_code, 201)
+        again = self.invite()
+        self.assertEqual(again.status_code, 400)
+        self.assertIn('invited_email', again.json())
+        self.assertEqual(UserInvitation.objects.count(), 1)
+
+    def test_an_expired_invitation_can_be_reissued_with_a_new_token(self):
+        from datetime import timedelta
+
+        from django.core import mail
+        from django.utils import timezone
+
+        self.invite()
+        old = UserInvitation.objects.get()
+        old_token = old.token
+        UserInvitation.objects.update(expires_at=timezone.now() - timedelta(days=1))
+
+        response = self.invite(role='Manager')
+        self.assertEqual(response.status_code, 201, response.content)
+        refreshed = UserInvitation.objects.get()
+        self.assertEqual(refreshed.pk, old.pk)
+        self.assertNotEqual(refreshed.token, old_token)
+        self.assertEqual((refreshed.role, response.json()['status']), ('Manager', 'pending'))
+        self.assertGreater(refreshed.expires_at, timezone.now())
+        self.assertEqual(len(mail.outbox), 2)
+
+        # the stale link no longer works
+        stale = APIClient().post(reverse('accept-invitation'), {'token': str(old_token), 'password': 'a-good-password-1'})
+        self.assertEqual(stale.status_code, 400)
+
+    def test_existing_accounts_cannot_be_invited_and_the_answer_does_not_say_why(self):
+        for email in ('member@example.com', 'MEMBER@example.com'):
+            response = self.invite(email=email)
+            self.assertEqual(response.status_code, 400)
+        elsewhere = User.objects.create_user(email='elsewhere@example.com', password='pw-12345678', company=self.other)
+        reply_for_other_company = self.invite(email=elsewhere.email).json()
+        reply_for_nobody = self.invite(email='nobody-at-all@example.com')
+        self.assertEqual(reply_for_other_company, {'invited_email': ['This email address cannot be invited.']})
+        self.assertEqual(reply_for_nobody.status_code, 201)
+
+    def test_the_same_address_can_be_invited_by_two_companies(self):
+        other_staff = User.objects.create_user(email='boss2@example.com', password='pw-12345678', company=self.other, is_staff=True)
+        other_client = APIClient()
+        other_client.force_authenticate(other_staff)
+        self.assertEqual(self.invite(email='shared@example.com').status_code, 201)
+        self.assertEqual(self.invite(email='shared@example.com', client=other_client).status_code, 201)
+        self.assertEqual(UserInvitation.objects.count(), 2)
+
+    def test_invitations_are_private_to_their_company_and_can_be_revoked(self):
+        theirs = UserInvitation.objects.create(
+            company=self.other, invited_email='x@example.com', role='Buyer', token=uuid.uuid4(),
+            expires_at=timezone_now() + timedelta_days(3))
+        self.invite()
+        mine = UserInvitation.objects.get(company=self.company)
+        self.assertEqual([i['invited_email'] for i in self.client.get(self.url).json()['results']], ['new@example.com'])
+        self.assertEqual(self.client.get(reverse('invitation-detail', args=[theirs.pk])).status_code, 404)
+        self.assertEqual(self.client.delete(reverse('invitation-detail', args=[theirs.pk])).status_code, 404)
+        self.assertEqual(self.client.delete(reverse('invitation-detail', args=[mine.pk])).status_code, 204)
+        self.assertTrue(UserInvitation.objects.filter(pk=theirs.pk).exists())
+
+    def test_a_revoked_invitation_cannot_be_accepted(self):
+        self.invite()
+        token = str(UserInvitation.objects.get().token)
+        UserInvitation.objects.all().delete()
+        response = APIClient().post(reverse('accept-invitation'), {'token': token, 'password': 'a-good-password-1'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_invalid_input_is_rejected(self):
+        for payload in ({}, {'invited_email': 'not-an-email', 'role': 'Buyer'}, {'invited_email': 'a@example.com'},
+                        {'invited_email': 'a@example.com', 'role': '<script>'}):
+            self.assertEqual(self.client.post(self.url, payload).status_code, 400, payload)
+
+    def test_a_mail_outage_does_not_lose_the_invitation(self):
+        from unittest import mock
+
+        with mock.patch('authentication.emails.send_mail', side_effect=OSError('smtp down')):
+            response = self.invite()
+        self.assertEqual(response.status_code, 201)
+        self.assertFalse(response.json()['email_sent'])
+        self.assertEqual(UserInvitation.objects.count(), 1)
+
+    def test_users_without_a_company_cannot_invite(self):
+        root = User.objects.create_superuser(email='root@example.com', password='pw-12345678')
+        client = APIClient()
+        client.force_authenticate(root)
+        self.assertEqual(self.invite(client=client).status_code, 400)
+
+
+def timezone_now():
+    from django.utils import timezone
+
+    return timezone.now()
+
+
+def timedelta_days(days):
+    from datetime import timedelta
+
+    return timedelta(days=days)
+
+
+class PasswordResetRequestTests(TestCase):
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
+        self.company = Company.objects.create(name='Reset Co', registration_number='RST-1', address='x')
+        self.user = User.objects.create_user(email='forgetful@example.com', password='old-password-1', company=self.company)
+        self.url = reverse('password_reset_request')
+        self.client = APIClient()
+
+    def test_the_emailed_link_resets_the_password_end_to_end(self):
+        import re
+
+        from django.core import mail
+
+        response = self.client.post(self.url, {'email': 'forgetful@example.com'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+        uid, token = re.search(r'uid=([^&\s]+)&token=([^\s]+)', mail.outbox[0].body).groups()
+
+        confirm = self.client.post(reverse('password_reset_confirm'), {
+            'uidb64': uid, 'token': token, 'new_password1': 'brand-new-pass-1', 'new_password2': 'brand-new-pass-1'})
+        self.assertEqual(confirm.status_code, 200, confirm.content)
+        login = self.client.post(reverse('login'), {'username': 'forgetful@example.com', 'password': 'brand-new-pass-1'})
+        self.assertEqual(login.status_code, 200)
+        # the link is single use: the password hash changed, so the token no longer verifies
+        again = self.client.post(reverse('password_reset_confirm'), {
+            'uidb64': uid, 'token': token, 'new_password1': 'another-pass-123', 'new_password2': 'another-pass-123'})
+        self.assertEqual(again.status_code, 400)
+
+    def test_the_answer_is_identical_for_unknown_and_inactive_addresses(self):
+        from django.core import mail
+
+        known = self.client.post(self.url, {'email': 'forgetful@example.com'})
+        unknown = self.client.post(self.url, {'email': 'nobody@example.com'})
+        User.objects.filter(pk=self.user.pk).update(is_active=False)
+        inactive = self.client.post(self.url, {'email': 'forgetful@example.com'})
+        self.assertEqual((known.status_code, unknown.status_code, inactive.status_code), (200, 200, 200))
+        self.assertEqual(known.json(), unknown.json())
+        self.assertEqual(known.json(), inactive.json())
+        self.assertEqual(len(mail.outbox), 1)  # only the first, genuine request sent anything
+
+    def test_email_matching_ignores_case(self):
+        from django.core import mail
+
+        self.client.post(self.url, {'email': 'FORGETFUL@EXAMPLE.COM'})
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_invalid_input_and_rate_limit(self):
+        self.assertEqual(self.client.post(self.url, {'email': 'nope'}).status_code, 400)
+        self.assertEqual(self.client.post(self.url, {}).status_code, 400)
+        statuses = [self.client.post(self.url, {'email': f'x{i}@example.com'}).status_code for i in range(7)]
+        self.assertIn(429, statuses)
+
+    def test_a_mail_outage_does_not_change_the_answer(self):
+        from unittest import mock
+
+        with mock.patch('authentication.emails.send_mail', side_effect=OSError('smtp down')):
+            self.assertEqual(self.client.post(self.url, {'email': 'forgetful@example.com'}).status_code, 200)

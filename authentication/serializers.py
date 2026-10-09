@@ -1,5 +1,8 @@
 from django.contrib.auth import authenticate
+from django.utils import timezone
 from rest_framework import serializers
+
+from .models import UserInvitation
 
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
@@ -59,3 +62,28 @@ class LoginUserSerializer(serializers.Serializer):
 
 class RefreshTokenSerializer(serializers.Serializer):
     refresh_token = serializers.CharField()
+
+
+class InvitationSerializer(serializers.ModelSerializer):
+    """An invitation as shown to staff. The token is deliberately absent: it travels only by email."""
+
+    status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UserInvitation
+        fields = ['id', 'invited_email', 'role', 'status', 'expires_at', 'accepted_at']
+        read_only_fields = fields
+
+    def get_status(self, invitation) -> str:
+        if invitation.accepted_at:
+            return 'accepted'
+        return 'expired' if invitation.expires_at <= timezone.now() else 'pending'
+
+
+class InvitationCreateSerializer(serializers.Serializer):
+    invited_email = serializers.EmailField()
+    role = serializers.RegexField(r'^[\w .-]+$', max_length=100, help_text='Name of the group the new user joins.')
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()

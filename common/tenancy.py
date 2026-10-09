@@ -12,6 +12,7 @@ Models that are not listed (ProductCategory, CulturalEvent, PricingPlan, the dem
 shared reference data: any signed-in user can read them, only staff can change them.
 """
 
+from django.db.models import UniqueConstraint
 from rest_framework import permissions, serializers
 
 TENANT_LOOKUPS = {
@@ -28,6 +29,8 @@ TENANT_LOOKUPS = {
     'logistics.FreightAlert': 'company',
     'logistics.LogisticProvider': 'company',
     'logistics.Delivery': 'provider__company',
+    'logistics.UserSupplier': 'company',
+    'logistics.AlternativeSupplier': 'company',
     'pricing.Subscription': 'user__company',
     'pricing.SupplierInvoice': 'company',
     'pricing.InvoiceLineItem': 'invoice__company',
@@ -36,6 +39,9 @@ TENANT_LOOKUPS = {
     'sync.ShopifyConnection': 'company',
     'common.DemandAlert': 'company',
     'common.StockAlert': 'product__company',
+    'common.FreightRateCache': 'company',
+    'common.Setting': 'company',
+    'authentication.UserInvitation': 'company',
 }
 
 
@@ -87,6 +93,18 @@ class SharedReferenceMixin:
         return _stable_order(super().get_queryset())
 
 
+class IsCompanyStaffOrReadOnly(permissions.BasePermission):
+    """Any member of the company may read; only staff (or superusers) may change company-level data."""
+
+    message = 'Only staff can change this.'
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not (user and user.is_authenticated and (user.is_superuser or user.company_id)):
+            return False
+        return request.method in permissions.SAFE_METHODS or user.is_staff
+
+
 class TenantScopedMixin:
     """
     For DRF generic views / viewsets over a tenant-owned model.
@@ -117,7 +135,52 @@ class TenantModelSerializer(serializers.ModelSerializer):
 
     * related-object fields only accept rows the user's company owns
     * ``company`` is read-only for users that belong to a company (it is set from the user)
+    * unique constraints that include ``company`` are checked against the user's company, so a duplicate
+      is a clean 400 (DRF skips them because ``company`` is read-only) and one company can never learn
+      that another uses a name or number
     """
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        self._check_company_unique_constraints(attrs)
+        return attrs
+
+    def _company_id_for(self, attrs):
+        if self.instance is not None:
+            return getattr(self.instance, 'company_id', None)
+        user = getattr(self.context.get('request'), 'user', None)
+        if user is not None and getattr(user, 'company_id', None):
+            return user.company_id
+        company = attrs.get('company')
+        return company.pk if company else None
+
+    def _check_company_unique_constraints(self, attrs):
+        model = self.Meta.model
+        if not any(f.name == 'company' for f in model._meta.concrete_fields):
+            return
+        company_id = self._company_id_for(attrs)
+        if company_id is None:
+            return
+
+        constraints = [c.fields for c in model._meta.constraints if isinstance(c, UniqueConstraint) and not c.condition]
+        constraints += [list(group) for group in model._meta.unique_together]
+        for fields in constraints:
+            if 'company' not in fields:
+                continue
+            others = [f for f in fields if f != 'company']
+            lookup = {}
+            for name in others:
+                if name in attrs:
+                    lookup[name] = attrs[name]
+                elif self.instance is not None:
+                    lookup[name] = getattr(self.instance, name)
+            if len(lookup) != len(others):
+                continue  # a field is missing (a required-field error will be reported anyway)
+            clash = model.objects.filter(company_id=company_id, **lookup)
+            if self.instance is not None:
+                clash = clash.exclude(pk=self.instance.pk)
+            if clash.exists():
+                raise serializers.ValidationError({others[0]: f'A record with this {others[0].replace("_", " ")} already exists.'})
 
     def get_fields(self):
         fields = super().get_fields()

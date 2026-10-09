@@ -1,6 +1,8 @@
 # logistics/models.py
 
 from django.db import models
+
+from common.models import BaseModel
 from tenants.models import Company
 
 class FreightAlert(models.Model):
@@ -62,3 +64,39 @@ class Delivery(models.Model):
 
     def __str__(self):
         return f"Delivery for {self.provider.name} on {self.shipment_date}"
+
+
+class _SupplierBase(BaseModel):
+    """Fields shared by the company's own suppliers and the alternatives suggested for them."""
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='+')
+    name = models.CharField(max_length=255)
+    country_of_origin = models.CharField(max_length=100)
+    product_categories = models.JSONField(default=list, help_text="Names of the product categories supplied, e.g. ['Dried fruit'].")
+    lead_time_days = models.PositiveIntegerField(help_text='Typical days from order to delivery.')
+
+    class Meta:
+        abstract = True
+        ordering = ['name']
+
+    def __str__(self):
+        return f"{self.name} ({self.country_of_origin})"
+
+
+class UserSupplier(_SupplierBase):
+    """A supplier the company buys from today, kept for supply-chain planning."""
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='user_suppliers')
+    notes = models.TextField(blank=True)
+
+    class Meta(_SupplierBase.Meta):
+        constraints = [models.UniqueConstraint(fields=['company', 'name'], name='unique_user_supplier_name_per_company')]
+
+
+class AlternativeSupplier(_SupplierBase):
+    """A supplier that could replace one of the company's own (read-only through the API)."""
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='alternative_suppliers')
+
+    class Meta(_SupplierBase.Meta):
+        constraints = [models.UniqueConstraint(fields=['company', 'name'], name='unique_alt_supplier_name_per_company')]

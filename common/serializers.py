@@ -5,7 +5,7 @@ from rest_framework import serializers
 
 from common.tenancy import TenantModelSerializer
 
-from .models import DemandAlert, StockAlert
+from .models import DemandAlert, Setting, StockAlert
 
 
 class StockAlertSerializer(TenantModelSerializer):
@@ -25,3 +25,10 @@ class DemandAlertSerializer(TenantModelSerializer):
 
 class VerificationTokenSerializer(serializers.Serializer):
     token = serializers.CharField()
+
+
+class SettingSerializer(TenantModelSerializer):
+    class Meta:
+        model = Setting
+        fields = '__all__'
+        read_only_fields = ['created_at', 'updated_at']

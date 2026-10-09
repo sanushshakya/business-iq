@@ -5,7 +5,15 @@ This file contains Django models for the pricing application.
 """
 
 from django.conf import settings
+import uuid
+
 from django.db import models
+
+def invoice_upload_path(instance, filename):
+    """Store invoices as ``invoices/<company>/<random>.<ext>``: the client's file name is never used."""
+    extension = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'bin'
+    return f"invoices/{instance.company_id}/{uuid.uuid4().hex}.{extension}"
+
 
 class PricingPlan(models.Model):
     """
@@ -61,6 +69,7 @@ class SupplierInvoice(models.Model):
     issued_date = models.DateField()
     due_date = models.DateField(null=True, blank=True)
     payment_status = models.CharField(max_length=10, choices=INVOICE_STATUS_CHOICES, default='pending')
+    file = models.FileField(upload_to=invoice_upload_path, blank=True, help_text='The scanned or PDF invoice (PDF, PNG or JPEG).')
 
     class Meta:
         constraints = [

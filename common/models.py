@@ -31,6 +31,9 @@ class DemandAlert(models.Model):
     event = models.ForeignKey(
         'demand_calendar.Event', null=True, blank=True, on_delete=models.SET_NULL, related_name='stock_up_alerts'
     )
+    cultural_event = models.ForeignKey(
+        'demand.CulturalEvent', null=True, blank=True, on_delete=models.SET_NULL, related_name='stock_up_alerts'
+    )
 
     class Meta:
         constraints = [
@@ -38,6 +41,11 @@ class DemandAlert(models.Model):
                 fields=['company', 'product', 'event'],
                 condition=Q(event__isnull=False),
                 name='one_demand_alert_per_product_and_event',
+            ),
+            models.UniqueConstraint(
+                fields=['company', 'product', 'cultural_event'],
+                condition=Q(cultural_event__isnull=False),
+                name='one_demand_alert_per_product_and_cultural_event',
             ),
         ]
 
@@ -62,7 +70,9 @@ class StockAlert(models.Model):
 
 class FreightRateCache(models.Model):
     """
-    The last rate seen for a company's shipping service, so ``check_freight_rates`` can tell when it moves.
+    The baseline rate for a company's shipping service, which ``check_freight_rates`` compares new rates with.
+
+    It is recorded the first time a service is seen and replaced whenever an alert is raised.
     """
 
     company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='freight_rates')

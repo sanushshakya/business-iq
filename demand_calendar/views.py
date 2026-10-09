@@ -44,6 +44,7 @@ def get_next_three_months_events(request):
         if not months or months[-1]['month'] != label:
             months.append({'month': label, 'events': []})
         months[-1]['events'].append({
+            'id': event.pk,
             'name': event.name,
             'date_range': f"{event.start_date.strftime('%d %b %Y')} - {event.end_date.strftime('%d %b %Y')}",
             'product_categories': [category.name for category in event.product_categories.all()],

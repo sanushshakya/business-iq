@@ -13,7 +13,7 @@ const CulturalCalendar = () => {
         // Fetch event data from the server
         const fetchEvents = async () => {
             try {
-                const response = await axios.get('/api/events/');
+                const response = await axios.get('/calendar/upcoming/');
                 setEvents(response.data);
             } catch (err) {
                 setError(err.message);
@@ -30,14 +30,14 @@ const CulturalCalendar = () => {
 
     return (
         <ul className="cultural-calendar">
-            {Object.entries(events).map(([month, eventList]) => (
+            {events.map(({ month, events: eventList }) => (
                 <li key={month}>
                     <h2>{month}</h2>
                     <ul>
                         {eventList.map((event) => (
                             <li key={event.id} className="event-card">
                                 <h3>{event.name}</h3>
-                                <p>Date: {event.gregorian_date_range}</p>
+                                <p>Date: {event.date_range}</p>
                                 <p>Product Categories: {event.product_categories.join(', ')}</p>
                                 <p>Demand Multiplier: {event.demand_multiplier}</p>
                                 {event.demand_alert_link && (

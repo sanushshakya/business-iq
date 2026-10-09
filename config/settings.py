@@ -153,6 +153,9 @@ DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='noreply@localhost')
 # Where the emailed links point (your front end). {token}, {uid} are filled in.
 INVITATION_ACCEPT_URL = config('INVITATION_ACCEPT_URL', default='http://localhost:3000/accept-invitation?token={token}')
 PASSWORD_RESET_URL = config('PASSWORD_RESET_URL', default='http://localhost:3000/reset-password?uid={uid}&token={token}')
+# Demand planning: how far ahead events raise stock-up alerts, and how much sales history sets the baseline.
+DEMAND_ALERT_LEAD_DAYS = config('DEMAND_ALERT_LEAD_DAYS', default=30, cast=int)
+DEMAND_HISTORY_DAYS = config('DEMAND_HISTORY_DAYS', default=30, cast=int)
 INVITATION_TTL_HOURS = config('INVITATION_TTL_HOURS', default=7 * 24, cast=int)
 
 # External services. The Hijri calendar (AlAdhan) and UK Trade Tariff APIs are public and need no key.
@@ -236,6 +239,10 @@ USE_L10N = True
 
 USE_TZ = True
 
+
+# Uploaded files (supplier invoices). Never served publicly: downloads go through authenticated endpoints.
+MEDIA_ROOT = Path(config('MEDIA_ROOT', default=str(BASE_DIR / 'media')))
+INVOICE_MAX_UPLOAD_BYTES = config('INVOICE_MAX_UPLOAD_BYTES', default=10 * 1024 * 1024, cast=int)
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/

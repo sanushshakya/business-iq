@@ -11,7 +11,7 @@ the API's default (Umm al-Qura) calendar, so actual moon-sighting dates can diff
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import requests
@@ -62,6 +62,34 @@ class HijriCalendarService:
     def to_gregorian(self, year: int, month: int, day: int) -> date:
         gregorian = self._get(f"hToG/{day:02d}-{month:02d}-{year}")['gregorian']['date']
         return datetime.strptime(gregorian, API_DATE_FORMAT).date()
+
+    def _cached_gregorian(self, year: int, month: int, day: int) -> date:
+        key = f"hijri:gregorian:{year}-{month:02d}-{day:02d}"
+        found = cache.get(key)
+        if found is None:
+            found = self.to_gregorian(year, month, day)
+            cache.set(key, found, 30 * 24 * 60 * 60)  # a date conversion never changes
+        return found
+
+    def get_upcoming_events(self, today: Optional[date] = None, horizon_days: int = 120) -> list:
+        """All major events from ``today`` up to ``horizon_days`` ahead, in date order ([] if the API is down)."""
+        today = today or date.today()
+        horizon = today + timedelta(days=horizon_days)
+        try:
+            year, month, day = self.hijri_today(today)
+            candidates = [(year, m, d, name) for m, d, name in MAJOR_EVENTS if (m, d) >= (month, day)]
+            candidates += [(year + 1, m, d, name) for m, d, name in MAJOR_EVENTS]
+            events = []
+            for event_year, event_month, event_day, name in candidates:
+                event_date = self._cached_gregorian(event_year, event_month, event_day)
+                if event_date > horizon:
+                    break  # candidates are in calendar order
+                if event_date >= today:
+                    events.append(HijriEvent(name=name, date=event_date))
+            return events
+        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+            logger.warning("Error fetching upcoming Hijri events: %s", exc)
+            return []
 
     def get_next_event(self, today: Optional[date] = None) -> Optional[HijriEvent]:
         """

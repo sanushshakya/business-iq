@@ -30,14 +30,14 @@ class PriceRecommendationService:
     def __init__(self, logger_name='PriceRecommendationService'):
         self.logger = logging.getLogger(logger_name)
 
-    def calculate_recommended_price(self, landed_cost, margin_percent):
-        """Landed cost plus margin, e.g. cost 10 with 25% margin -> 12.50."""
+    def calculate_recommended_price(self, landed_cost, margin_percent) -> Decimal:
+        """Landed cost plus a markup, e.g. cost 10 with a 25% margin -> 12.50."""
+        landed_cost, margin_percent = Decimal(str(landed_cost)), Decimal(str(margin_percent))
         if landed_cost <= 0 or margin_percent <= 0:
             raise ValueError("Landed cost and margin percent must be greater than zero.")
-        recommended_price = landed_cost * (1 + margin_percent / 100)
+        recommended_price = (landed_cost * (1 + margin_percent / 100)).quantize(Decimal('0.01'))
         self.logger.info(
-            "Calculated recommended price: %s (landed cost %s, margin %s%%)",
-            recommended_price, landed_cost, margin_percent,
+            "Calculated recommended price: %s (landed cost %s, margin %s%%)", recommended_price, landed_cost, margin_percent
         )
         return recommended_price
 
@@ -57,64 +57,67 @@ class PriceRecommendationService:
         """
         The price a batch's markdown should be calculated from.
 
-        If the batch has already been marked down and nobody has changed the price since, that is
-        the price before the first markdown (so repeated runs, or moving to a deeper tier, never
-        compound). Otherwise it is the product's current price.
+        If a markdown for this batch has already been *approved* and nobody has changed the price since, that is
+        the price before the first markdown (so deeper tiers never compound). Otherwise it is the current price.
         """
         product = stock_batch.product
-        logs = list(
-            PriceChangeLog.objects.filter(stock_batch=stock_batch, product=product, reason=self.DECAY_REASON)
-            .order_by('changed_at', 'pk')
+        applied = list(
+            PriceChangeLog.objects.filter(
+                stock_batch=stock_batch, product=product, reason=self.DECAY_REASON, is_approved=True
+            ).order_by('changed_at', 'pk')
         )
-        if logs and logs[-1].new_price == product.price:
-            return logs[0].old_price
+        if applied and applied[-1].new_price == product.price:
+            return applied[0].old_price
         return product.price
 
-    def apply_markdown_discounts(self, stock_batch):
+    def propose_markdown(self, stock_batch):
         """
-        Mark down the batch's product according to remaining shelf life.
+        Propose a markdown for the batch's product according to its remaining shelf life.
 
-        Idempotent: running it again with the same shelf life leaves the price unchanged.
-        Returns ``(old_price, new_price)``; both are equal when nothing changes.
+        Nothing about the product changes: a pending ``PriceChangeLog`` is created (or refreshed) for staff to
+        approve. Returns ``(log_or_None, changed)``; ``changed`` is False when nothing new needed recording.
         """
-        discount = calculate_markdown_percentage(self.shelf_life_remaining_percent(stock_batch))
         product = stock_batch.product
-        current_price = product.price
-        if discount == 0:
-            return current_price, current_price
+        pending = PriceChangeLog.objects.filter(stock_batch=stock_batch, reason=self.DECAY_REASON, is_approved=False)
+        discount = calculate_markdown_percentage(self.shelf_life_remaining_percent(stock_batch))
+        new_price = None
+        if discount:
+            new_price = (self.base_price_for(stock_batch) * (Decimal(100) - discount) / Decimal(100)).quantize(Decimal('0.01'))
+        if new_price is None or new_price == product.price:
+            return (None, bool(pending.delete()[0]))  # nothing to propose; drop any stale proposal
 
-        base = self.base_price_for(stock_batch)
-        new_price = (base * (Decimal(100) - discount) / Decimal(100)).quantize(Decimal('0.01'))
-        if new_price == current_price:
-            return current_price, current_price
-
-        product.price = new_price
-        product.save(update_fields=['price'])
-        self.logger.info(
-            "Applied %s%% markdown to %s: %s -> %s", discount, product.name, current_price, new_price
-        )
-        return current_price, new_price
-
-    def create_price_change_log_entry(self, stock_batch, old_price, new_price, reason):
-        return PriceChangeLog.objects.create(
-            product=stock_batch.product,
-            stock_batch=stock_batch,
-            old_price=old_price,
-            new_price=new_price,
-            reason=reason,
-        )
+        log = pending.first()
+        if log is None:
+            log = PriceChangeLog.objects.create(
+                product=product, stock_batch=stock_batch, old_price=product.price, new_price=new_price, reason=self.DECAY_REASON
+            )
+            self.logger.info("Proposed %s%% markdown for %s: %s -> %s", discount, product.name, product.price, new_price)
+            return log, True
+        if (log.old_price, log.new_price) == (product.price, new_price):
+            return log, False
+        log.old_price, log.new_price = product.price, new_price
+        log.save(update_fields=['old_price', 'new_price'])
+        return log, True
 
     def query_stock_batches_for_decay_pricing(self):
         """Batches that still have stock to sell."""
         return StockBatch.objects.filter(quantity__gt=0).select_related('product')
 
-    def apply_decay_pricing(self):
+    def propose_decay_markdowns(self) -> int:
         """
-        Apply markdowns to all eligible batches and log each price change.
+        Propose markdowns for stock nearing expiry. Safe to run repeatedly (e.g. daily).
 
-        Safe to run repeatedly (e.g. daily): only a change of tier produces a new price and log.
+        A product's price is shared by all its batches, so only the batch closest to expiry drives it; proposals
+        for its other batches are dropped. Returns how many proposals were created, changed or withdrawn.
         """
+        driving = {}
         for batch in self.query_stock_batches_for_decay_pricing():
-            old_price, new_price = self.apply_markdown_discounts(batch)
-            if old_price != new_price:
-                self.create_price_change_log_entry(batch, old_price, new_price, reason=self.DECAY_REASON)
+            remaining = self.shelf_life_remaining_percent(batch)
+            if batch.product_id not in driving or remaining < driving[batch.product_id][0]:
+                driving[batch.product_id] = (remaining, batch)
+
+        changes = sum(self.propose_markdown(batch)[1] for _, batch in driving.values())
+        stale = PriceChangeLog.objects.filter(reason=self.DECAY_REASON, is_approved=False).exclude(
+            stock_batch__in=[batch for _, batch in driving.values()]
+        )
+        return changes + stale.delete()[0]

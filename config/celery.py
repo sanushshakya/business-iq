@@ -16,6 +16,10 @@ app.conf.beat_schedule = {
         'task': 'common.tasks.scan_demand_alerts',
         'schedule': crontab(hour=6, minute=0, day_of_week=1),  # Mondays 06:00 UTC
     },
+    'sync-islamic-events-weekly': {
+        'task': 'demand_calendar.tasks.sync_islamic_events',
+        'schedule': crontab(hour=5, minute=0, day_of_week=0),  # Sundays 05:00 UTC, before Monday's alert scan
+    },
     'check-low-stock-hourly': {
         'task': 'common.tasks.check_low_stock',
         'schedule': crontab(minute=0),
@@ -27,6 +31,10 @@ app.conf.beat_schedule = {
     'prune-refresh-tokens-daily': {
         'task': 'authentication.tasks.prune_refresh_tokens',
         'schedule': crontab(hour=3, minute=15),
+    },
+    'propose-decay-markdowns-daily': {
+        'task': 'pricing.tasks.propose_decay_markdowns',
+        'schedule': crontab(hour=2, minute=0),
     },
     'sync-approved-prices-every-15-minutes': {
         'task': 'pricing.tasks.sync_approved_prices',

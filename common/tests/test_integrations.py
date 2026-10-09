@@ -108,6 +108,47 @@ class HijriCalendarServiceTests(SimpleTestCase):
                 self.assertIsNone(self.service.get_next_event(date(2026, 10, 5)), failure)
 
 
+class HijriUpcomingEventsTests(SimpleTestCase):
+    CONVERSIONS = {
+        '01-09-1448': '08-02-2027', '27-09-1448': '06-03-2027', '01-10-1448': '09-03-2027',
+        '09-12-1448': '15-05-2027', '10-12-1448': '16-05-2027', '01-01-1449': '06-06-2027',
+        '10-01-1449': '15-06-2027', '12-03-1449': '14-08-2027',  # Ashura, and Mawlid (the first one past a 300 day horizon)
+    }
+
+    def setUp(self):
+        cache.clear()
+        self.service = HijriCalendarService()
+
+    def upcoming(self, horizon_days, today=date(2026, 10, 5)):
+        with mock.patch('common.services.hijri_calendar_service.requests.get', side_effect=aladhan((1448, 4, 24), self.CONVERSIONS)) as get:
+            return self.service.get_upcoming_events(today, horizon_days), get
+
+    def test_events_inside_the_horizon_in_date_order(self):
+        events, _ = self.upcoming(200)  # to 2027-04-23
+        self.assertEqual([(e.name, e.date) for e in events], [
+            ('Start of Ramadan', date(2027, 2, 8)), ('Laylat al-Qadr', date(2027, 3, 6)), ('Eid al-Fitr', date(2027, 3, 9))])
+
+    def test_a_short_horizon_finds_nothing(self):
+        self.assertEqual(self.upcoming(30)[0], [])
+
+    def test_a_long_horizon_rolls_into_the_next_hijri_year(self):
+        events, _ = self.upcoming(300)  # to 2027-08-01
+        self.assertEqual([e.name for e in events[-2:]], ['Islamic New Year', 'Ashura'])
+        self.assertEqual([e.date for e in events[-2:]], [date(2027, 6, 6), date(2027, 6, 15)])
+        self.assertEqual(len(events), 7)
+
+    def test_date_conversions_are_cached(self):
+        _, first = self.upcoming(200)
+        _, second = self.upcoming(200)
+        conversions = lambda get: [c for c in get.call_args_list if '/hToG/' in c.args[0]]  # noqa: E731
+        self.assertEqual(len(conversions(first)), 4)    # three events, plus the first one past the horizon
+        self.assertEqual(len(conversions(second)), 0)
+
+    def test_an_unreachable_api_gives_an_empty_list(self):
+        with mock.patch('common.services.hijri_calendar_service.requests.get', side_effect=requests.ConnectionError('down')):
+            self.assertEqual(self.service.get_upcoming_events(date(2026, 10, 5)), [])
+
+
 # ---------------------------------------------------------------------------------------------
 # UK Trade Tariff
 # ---------------------------------------------------------------------------------------------

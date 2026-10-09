@@ -13,5 +13,6 @@ router.register(r'invoice-items', views.InvoiceLineItemViewSet, basename='invoic
 router.register(r'price-changes', views.PriceChangeLogViewSet, basename='pricechangelog')
 
 urlpatterns = [
+    path('recommendation/', views.PriceRecommendationView.as_view(), name='price-recommendation'),
     path('', include(router.urls)),
 ]

@@ -31,24 +31,50 @@ class FreightAlertApiTests(TestCase):
 class CheckFreightRatesTests(TestCase):
     def setUp(self):
         self.company = CompanyFactory()
-        FreightAlert.objects.create(
-            company=self.company, shipping_lane='CN-UK', current_rate=100, baseline_rate=100, change_percent=0
-        )
 
-    def run_task(self, rate):
-        payload = [{'company_id': self.company.pk, 'shipping_lane': 'CN-UK', 'current_rate': rate}]
+    def run_task(self, rate, lane='CN-UK', **extra):
+        payload = [{'company_id': self.company.pk, 'shipping_lane': lane, 'current_rate': rate, **extra}]
         with mock.patch('logistics.tasks.requests.get') as get:
             get.return_value.json.return_value = payload
             return check_freight_rates()
 
-    def test_alert_created_when_change_exceeds_threshold(self):
-        self.assertEqual(self.run_task(110), 1)
-        latest = FreightAlert.objects.order_by('-alert_date', '-id').first()
-        self.assertEqual(latest.baseline_rate, 100)
-        self.assertAlmostEqual(latest.change_percent, 10.0)
+    def baseline(self, lane='CN-UK'):
+        return FreightRateCache.objects.get(company=self.company, service_code=lane)
 
-    def test_no_alert_for_small_change(self):
+    def test_the_first_sighting_only_records_a_baseline(self):
+        self.assertEqual(self.run_task(100, currency='USD'), 0)
+        self.assertEqual((self.baseline().rate, self.baseline().currency), (100, 'USD'))
+        self.assertFalse(FreightAlert.objects.exists())
+
+    def test_a_small_change_neither_alerts_nor_moves_the_baseline(self):
+        self.run_task(100)
         self.assertEqual(self.run_task(102), 0)
+        self.assertEqual(self.baseline().rate, 100)
+
+    def test_a_big_change_alerts_and_becomes_the_new_baseline(self):
+        self.run_task(100)
+        self.assertEqual(self.run_task(110), 1)
+        alert = FreightAlert.objects.get()
+        self.assertEqual((alert.baseline_rate, alert.current_rate, alert.shipping_lane), (100, 110, 'CN-UK'))
+        self.assertAlmostEqual(alert.change_percent, 10.0)
+        self.assertEqual(self.baseline().rate, 110)
+        self.assertEqual(self.run_task(111), 0)  # measured from the new baseline now
+
+    def test_a_slow_drift_still_alerts_once_it_adds_up(self):
+        self.run_task(100)
+        self.assertEqual(self.run_task(103), 0)
+        self.assertEqual(self.run_task(106), 1)  # 6% above the original baseline
+
+    def test_falls_count_too(self):
+        self.run_task(100)
+        self.assertEqual(self.run_task(90), 1)
+        self.assertAlmostEqual(FreightAlert.objects.get().change_percent, -10.0)
+
+    def test_services_and_companies_are_tracked_separately(self):
+        self.run_task(100, lane='CN-UK')
+        self.run_task(100, lane='IN-UK')
+        self.assertEqual(self.run_task(120, lane='CN-UK'), 1)
+        self.assertEqual(self.baseline('IN-UK').rate, 100)
 
     def test_api_failure_is_handled(self):
         with mock.patch('logistics.tasks.requests.get', side_effect=requests.ConnectionError):

@@ -87,15 +87,15 @@ reference data: readable by everyone, editable by staff. Superusers are not scop
 | Path | Purpose |
 | --- | --- |
 | `config/` | Project package: settings, URLs, ASGI/WSGI, Celery app and beat schedule |
-| `tenants/` | `Company`, `Branch`, `Till`, and the custom email-login `CustomUser` |
+| `tenants/` | `Company`, `Branch`, `Till` (with an API) and the custom email-login `CustomUser` |
 | `authentication/` | Login with access + refresh tokens, password reset, invitations |
 | `inventory/` | Products, categories, suppliers, orders, stock batches and movements |
 | `demand/`, `demand_calendar/` | Demand requests, cultural events, event/product keywords, upcoming-events feed |
-| `logistics/` | Freight alerts, providers, deliveries |
+| `logistics/` | Freight alerts, providers, deliveries, the company's suppliers and suggested alternatives |
 | `pricing/` | Plans, subscriptions, supplier invoices, price-change log |
 | `sync/` | Sync tasks and Shopify connections (tokens encrypted at rest) |
-| `common/` | Alerts API, tenancy helpers, encrypted field, websocket consumer, business services |
-| `frontend/` | Standalone UI components (not served by Django) |
+| `common/` | Alerts, per-company settings, freight-rate baselines, tenancy helpers, encrypted field, websocket consumer, business services |
+| `frontend/` | Standalone React/Angular UI components (no build setup; not served by Django). They call the endpoints above |
 
 Business logic lives in `common/services/` (price recommendation, landed-cost calculation, HMRC tariff,
 Hijri calendar, Shopify, verification tokens). Periodic jobs are in each app's `tasks.py`.
@@ -104,6 +104,47 @@ Hijri calendar, Shopify, verification tokens). Periodic jobs are in each app's `
 
 All settings come from environment variables / `.env` (see `.env.example`): database, Redis, Celery,
 token lifetimes, login/refresh throttles, field-encryption keys, and the external services (below).
+
+## What the API covers
+
+| Area | Endpoints |
+| --- | --- |
+| Sign-in | `POST /auth/login/`, `/auth/token/refresh/`, `/auth/logout/` |
+| Passwords | `POST /auth/password_reset/` (emails a link), `/auth/password_reset/confirm/` |
+| Invitations | `/auth/invitations/` (staff invite by email, list, revoke), `POST /auth/invitations/accept/` (public) |
+| Company | `/tenants/company/` (yours; staff can edit), `/tenants/branches/`, `/tenants/tills/` |
+| Inventory | `/inventory/products/` (and `.../{id}/stock-projection/`), `categories/`, `suppliers/`, `orders/`, `batches/`, `movements/` |
+| Demand | `/demand/demands/`, `events/`, `keywords/`; calendar: `/calendar/upcoming/` (next 3 months), `events/`, `alerts/` |
+| Alerts | `/common/api/alerts/stock/`, `/common/api/alerts/demand/create/`, `.../demand/dismiss/{id}/` |
+| Logistics | `/logistics/freight-alerts/`, `providers/`, `deliveries/`, `suppliers/`, `alternative-suppliers/` (read-only), `freight-rates/` (read-only) |
+| Pricing | `/pricing/price-changes/` (request, `approve`), `recommendation/`, `invoices/` (with file upload and `.../{id}/file/` download), `invoice-items/`, `plans/`, `subscriptions/` |
+| Settings | `/common/api/settings/` (per-company key/value; staff write) |
+| Shopify / sync | `/sync/shopify-connections/`, `/sync/tasks/` |
+
+Full, always-current reference with request and response shapes: `/api/docs/`.
+
+**Stock projection.** `GET /inventory/products/{id}/stock-projection/?days=30` projects a product's stock day by day from its
+sales over the last `DEMAND_HISTORY_DAYS` days, scaled up on days covered by a demand-calendar event for its category. It returns
+the expected reorder and stock-out dates.
+
+**Price changes need approval.** Requesting a change (or the nightly markdown job proposing one) only records it. Staff approve it
+to apply the new price to the product (refused if the price has moved in the meantime), and the Shopify sync then pushes approved
+prices to the store. `POST /pricing/recommendation/` works out landed cost (price plus import duty) and a recommended selling price.
+
+### Scheduled jobs (Celery beat, `config/celery.py`)
+
+| Job | When (UTC) | What it does |
+| --- | --- | --- |
+| `demand_calendar.sync_islamic_events` | Sundays 05:00 | Adds the next four months of Islamic events to the demand calendar (staff then assign categories and tune multipliers) |
+| `common.scan_demand_alerts` | Mondays 06:00 | Raises "stock up" alerts for products in an upcoming event's categories when stock will not cover the extra demand |
+| `common.check_low_stock` | hourly | Stock alerts for products at or below their reorder threshold |
+| `logistics.check_freight_rates` | hourly, :30 | Freight alert when a service's rate moves by `RATE_CHANGE_THRESHOLD` % from its baseline (needs `FREIGHT_RATES_API_URL`) |
+| `pricing.propose_decay_markdowns` | daily 02:00 | Proposes markdowns for stock nearing expiry, as pending price changes |
+| `pricing.sync_approved_prices` | every 15 min | Pushes approved prices to Shopify |
+| `authentication.prune_refresh_tokens` | daily 03:15 | Deletes long-dead refresh tokens |
+
+Emails (invitations, password resets) are sent with Django's mail settings (`EMAIL_*`); by default they are printed to the console.
+Uploaded invoices are kept under `MEDIA_ROOT` and are only downloadable through the authenticated endpoint.
 
 ## External services
 

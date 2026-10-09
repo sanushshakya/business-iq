@@ -20,7 +20,7 @@ class DemandAlertSerializer(TenantModelSerializer):
     class Meta:
         model = DemandAlert
         fields = '__all__'
-        read_only_fields = ['created_at', 'is_handled']
+        read_only_fields = ['created_at', 'is_handled', 'event', 'cultural_event']
 
 
 class VerificationTokenSerializer(serializers.Serializer):

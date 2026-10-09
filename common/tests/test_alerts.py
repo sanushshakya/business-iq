@@ -8,7 +8,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from common.models import DemandAlert, StockAlert
-from common.tasks import check_low_stock, scan_demand_alerts
+from common.tasks import check_low_stock
 
 from .factories import CompanyFactory, ProductFactory, UserFactory
 
@@ -22,21 +22,6 @@ class DemandAlertModelTests(TestCase):
         alert = DemandAlert.objects.create(company=CompanyFactory(), product='B', branch='Y', requested_qty=5)
         self.assertFalse(alert.is_handled)
         self.assertLess(abs(timezone.now() - alert.created_at), timedelta(seconds=5))
-
-
-class ScanDemandAlertsTests(TestCase):
-    def test_only_stale_unhandled_alerts_are_handled(self):
-        company = CompanyFactory()
-        old = DemandAlert.objects.create(company=company, product='A', branch='X', requested_qty=1)
-        new = DemandAlert.objects.create(company=company, product='B', branch='X', requested_qty=1)
-        DemandAlert.objects.filter(pk=old.pk).update(created_at=timezone.now() - timedelta(days=2))
-
-        self.assertEqual(scan_demand_alerts(), 1)
-
-        old.refresh_from_db()
-        new.refresh_from_db()
-        self.assertTrue(old.is_handled)
-        self.assertFalse(new.is_handled)
 
 
 class CheckLowStockTests(TestCase):

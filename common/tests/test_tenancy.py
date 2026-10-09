@@ -61,9 +61,15 @@ class ListAndDetailIsolationTests(TenancyTestCase):
         log = PriceChangeLog.objects.create(
             product=ProductFactory(company=self.company_b), old_price=2, new_price=1
         )
-        self.assertEqual(self.client_a.post(reverse('pricechangelog-approve', args=[log.pk])).status_code, 404)
+        url = reverse('pricechangelog-approve', args=[log.pk])
+        self.assertEqual(self.client_a.post(url).status_code, 403)  # approving is staff-only, for anyone
+        staff_a = APIClient()
+        staff_a.force_authenticate(UserFactory(company=self.company_a, is_staff=True))
+        self.assertEqual(staff_a.post(url).status_code, 404)        # and a company's staff cannot reach another's
         log.refresh_from_db()
         self.assertFalse(log.is_approved)
+        log.product.refresh_from_db()
+        self.assertEqual(log.product.price, 100)
 
     def test_common_alert_endpoints_are_scoped(self):
         StockAlert.objects.create(product=ProductFactory(company=self.company_b), current_qty=1, threshold=5)

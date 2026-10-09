@@ -26,3 +26,6 @@ staticfiles/
 .idea/
 
 .env
+
+# Uploaded files
+media/

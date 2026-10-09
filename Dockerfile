@@ -12,6 +12,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN useradd --create-home --uid 1000 app
 COPY --chown=app:app . .
 
+# Uploaded supplier invoices live here (docker-compose mounts a volume on it).
+RUN mkdir -p /app/media && chown app:app /app/media
+
 # Collect static files for the admin and API docs (served by WhiteNoise).
 # The key is only needed so settings can load; it is not kept in the image environment.
 RUN SECRET_KEY=build-only-key-never-used-at-runtime-0123456789 python manage.py collectstatic --noinput

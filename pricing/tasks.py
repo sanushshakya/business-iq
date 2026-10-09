@@ -4,6 +4,7 @@ import logging
 
 from celery import shared_task
 
+from common.services.price_recommendation_service import PriceRecommendationService
 from common.services.shopify_service import ShopifyService
 from sync.models import ShopifyConnection
 
@@ -44,3 +45,13 @@ def sync_approved_prices():
 
     logger.info("Finished syncing approved prices (%s processed).", processed)
     return processed
+
+
+@shared_task
+def propose_decay_markdowns():
+    """
+    Propose markdowns for stock nearing expiry as pending price changes for staff to approve.
+
+    Returns the number of proposals created, changed or withdrawn.
+    """
+    return PriceRecommendationService().propose_decay_markdowns()

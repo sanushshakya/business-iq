@@ -48,6 +48,14 @@ Django 5.2+/DRF monolith. `config/` is only the project package (settings, urls,
 
 **Realtime.** `config/asgi.py` routes websockets through `common/routing.py` (`/ws/sync/`). The channel layer is in-memory unless `USE_REDIS_CHANNELS=True`.
 
+**Demand planning.** `common.tasks.scan_demand_alerts` generates `DemandAlert`s from upcoming `demand_calendar.Event`s (product categories x multiplier) and `demand.CulturalEvent`s (products linked via `EventProductKeyword`, multiplier from the company's `cultural_event_multiplier` `Setting`); demand is estimated from outbound `StockMovement`s (`inventory/projections.py`, also behind `.../stock-projection/`). Alerts are unique per product and event, so the scan is idempotent. `demand_calendar.sync_islamic_events` fills the calendar from `HijriCalendarService`.
+
+**Pricing.** `PriceChangeLog` is a *request*: clients cannot set `is_approved`/`is_processed`/`old_price`. The `approve` action applies `new_price` to the product (409 if the price moved) and only then does `sync_approved_prices` push it to Shopify. `PriceRecommendationService.propose_decay_markdowns` (nightly) only proposes; one batch per product (the nearest to expiry) drives its price. Invoice files are validated by extension *and* magic bytes, stored under a random name, and served only by an authenticated endpoint.
+
+**Per-company uniqueness.** `TenantModelSerializer` also checks unique constraints that include `company` (DRF skips them because `company` is read-only), so use `UniqueConstraint(fields=['company', ...])` and the duplicate becomes a clean 400.
+
+**Email.** `authentication/emails.py` sends invitation and password-reset links (templates in `settings.INVITATION_ACCEPT_URL` / `PASSWORD_RESET_URL`); a mail outage is logged, never raised.
+
 **Encrypted fields.** `common.fields.EncryptedTextField` (Fernet, keys from `FIELD_ENCRYPTION_KEYS`, falling back to a key derived from `SECRET_KEY`) is used for `ShopifyConnection.access_token`; it cannot be filtered on, and legacy plaintext values still read fine.
 
 **Static files** are served by WhiteNoise (`STATIC_ROOT=staticfiles/`, collected in the Docker build).

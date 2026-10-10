@@ -4,7 +4,12 @@ from common.tenancy import TenantAdminMixin
 
 from .models import Product, ProductCategory, StockBatch, StockMovement
 
-admin.site.register(ProductCategory)
+
+@admin.register(ProductCategory)
+class ProductCategoryAdmin(admin.ModelAdmin):
+    """Shared reference data: only staff can edit it through the API, and the admin follows suit."""
+
+    search_fields = ['name']
 
 
 @admin.register(Product)

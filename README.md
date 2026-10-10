@@ -95,7 +95,6 @@ reference data: readable by everyone, editable by staff. Superusers are not scop
 | `pricing/` | Plans, subscriptions, supplier invoices, price-change log |
 | `sync/` | Sync tasks and Shopify connections (tokens encrypted at rest) |
 | `common/` | Alerts, per-company settings, freight-rate baselines, tenancy helpers, encrypted field, websocket consumer, business services |
-| `frontend/` | Standalone React/Angular UI components (no build setup; not served by Django). They call the endpoints above |
 
 Business logic lives in `common/services/` (price recommendation, landed-cost calculation, HMRC tariff,
 Hijri calendar, Shopify, verification tokens). Periodic jobs are in each app's `tasks.py`.

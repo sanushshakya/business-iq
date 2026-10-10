@@ -19,7 +19,9 @@ from .serializers import (
 )
 
 
-class FreightAlertViewSet(TenantScopedMixin, viewsets.ModelViewSet):
+class FreightAlertViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
+    """Alerts are raised by the freight-rate check; clients can read and dismiss them, not write them."""
+
     queryset = FreightAlert.objects.all()
     serializer_class = FreightAlertSerializer
 

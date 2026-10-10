@@ -26,6 +26,18 @@ class FreightAlertApiTests(TestCase):
         alert.refresh_from_db()
         self.assertTrue(alert.is_dismissed)
 
+    def test_alerts_cannot_be_written_by_clients(self):
+        client = APIClient()
+        user = UserFactory()
+        client.force_authenticate(user)
+        alert = FreightAlert.objects.create(
+            company=user.company, shipping_lane='CN-UK', current_rate=110, baseline_rate=100, change_percent=10
+        )
+        payload = {'shipping_lane': 'X', 'current_rate': '1', 'baseline_rate': '1', 'change_percent': 0}
+        self.assertEqual(client.post(reverse('freightalert-list'), payload).status_code, 405)
+        self.assertEqual(client.patch(reverse('freightalert-detail', args=[alert.pk]), payload).status_code, 405)
+        self.assertEqual(client.delete(reverse('freightalert-detail', args=[alert.pk])).status_code, 405)
+
 
 @override_settings(FREIGHT_RATES_API_URL='https://rates.test', RATE_CHANGE_THRESHOLD=5.0)
 class CheckFreightRatesTests(TestCase):
@@ -78,6 +90,25 @@ class CheckFreightRatesTests(TestCase):
 
     def test_api_failure_is_handled(self):
         with mock.patch('logistics.tasks.requests.get', side_effect=requests.ConnectionError):
+            self.assertEqual(check_freight_rates(), 0)
+
+    def test_bad_entries_are_skipped_without_losing_the_good_ones(self):
+        payload = [
+            {'company_id': 999999, 'shipping_lane': 'CN-UK', 'current_rate': 100},   # unknown company
+            {'shipping_lane': 'CN-UK', 'current_rate': 100},                          # missing company
+            {'company_id': self.company.pk, 'shipping_lane': 'CN-UK', 'current_rate': 'abc'},
+            {'company_id': self.company.pk, 'shipping_lane': 'CN-UK', 'current_rate': -5},
+            {'company_id': self.company.pk, 'shipping_lane': 'IN-UK', 'current_rate': 100},
+        ]
+        with mock.patch('logistics.tasks.requests.get') as get:
+            get.return_value.json.return_value = payload
+            self.assertEqual(check_freight_rates(), 0)
+        self.assertEqual(FreightRateCache.objects.count(), 1)
+        self.assertEqual(self.baseline('IN-UK').rate, 100)
+
+    def test_a_payload_that_is_not_a_list_is_ignored(self):
+        with mock.patch('logistics.tasks.requests.get') as get:
+            get.return_value.json.return_value = {'error': 'nope'}
             self.assertEqual(check_freight_rates(), 0)
 
     @override_settings(FREIGHT_RATES_API_URL='')

@@ -43,7 +43,7 @@ class LogisticProvider(models.Model):
     company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='logistic_providers')
     name = models.CharField(max_length=255)
     address = models.TextField()
-    phone_number = models.CharField(max_length=15)
+    phone_number = models.CharField(max_length=32)
 
     def __str__(self):
         return self.name

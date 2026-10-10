@@ -12,7 +12,9 @@ from .models import AlternativeSupplier, UserSupplier, FreightAlert, LogisticPro
 class FreightAlertSerializer(TenantModelSerializer):
     class Meta:
         model = FreightAlert
-        fields = '__all__'
+        fields = ['id', 'company', 'shipping_lane', 'current_rate', 'baseline_rate', 'change_percent',
+                  'alert_date', 'is_dismissed']
+        read_only_fields = fields
 
 
 class LogisticProviderSerializer(TenantModelSerializer):

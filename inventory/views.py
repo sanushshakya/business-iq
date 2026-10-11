@@ -1,7 +1,7 @@
 # inventory/views.py
 
 from drf_spectacular.utils import OpenApiParameter, extend_schema
-from rest_framework import viewsets
+from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
@@ -60,6 +60,11 @@ class StockBatchViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     serializer_class = StockBatchSerializer
 
 
-class StockMovementViewSet(TenantScopedMixin, viewsets.ModelViewSet):
+class StockMovementViewSet(
+    TenantScopedMixin, mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Append-only stock ledger: creating a movement updates the batch and product stock."""
+
     queryset = StockMovement.objects.all()
     serializer_class = StockMovementSerializer

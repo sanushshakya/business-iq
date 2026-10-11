@@ -152,3 +152,73 @@ class StockProjectionTests(TestCase):
         theirs = ProductFactory(company=CompanyFactory())
         self.assertEqual(self.client.get(self.url(theirs)).status_code, 404)
         self.assertIn(APIClient().get(self.url()).status_code, (401, 403))
+
+
+class StockLedgerTests(TestCase):
+    def setUp(self):
+        self.user = UserFactory()
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        self.batch = StockBatchFactory(product__company=self.user.company, quantity=10, product__stock_quantity=10)
+
+    def move(self, quantity, kind, batch=None):
+        return self.client.post(
+            reverse('stockmovement-list'),
+            {'batch': (batch or self.batch).pk, 'quantity': quantity, 'movement_type': kind},
+        )
+
+    def stock(self):
+        self.batch.refresh_from_db()
+        self.batch.product.refresh_from_db()
+        return self.batch.quantity, self.batch.product.stock_quantity
+
+    def test_movements_update_batch_and_product_stock(self):
+        self.assertEqual(self.move(4, 'outbound').status_code, 201)
+        self.assertEqual(self.stock(), (6, 6))
+        self.assertEqual(self.move(5, 'inbound').status_code, 201)
+        self.assertEqual(self.stock(), (11, 11))
+
+    def test_cannot_take_more_than_the_batch_holds(self):
+        response = self.move(11, 'outbound')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('quantity', response.json())
+        self.assertEqual(self.stock(), (10, 10))
+
+    def test_quantity_must_be_positive(self):
+        self.assertEqual(self.move(0, 'inbound').status_code, 400)
+        self.assertEqual(self.move(-3, 'outbound').status_code, 400)
+
+    def test_the_ledger_cannot_be_edited_or_deleted(self):
+        pk = self.move(1, 'inbound').json()['id']
+        url = reverse('stockmovement-detail', args=[pk])
+        self.assertEqual(self.client.patch(url, {'quantity': 99}).status_code, 405)
+        self.assertEqual(self.client.delete(url).status_code, 405)
+
+    def test_another_companys_batch_is_not_reachable(self):
+        other = StockBatchFactory(quantity=10)
+        self.assertEqual(self.move(1, 'inbound', batch=other).status_code, 400)
+
+
+class ValidationTests(TestCase):
+    def setUp(self):
+        self.user = UserFactory()
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+
+    def test_product_price_and_stock_cannot_be_negative(self):
+        response = self.client.post(
+            reverse('product-list'), {'name': 'X', 'description': '-', 'price': '-1', 'stock_quantity': -1})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(set(response.json()), {'price', 'stock_quantity'})
+
+    def test_order_quantity_must_be_positive(self):
+        product = ProductFactory(company=self.user.company)
+        response = self.client.post(reverse('order-list'), {'product': product.pk, 'quantity': 0})
+        self.assertEqual(response.status_code, 400)
+
+    def test_supplier_names_are_unique_per_company_only(self):
+        payload = {'name': 'Acme', 'contact_info': 'x', 'address': 'y'}
+        self.assertEqual(self.client.post(reverse('supplier-list'), payload).status_code, 201)
+        self.assertEqual(self.client.post(reverse('supplier-list'), payload).status_code, 400)
+        self.client.force_authenticate(UserFactory())
+        self.assertEqual(self.client.post(reverse('supplier-list'), payload).status_code, 201)

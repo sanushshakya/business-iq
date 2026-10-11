@@ -24,6 +24,7 @@ class StockBatchAdmin(TenantAdminMixin, admin.ModelAdmin):
     list_display = ('batch_number', 'product', 'quantity', 'expiration_date')
     search_fields = ['batch_number', 'product__name']
     list_filter = ['expiration_date']
+    list_select_related = ('product',)
 
 
 @admin.register(StockMovement)
@@ -31,3 +32,14 @@ class StockMovementAdmin(TenantAdminMixin, admin.ModelAdmin):
     list_display = ('id', 'batch', 'movement_type', 'quantity', 'date_time')
     search_fields = ['batch__batch_number']
     list_filter = ['movement_type', 'date_time']
+    list_select_related = ('batch__product',)
+
+    # The ledger is append-only: editing it here would leave batch and product stock out of step.
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

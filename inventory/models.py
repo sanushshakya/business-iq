@@ -75,6 +75,9 @@ class Supplier(models.Model):
     contact_info = models.TextField()
     address = models.TextField()
 
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['company', 'name'], name='unique_supplier_name_per_company')]
+
     def __str__(self):
         return self.name
 

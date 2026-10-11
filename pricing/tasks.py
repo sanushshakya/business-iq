@@ -16,12 +16,13 @@ logger = logging.getLogger(__name__)
 @shared_task
 def sync_approved_prices():
     """
-    Push approved, unprocessed price changes to Shopify.
+    Push approved, unprocessed price changes to Shopify, oldest first so the newest price is the one left in
+    the store when a product has several.
 
     Returns the number of logs processed successfully.
     """
     processed = 0
-    logs = PriceChangeLog.objects.filter(is_approved=True, is_processed=False).select_related('product')
+    logs = PriceChangeLog.objects.filter(is_approved=True, is_processed=False).select_related('product').order_by('changed_at', 'id')
     for log in logs:
         product = log.product
         if not (product.company_id and product.shopify_product_id):

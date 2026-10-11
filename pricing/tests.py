@@ -173,6 +173,15 @@ class SyncApprovedPricesTests(TestCase):
         self.assertFalse(log.is_processed)
 
     @mock.patch('pricing.tasks.ShopifyService')
+    def test_oldest_change_is_pushed_first_so_the_newest_price_wins(self, service_cls):
+        product = ProductFactory(company=self.company, shopify_product_id=7)
+        PriceChangeLog.objects.create(product=product, old_price=10, new_price=9, is_approved=True)
+        PriceChangeLog.objects.create(product=product, old_price=9, new_price=8, is_approved=True)
+        self.assertEqual(sync_approved_prices(), 2)
+        prices = [call.args[1] for call in service_cls.return_value.update_product_price.call_args_list]
+        self.assertEqual(prices, [Decimal('9.00'), Decimal('8.00')])
+
+    @mock.patch('pricing.tasks.ShopifyService')
     def test_unapproved_and_processed_logs_are_ignored(self, service_cls):
         product = ProductFactory(company=self.company, shopify_product_id=1)
         PriceChangeLog.objects.create(product=product, old_price=10, new_price=9, is_approved=False)
@@ -410,3 +419,50 @@ class InvoiceFileTests(TestCase):
         self.assertTrue(os.path.exists(path))
         self.assertEqual(self.client.delete(reverse('supplierinvoice-detail', args=[invoice.pk])).status_code, 204)
         self.assertFalse(os.path.exists(path))
+
+
+class BillingAndInvoiceValidationTests(TestCase):
+    def setUp(self):
+        self.staff = UserFactory(is_staff=True)
+        self.client = APIClient()
+        self.client.force_authenticate(self.staff)
+
+    def test_subscription_cannot_end_before_it_starts(self):
+        from pricing.models import PricingPlan
+
+        plan = PricingPlan.objects.create(name='Pro', price_per_month=50)
+        response = self.client.post(reverse('subscription-list'), {
+            'user': self.staff.pk, 'plan': plan.pk, 'start_date': '2026-05-01', 'end_date': '2026-04-01'})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('end_date', response.json())
+
+    def test_plan_price_cannot_be_negative(self):
+        response = self.client.post(reverse('pricingplan-list'), {'name': 'Bad', 'price_per_month': '-1'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_invoice_due_date_cannot_precede_issue_date(self):
+        from inventory.models import Supplier
+
+        supplier = Supplier.objects.create(company=self.staff.company, name='Acme', contact_info='x', address='y')
+        response = self.client.post(reverse('supplierinvoice-list'), {
+            'invoice_number': 'D-1', 'supplier': supplier.pk, 'total_amount': '10',
+            'issued_date': '2026-05-10', 'due_date': '2026-05-01'})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('due_date', response.json())
+
+    def test_line_item_total_must_match_quantity_times_price(self):
+        from datetime import date
+
+        from inventory.models import Supplier
+
+        supplier = Supplier.objects.create(company=self.staff.company, name='Acme', contact_info='x', address='y')
+        invoice = SupplierInvoice.objects.create(
+            company=self.staff.company, supplier=supplier, invoice_number='L-1', total_amount=10,
+            issued_date=date.today())
+        payload = {'invoice': invoice.pk, 'description': 'Dates', 'quantity': 3, 'price_per_unit': '2.50'}
+        self.assertEqual(
+            self.client.post(reverse('invoicelineitem-list'), {**payload, 'total_price': '9.00'}).status_code, 400)
+        self.assertEqual(
+            self.client.post(reverse('invoicelineitem-list'), {**payload, 'total_price': '7.50'}).status_code, 201)
+        self.assertEqual(
+            self.client.post(reverse('invoicelineitem-list'), {**payload, 'quantity': 0, 'total_price': '0'}).status_code, 400)

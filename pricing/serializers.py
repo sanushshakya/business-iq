@@ -21,16 +21,29 @@ FILE_SIGNATURES = {
 }
 
 
+def _check_date_order(attrs, instance, earlier, later, message):
+    start = attrs.get(earlier, getattr(instance, earlier, None))
+    end = attrs.get(later, getattr(instance, later, None))
+    if start and end and end < start:
+        raise serializers.ValidationError({later: message})
+
+
 class PricingPlanSerializer(TenantModelSerializer):
     class Meta:
         model = PricingPlan
         fields = '__all__'
+        extra_kwargs = {'price_per_month': {'min_value': 0}}
 
 
 class SubscriptionSerializer(TenantModelSerializer):
     class Meta:
         model = Subscription
         fields = '__all__'
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        _check_date_order(attrs, self.instance, 'start_date', 'end_date', 'end_date must not be before start_date.')
+        return attrs
 
 
 class SupplierInvoiceSerializer(TenantModelSerializer):
@@ -45,6 +58,7 @@ class SupplierInvoiceSerializer(TenantModelSerializer):
     class Meta:
         model = SupplierInvoice
         fields = '__all__'
+        extra_kwargs = {'total_amount': {'min_value': 0}}
 
     def get_file_url(self, invoice) -> Optional[str]:
         if not invoice.file:
@@ -78,6 +92,7 @@ class SupplierInvoiceSerializer(TenantModelSerializer):
     def validate(self, attrs):
         attrs = super().validate(attrs)  # per-company uniqueness (invoice_number)
         company_id = self._company_id(attrs)
+        _check_date_order(attrs, self.instance, 'issued_date', 'due_date', 'due_date must not be before issued_date.')
         supplier = attrs.get('supplier') or getattr(self.instance, 'supplier', None)
         if supplier is not None and company_id and supplier.company_id != company_id:
             raise serializers.ValidationError({'supplier': 'This supplier belongs to a different company.'})
@@ -88,6 +103,16 @@ class InvoiceLineItemSerializer(TenantModelSerializer):
     class Meta:
         model = InvoiceLineItem
         fields = '__all__'
+        extra_kwargs = {'quantity': {'min_value': 1}, 'price_per_unit': {'min_value': 0}, 'total_price': {'min_value': 0}}
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        quantity = attrs.get('quantity', getattr(self.instance, 'quantity', None))
+        unit = attrs.get('price_per_unit', getattr(self.instance, 'price_per_unit', None))
+        total = attrs.get('total_price', getattr(self.instance, 'total_price', None))
+        if None not in (quantity, unit, total) and total != (unit * quantity).quantize(Decimal('0.01')):
+            raise serializers.ValidationError({'total_price': 'Must equal quantity x price_per_unit.'})
+        return attrs
 
 
 class PriceChangeLogSerializer(TenantModelSerializer):

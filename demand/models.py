@@ -86,5 +86,10 @@ class EventProductKeyword(models.Model):
     product = models.ForeignKey('inventory.Product', on_delete=models.CASCADE)
     keyword = models.CharField(max_length=255)
 
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['cultural_event', 'product'], name='unique_event_product_link'),
+        ]
+
     def __str__(self):
         return f"{self.cultural_event} - {self.product} - {self.keyword}"

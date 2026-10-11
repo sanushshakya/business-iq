@@ -25,7 +25,7 @@ class SyncTaskTests(TestCase):
 class ShopifyConnectionApiTests(TestCase):
     def test_access_token_is_write_only(self):
         client = APIClient()
-        client.force_authenticate(UserFactory())
+        client.force_authenticate(UserFactory(is_staff=True))
         company = CompanyFactory()
         response = client.post(
             reverse('shopifyconnection-list'),
@@ -71,7 +71,7 @@ class ShopDomainValidationTests(TestCase):
 
     def setUp(self):
         self.client = APIClient()
-        self.user = UserFactory()
+        self.user = UserFactory(is_staff=True)
         self.client.force_authenticate(self.user)
 
     def create(self, domain):
@@ -96,3 +96,61 @@ class ShopDomainValidationTests(TestCase):
         response = self.client.patch(reverse('shopifyconnection-detail', args=[pk]), {'shop_domain': 'evil.com'})
         self.assertEqual(response.status_code, 400)
         self.assertEqual(ShopifyConnection.objects.get(pk=pk).shop_domain, 'my-store.myshopify.com')
+
+
+class SyncTaskApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = UserFactory()
+        self.client.force_authenticate(self.user)
+
+    def test_system_fields_cannot_be_set_by_the_client(self):
+        response = self.client.post(reverse('synctask-list'), {
+            'source_system': 'a', 'target_system': 'b', 'task_id': 'mine', 'status': 'completed'})
+        self.assertEqual(response.status_code, 201, response.content)
+        body = response.json()
+        self.assertEqual(body['status'], 'pending')
+        self.assertNotEqual(body['task_id'], 'mine')
+        self.assertTrue(body['task_id'])
+
+    def test_tasks_cannot_be_edited(self):
+        pk = self.client.post(reverse('synctask-list'), {'source_system': 'a', 'target_system': 'b'}).json()['id']
+        response = self.client.patch(reverse('synctask-detail', args=[pk]), {'status': 'completed'})
+        self.assertEqual(response.status_code, 405)
+
+    def test_a_finished_task_is_not_run_again(self):
+        SyncTask.objects.create(company=self.user.company, source_system='a', target_system='b', task_id='done',
+                                status='completed')
+        self.assertFalse(process_sync_task('done'))
+        self.assertEqual(SyncTask.objects.get(task_id='done').status, 'completed')
+
+
+class ShopifyConnectionRulesTests(TestCase):
+    def setUp(self):
+        self.staff = UserFactory(is_staff=True)
+        self.member = UserFactory(company=self.staff.company)
+
+    def payload(self, domain='a.myshopify.com'):
+        return {'shop_domain': domain, 'access_token': 'shpat_x'}
+
+    def test_only_staff_can_connect_a_store_but_members_can_see_it(self):
+        as_member, as_staff = APIClient(), APIClient()
+        as_member.force_authenticate(self.member)
+        as_staff.force_authenticate(self.staff)
+        self.assertEqual(as_member.post(reverse('shopifyconnection-list'), self.payload()).status_code, 403)
+        self.assertEqual(as_staff.post(reverse('shopifyconnection-list'), self.payload()).status_code, 201)
+        self.assertEqual(as_member.get(reverse('shopifyconnection-list')).json()['count'], 1)
+
+    def test_a_company_has_one_store(self):
+        client = APIClient()
+        client.force_authenticate(self.staff)
+        self.assertEqual(client.post(reverse('shopifyconnection-list'), self.payload()).status_code, 201)
+        self.assertEqual(client.post(reverse('shopifyconnection-list'), self.payload('b.myshopify.com')).status_code, 400)
+
+    def test_the_admin_hides_the_token_once_saved(self):
+        from django.contrib import admin
+
+        model_admin = admin.site._registry[ShopifyConnection]
+        conn = ShopifyConnection.objects.create(company=self.staff.company, shop_domain='h.myshopify.com', access_token='t')
+        self.assertEqual(model_admin.get_exclude(None, conn), ('access_token',))
+        self.assertEqual(model_admin.get_exclude(None, None), ())

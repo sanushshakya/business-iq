@@ -9,7 +9,7 @@ from .models import SyncTask
 @shared_task
 def process_sync_task(task_id):
     """
-    Mark a SyncTask as running and then completed (or failed).
+    Mark a pending SyncTask as running and then completed (or failed). A task that already ran is left alone.
 
     The actual transfer between systems is not implemented yet; this only maintains task state.
 
@@ -19,6 +19,9 @@ def process_sync_task(task_id):
         task = SyncTask.objects.get(task_id=task_id)
     except SyncTask.DoesNotExist:
         return False
+
+    if not SyncTask.objects.filter(pk=task.pk, status='pending').update(status='running'):
+        return False  # already picked up by another worker, or finished
 
     task.status = 'running'
     task.start_time = timezone.now()

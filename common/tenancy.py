@@ -13,6 +13,7 @@ shared reference data: any signed-in user can read them, only staff can change t
 """
 
 from django.db.models import UniqueConstraint
+from rest_framework.settings import api_settings
 from rest_framework import permissions, serializers
 
 TENANT_LOOKUPS = {
@@ -180,6 +181,9 @@ class TenantModelSerializer(serializers.ModelSerializer):
             if self.instance is not None:
                 clash = clash.exclude(pk=self.instance.pk)
             if clash.exists():
+                if not others:  # the constraint is on the company alone: one record per company
+                    raise serializers.ValidationError(
+                        {api_settings.NON_FIELD_ERRORS_KEY: [f'Your company already has a {model._meta.verbose_name}.']})
                 raise serializers.ValidationError({others[0]: f'A record with this {others[0].replace("_", " ")} already exists.'})
 
     def get_fields(self):

@@ -5,11 +5,16 @@ Module for Django models in the sync app of the iq project.
 """
 
 import re
+import uuid
 
 from django.core.validators import RegexValidator
 from django.db import models
 
 from common.fields import EncryptedTextField
+
+def new_task_id():
+    return uuid.uuid4().hex
+
 
 class SyncTask(models.Model):
     """
@@ -31,7 +36,7 @@ class SyncTask(models.Model):
     ]
 
     company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='sync_tasks')
-    task_id = models.CharField(max_length=100, unique=True)
+    task_id = models.CharField(max_length=100, unique=True, default=new_task_id)
     source_system = models.CharField(max_length=100)
     target_system = models.CharField(max_length=100)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
@@ -62,6 +67,12 @@ class ShopifyConnection(models.Model):
     )
     access_token = EncryptedTextField()
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            # One store per company: products carry a single Shopify id and the price sync needs to know which store.
+            models.UniqueConstraint(fields=['company'], name='one_shopify_connection_per_company'),
+        ]
 
     def __str__(self):
         return self.shop_domain

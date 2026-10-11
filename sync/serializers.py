@@ -10,6 +10,8 @@ class SyncTaskSerializer(TenantModelSerializer):
     class Meta:
         model = SyncTask
         fields = '__all__'
+        # System-managed: the id is generated and the state and timings are maintained by the task.
+        read_only_fields = ['task_id', 'status', 'start_time', 'end_time']
 
 
 class ShopifyConnectionSerializer(TenantModelSerializer):

@@ -70,6 +70,56 @@ class AlertApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(DemandAlert.objects.get(pk=pk).is_handled)
 
+    def test_demand_alert_list_requires_authentication(self):
+        self.assertIn(APIClient().get(reverse('demand-alert-list')).status_code, (401, 403))
+
+    def _demand_alerts(self):
+        company = self.user.company
+        older = DemandAlert.objects.create(company=company, product='Old', branch='B', requested_qty=1)
+        newer = DemandAlert.objects.create(company=company, product='New', branch='B', requested_qty=2)
+        handled = DemandAlert.objects.create(company=company, product='Done', branch='B', requested_qty=3, is_handled=True)
+        DemandAlert.objects.filter(pk=older.pk).update(created_at=timezone.now() - timedelta(days=2))
+        return older, newer, handled
+
+    def _list(self, **params):
+        response = self.client.get(reverse('demand-alert-list'), params)
+        self.assertEqual(response.status_code, 200, response.content)
+        return [row['product'] for row in response.json()['results']]
+
+    def test_demand_alert_list_defaults_to_open_alerts_newest_first(self):
+        self._demand_alerts()
+        self.assertEqual(self._list(), ['New', 'Old'])
+
+    def test_demand_alert_list_status_filter(self):
+        self._demand_alerts()
+        self.assertEqual(self._list(status='handled'), ['Done'])
+        self.assertEqual(sorted(self._list(status='all')), ['Done', 'New', 'Old'])
+        self.assertEqual(self._list(status='open'), ['New', 'Old'])
+
+    def test_demand_alert_list_rejects_unknown_status(self):
+        response = self.client.get(reverse('demand-alert-list'), {'status': 'bogus'})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('status', response.json())
+
+    def test_demand_alert_list_is_scoped_to_the_company(self):
+        DemandAlert.objects.create(company=CompanyFactory(), product='Rival', branch='B', requested_qty=9)
+        DemandAlert.objects.create(company=self.user.company, product='Mine', branch='B', requested_qty=1)
+        self.assertEqual(self._list(status='all'), ['Mine'])
+
+    def test_dismissed_alert_moves_from_open_to_handled(self):
+        pk = self.client.post(reverse('demand-alert-create'), {'product': 'P', 'branch': 'B', 'requested_qty': 3}).json()['id']
+        self.assertEqual(self._list(), ['P'])
+        self.client.post(reverse('demand-alert-dismiss', args=[pk]))
+        self.assertEqual(self._list(), [])
+        self.assertEqual(self._list(status='handled'), ['P'])
+
+    def test_demand_alert_list_is_paginated(self):
+        for i in range(3):
+            DemandAlert.objects.create(company=self.user.company, product=f'P{i}', branch='B', requested_qty=1)
+        body = self.client.get(reverse('demand-alert-list')).json()
+        self.assertEqual(set(body), {'count', 'next', 'previous', 'results'})
+        self.assertEqual(body['count'], 3)
+
     def test_dismiss_unknown_alert_is_404(self):
         self.assertEqual(self.client.post(reverse('demand-alert-dismiss', args=[999])).status_code, 404)
 

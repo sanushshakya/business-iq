@@ -1,7 +1,8 @@
 # common/views.py
 
-from drf_spectacular.utils import extend_schema, inline_serializer
+from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
 from rest_framework import generics, serializers, status, viewsets
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -17,6 +18,33 @@ class StockAlertListAPIView(TenantScopedMixin, generics.ListAPIView):
 
     queryset = StockAlert.objects.filter(is_dismissed=False).order_by('-created_at')
     serializer_class = StockAlertSerializer
+
+
+class DemandAlertListAPIView(TenantScopedMixin, generics.ListAPIView):
+    """
+    Demand alerts for the user's company, newest first.
+
+    Only open alerts by default; ``?status=handled`` lists the handled ones and ``?status=all`` both.
+    """
+
+    queryset = DemandAlert.objects.all().order_by('-created_at', '-id')
+    serializer_class = DemandAlertSerializer
+    STATUS_FILTERS = {'open': False, 'handled': True}
+
+    @extend_schema(
+        parameters=[OpenApiParameter('status', str, enum=['open', 'handled', 'all'], description='Defaults to open.')]
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        status_filter = self.request.query_params.get('status', 'open')
+        if status_filter == 'all':
+            return queryset
+        if status_filter not in self.STATUS_FILTERS:
+            raise ValidationError({'status': "Must be one of: open, handled, all."})
+        return queryset.filter(is_handled=self.STATUS_FILTERS[status_filter])
 
 
 class DemandAlertCreateAPIView(TenantScopedMixin, generics.CreateAPIView):

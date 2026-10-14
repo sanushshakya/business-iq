@@ -30,6 +30,8 @@ class TillSessionViewSet(
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if self.request.user.is_till_user:
+            queryset = queryset.filter(opened_by=self.request.user)
         params = self.request.query_params
         if params.get('till', '').isdigit():
             queryset = queryset.filter(till_id=params['till'])
@@ -81,6 +83,8 @@ class SaleViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveModel
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if self.request.user.is_till_user:
+            queryset = queryset.filter(cashier=self.request.user)
         params = self.request.query_params
         for key, field in (('session', 'session_id'), ('till', 'session__till_id')):
             if params.get(key, '').isdigit():

@@ -25,6 +25,7 @@ from rest_framework.response import Response
 from rest_framework import mixins, status, viewsets
 from authentication.models import UserInvitation
 from common.tenancy import HasCompany, TenantScopedMixin
+from tenants.roles import ROLE_LABELS
 from authentication import refresh_tokens
 from authentication.emails import send_invitation_email, send_password_reset_email
 from authentication.serializers import (
@@ -34,6 +35,7 @@ from authentication.serializers import (
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     RefreshTokenSerializer,
+    CodeLoginSerializer,
 )
 
 User = get_user_model()
@@ -70,6 +72,62 @@ class LoginView(APIView):
         if not serializer.is_valid():
             return Response({'detail': _('Invalid credentials')}, status=status.HTTP_400_BAD_REQUEST)
         return Response(refresh_tokens.issue_token_pair(serializer.validated_data['user']))
+
+
+class CodeLoginView(APIView):
+    """
+    Sign an operator (till, demand, freight, ...) in with their 8-digit code.
+
+    POST ``{"code": "12345678"}``. Returns the same token pair as ``/auth/login/``. The session can only use what
+    their role covers (see ``authentication/role_access.py``). Heavily rate limited, because the code is the whole
+    credential.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'code_login'
+
+    @extend_schema(request=CodeLoginSerializer, responses=TokenPairResponse)
+    def post(self, request):
+        serializer = CodeLoginSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({'detail': _('Invalid code')}, status=status.HTTP_400_BAD_REQUEST)
+        user = serializer.validated_data['user']
+        user.last_login = timezone.now()
+        user.save(update_fields=['last_login'])
+        return Response(refresh_tokens.issue_token_pair(user))
+
+
+MeResponse = inline_serializer(
+    'Me',
+    {
+        'id': drf_serializers.IntegerField(),
+        'name': drf_serializers.CharField(),
+        'email': drf_serializers.EmailField(allow_null=True),
+        'is_staff': drf_serializers.BooleanField(),
+        'role': drf_serializers.CharField(allow_blank=True),
+        'role_label': drf_serializers.CharField(allow_blank=True),
+        'company': drf_serializers.CharField(allow_null=True),
+    },
+)
+
+
+class MeView(APIView):
+    """Who is signed in: used by the app to decide what to show."""
+
+    @extend_schema(responses=MeResponse)
+    def get(self, request):
+        user = request.user
+        return Response({
+            'id': user.pk,
+            'name': user.display_name,
+            'email': None if user.is_operator else user.email,
+            'is_staff': user.is_staff,
+            'role': user.role,
+            'role_label': ROLE_LABELS.get(user.role, ''),
+            'company': user.company.name if user.company_id else None,
+        })
 
 
 class RefreshView(APIView):

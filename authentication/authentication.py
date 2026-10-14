@@ -6,6 +6,7 @@ from drf_spectacular.extensions import OpenApiAuthenticationExtension
 from rest_framework import authentication, exceptions
 
 from .jwt_handler import decode_token, password_stamp
+from .role_access import role_may
 
 
 class JWTAuthentication(authentication.BaseAuthentication):
@@ -36,6 +37,8 @@ class JWTAuthentication(authentication.BaseAuthentication):
             raise exceptions.AuthenticationFailed('User not found or inactive.')
         if payload['pw'] != password_stamp(user):
             raise exceptions.AuthenticationFailed('Password changed; please log in again.')
+        if user.is_operator and not role_may(user.role, request.method, request.path):
+            raise exceptions.PermissionDenied('Your role does not cover this.')
         return user, header[1].decode()
 
     def authenticate_header(self, request):

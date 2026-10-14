@@ -41,6 +41,16 @@ class Product(models.Model):
     )
     company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='products')
     shopify_product_id = models.BigIntegerField(null=True, blank=True)
+    # The id this product has in the system it was imported from (e.g. the online shop), so re-imports update it.
+    external_id = models.CharField(max_length=64, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['company', 'external_id'], condition=~models.Q(external_id=''),
+                name='unique_external_id_per_company',
+            ),
+        ]
 
     def __str__(self):
         return self.name

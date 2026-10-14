@@ -1,5 +1,9 @@
+import secrets
+
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.db import models
+
+from .roles import ROLE_CHOICES, TILL
 
 # Create your models here.
 class Company(models.Model):
@@ -102,6 +106,41 @@ class CustomUserManager(BaseUserManager):
 
         return self.create_user(email, password, **extra_fields)
 
+    def create_operator(self, company, name, role):
+        """
+        An operator (till, demand, freight, ...): no password, signs in with a generated 8-digit code.
+
+        Returns ``(user, code)``. The code is not stored, so this is the only time it can be shown.
+        """
+        from .operator_codes import generate_code, hash_code
+
+        for _ in range(20):
+            code = generate_code()
+            if not self.model.objects.filter(code_hash=hash_code(code)).exists():
+                break
+        else:  # pragma: no cover - 20 collisions in a row means the code space is nearly full
+            raise RuntimeError('Could not find an unused till code.')
+        user = self.model(
+            email=f'till-{secrets.token_hex(8)}@till.invalid', name=name, company=company,
+            role=role, code_hash=hash_code(code),
+        )
+        user.set_unusable_password()
+        user.save(using=self._db)
+        return user, code
+
+    def reset_operator_code(self, user):
+        from .operator_codes import generate_code, hash_code
+
+        for _ in range(20):
+            code = generate_code()
+            if not self.model.objects.filter(code_hash=hash_code(code)).exists():
+                break
+        else:  # pragma: no cover
+            raise RuntimeError('Could not find an unused till code.')
+        user.code_hash = hash_code(code)
+        user.save(update_fields=['code_hash'])
+        return code
+
 
 class CustomUser(AbstractBaseUser, PermissionsMixin):
     """
@@ -117,6 +156,10 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     is_staff = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    name = models.CharField(max_length=100, blank=True)
+    # Operators sign in with an 8-digit code (see operator_codes.py) and only get the area their role covers.
+    role = models.CharField(max_length=20, blank=True, choices=ROLE_CHOICES)
+    code_hash = models.CharField(max_length=64, unique=True, null=True, blank=True, editable=False)
     company = models.ForeignKey(
         Company, null=True, blank=True, on_delete=models.SET_NULL, related_name='users', verbose_name='Company'
     )
@@ -131,4 +174,16 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         verbose_name_plural = 'Users'
 
     def __str__(self):
-        return self.email
+        return self.name or self.email
+
+    @property
+    def is_operator(self):
+        return bool(self.role)
+
+    @property
+    def is_till_user(self):
+        return self.role == TILL
+
+    @property
+    def display_name(self):
+        return self.name or self.email

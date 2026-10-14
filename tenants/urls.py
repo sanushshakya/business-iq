@@ -8,6 +8,7 @@ from . import views
 router = DefaultRouter()
 router.register(r'branches', views.BranchViewSet, basename='branch')
 router.register(r'tills', views.TillViewSet, basename='till')
+router.register(r'operators', views.OperatorViewSet, basename='operator')
 
 urlpatterns = [
     path('company/', views.MyCompanyView.as_view(), name='my-company'),

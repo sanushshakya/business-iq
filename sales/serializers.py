@@ -29,6 +29,7 @@ class TillSessionSerializer(serializers.ModelSerializer):
     till_number = serializers.IntegerField(source='till.number', read_only=True)
     branch_name = serializers.CharField(source='till.branch.name', read_only=True)
     opened_by_email = serializers.EmailField(source='opened_by.email', read_only=True)
+    opened_by_name = serializers.CharField(source='opened_by.display_name', read_only=True)
     closed_by_email = serializers.EmailField(source='closed_by.email', read_only=True, default=None)
     is_open = serializers.BooleanField(read_only=True)
     summary = serializers.SerializerMethodField()
@@ -36,7 +37,7 @@ class TillSessionSerializer(serializers.ModelSerializer):
     class Meta:
         model = TillSession
         fields = [
-            'id', 'till', 'till_number', 'branch_name', 'opened_by_email', 'opened_at', 'opening_float',
+            'id', 'till', 'till_number', 'branch_name', 'opened_by_email', 'opened_by_name', 'opened_at', 'opening_float',
             'closed_by_email', 'closed_at', 'expected_cash', 'counted_cash', 'note', 'is_open', 'summary',
         ]
         read_only_fields = fields
@@ -73,12 +74,13 @@ class SaleSerializer(serializers.ModelSerializer):
     till_number = serializers.IntegerField(source='session.till.number', read_only=True)
     branch_name = serializers.CharField(source='session.till.branch.name', read_only=True)
     cashier_email = serializers.EmailField(source='cashier.email', read_only=True)
+    cashier_name = serializers.CharField(source='cashier.display_name', read_only=True)
     items = SaleItemSerializer(many=True, read_only=True)
 
     class Meta:
         model = Sale
         fields = [
-            'id', 'receipt_number', 'session', 'till', 'till_number', 'branch_name', 'cashier_email',
+            'id', 'receipt_number', 'session', 'till', 'till_number', 'branch_name', 'cashier_email', 'cashier_name',
             'payment_method', 'total', 'amount_tendered', 'change_due', 'status', 'created_at',
             'voided_at', 'void_reason', 'client_ref', 'items',
         ]

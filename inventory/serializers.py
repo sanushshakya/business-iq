@@ -19,7 +19,7 @@ class ProductCategorySerializer(TenantModelSerializer):
 class ProductSerializer(TenantModelSerializer):
     class Meta:
         model = Product
-        fields = '__all__'
+        exclude = ['external_id']  # set by the import command only
         extra_kwargs = {
             'price': {'min_value': 0},
             'stock_quantity': {'min_value': 0},

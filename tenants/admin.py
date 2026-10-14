@@ -69,9 +69,9 @@ class CustomUserAdmin(TenantAdminMixin, UserAdmin):
     add_form = CustomUserCreationForm
     model = CustomUser
 
-    list_display = ('email', 'company', 'is_active', 'is_staff', 'is_superuser', 'created_at')
+    list_display = ('email', 'name', 'company', 'is_active', 'is_staff', 'role', 'is_superuser', 'created_at')
     list_filter = ('is_active', 'is_staff', 'is_superuser', 'company')
-    search_fields = ('email',)
+    search_fields = ('email', 'name')
     ordering = ('email',)
     readonly_fields = ('last_login', 'created_at')
     filter_horizontal = ('groups', 'user_permissions')
@@ -101,12 +101,12 @@ class CustomUserAdmin(TenantAdminMixin, UserAdmin):
 
         if not full:
             return (
-                (None, {'fields': ('email', 'password')}),
+                (None, {'fields': ('email', 'name', 'password')}),
                 ('Permissions', {'fields': ('is_active', 'is_staff')}),
                 ('Important dates', {'fields': ('last_login', 'created_at')}),
             )
         return (
-            (None, {'fields': ('email', 'password')}),
+            (None, {'fields': ('email', 'name', 'password')}),
             ('Company', {'fields': ('company',)}),
             ('Permissions', {'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')}),
             ('Important dates', {'fields': ('last_login', 'created_at')}),

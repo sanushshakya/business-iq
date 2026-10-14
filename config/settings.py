@@ -121,6 +121,8 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_THROTTLE_RATES": {
         "login": config("LOGIN_THROTTLE_RATE", default="10/min"),
+        # The 8-digit operator code is the whole credential, so guessing it is throttled harder than a password.
+        "code_login": config("CODE_LOGIN_THROTTLE_RATE", default="5/min"),
         "refresh": config("REFRESH_THROTTLE_RATE", default="30/min"),
         "password_reset": config("PASSWORD_RESET_THROTTLE_RATE", default="5/hour"),
     },

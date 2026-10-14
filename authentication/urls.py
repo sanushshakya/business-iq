@@ -5,9 +5,11 @@ from .views import (
     InvitationViewSet,
     LoginView,
     LogoutView,
+    MeView,
     PasswordResetConfirmView,
     PasswordResetRequestView,
     RefreshView,
+    CodeLoginView,
 )
 
 router = DefaultRouter()
@@ -16,6 +18,10 @@ router.register(r'invitations', InvitationViewSet, basename='invitation')
 urlpatterns = [
     # Exchange credentials for a Bearer token
     path('login/', LoginView.as_view(), name='login'),
+
+    # Operators sign in with an 8-digit code; /me/ says who is signed in
+    path('code-login/', CodeLoginView.as_view(), name='code-login'),
+    path('me/', MeView.as_view(), name='me'),
 
     # Trade a refresh token for a new token pair / end a session
     path('token/refresh/', RefreshView.as_view(), name='token-refresh'),

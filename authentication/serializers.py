@@ -1,4 +1,4 @@
-from django.contrib.auth import authenticate
+from django.contrib.auth import authenticate, get_user_model
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -56,6 +56,25 @@ class LoginUserSerializer(serializers.Serializer):
         if not user:
             raise serializers.ValidationError("Invalid credentials.")
 
+        data['user'] = user
+        return data
+
+
+class CodeLoginSerializer(serializers.Serializer):
+    """The 8-digit code an operator signs in with. Anything that is not such a code is just 'invalid'."""
+
+    code = serializers.CharField(write_only=True)
+
+    def validate(self, data):
+        from tenants.operator_codes import hash_code, is_valid_code
+
+        code = data['code'].strip()
+        user = (
+            get_user_model().objects.filter(code_hash=hash_code(code), is_active=True).exclude(role='').first()
+            if is_valid_code(code) else None
+        )
+        if user is None or user.company_id is None:
+            raise serializers.ValidationError('Invalid code.')
         data['user'] = user
         return data
 

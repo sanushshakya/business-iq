@@ -76,6 +76,7 @@ INSTALLED_APPS = [
     "tenants",  # Added 'tenants' app to INSTALLED_APPS
     "authentication",
     "demand_calendar",
+    "sales",
 ]
 
 MIDDLEWARE = [

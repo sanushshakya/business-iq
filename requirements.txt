@@ -1,4 +1,4 @@
-# Runtime dependencies (installed in the Docker image)
+# Runtime dependencies
 Django>=5.2,<6.1
 djangorestframework>=3.15.2,<3.17
 drf-spectacular>=0.27
@@ -17,3 +17,12 @@ redis>=5.0
 channels>=4.0
 channels-redis>=4.1
 daphne>=4.0
+
+# Testing and linting (CI and local development)
+pytest>=7.4.0
+pytest-django>=4.5
+pytest-cov>=4.1
+factory-boy>=3.3
+ruff
+black>=23.1.0
+flake8>=6.0.0

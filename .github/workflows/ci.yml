@@ -52,10 +52,10 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-          cache-dependency-path: requirements*.txt
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
-        run: pip install -r requirements-dev.txt
+        run: pip install -r requirements.txt
 
       - name: Check for missing migrations
         run: python manage.py makemigrations --check --dry-run
@@ -78,10 +78,10 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-          cache-dependency-path: requirements*.txt
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
-        run: pip install -r requirements-dev.txt
+        run: pip install -r requirements.txt
 
       - name: Run Ruff
         run: ruff check .

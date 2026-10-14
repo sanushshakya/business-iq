@@ -8,7 +8,7 @@ Data is scoped per company.
 
 ```bash
 python -m venv venv && source venv/bin/activate
-pip install -r requirements-dev.txt   # requirements.txt is runtime only (what the Docker image uses)
+pip install -r requirements.txt
 cp .env.example .env            # set SECRET_KEY at minimum
 python manage.py migrate
 python manage.py seed_demo_data # demo company + owner (owner@m18foods.example / change-me-please)

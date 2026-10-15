@@ -6,12 +6,11 @@ Module for Django models in the sync app of the iq project.
 
 import re
 import uuid
+from urllib.parse import urlsplit
 
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models
-
-from urllib.parse import urlsplit
 
 from common.fields import EncryptedTextField
 
@@ -83,7 +82,10 @@ class ShopifyConnection(models.Model):
 
 def validate_base_url(value):
     """http(s) only, and no credentials in the URL (it is used for outgoing requests)."""
-    parts = urlsplit(value)
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        raise ValidationError('Enter a valid URL.')
     if parts.scheme not in ('http', 'https') or not parts.hostname:
         raise ValidationError('Enter an http(s) URL.')
     if parts.username is not None or parts.password is not None:

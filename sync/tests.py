@@ -253,8 +253,22 @@ class StorefrontModelTests(TestCase):
         from sync.models import StorefrontConnection
 
         company = CompanyFactory()
-        for url in ('ftp://x.example/', 'https://user:pw@x.example/', 'javascript:alert(1)'):
+        for url in ('ftp://x.example/', 'https://user:pw@x.example/', 'javascript:alert(1)', 'http://[x'):
             conn = StorefrontConnection(company=company, webhook_secret='s', base_url=url)
             with self.assertRaises(ValidationError, msg=url):
                 conn.full_clean()
         StorefrontConnection(company=company, webhook_secret='s', base_url='https://backend.m18foods.co.uk/').full_clean()
+
+
+class StorefrontConnectionAdminTests(TestCase):
+    def test_webhook_secret_hidden_when_editing(self):
+        from django.contrib import admin
+        from django.test import RequestFactory
+
+        from sync.models import StorefrontConnection
+
+        conn = StorefrontConnection.objects.create(company=CompanyFactory(), webhook_secret='s')
+        model_admin = admin.site._registry[StorefrontConnection]
+        request = RequestFactory().get('/')
+        self.assertEqual(model_admin.get_exclude(request, conn), ('webhook_secret',))
+        self.assertEqual(model_admin.get_exclude(request, None), ())

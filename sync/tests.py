@@ -154,3 +154,107 @@ class ShopifyConnectionRulesTests(TestCase):
         conn = ShopifyConnection.objects.create(company=self.staff.company, shop_domain='h.myshopify.com', access_token='t')
         self.assertEqual(model_admin.get_exclude(None, conn), ('access_token',))
         self.assertEqual(model_admin.get_exclude(None, None), ())
+
+
+class SigningTests(TestCase):
+    SECRET = 'shared-secret'
+    BODY = b'{"a":1,"b":"\xc3\xa9"}'
+
+    def test_round_trip(self):
+        from sync import signing
+
+        header = signing.sign(self.SECRET, self.BODY, now=1_000)
+        self.assertTrue(signing.verify(self.SECRET, self.BODY, header, now=1_000))
+
+    def test_tampered_body_or_wrong_secret_rejected(self):
+        from sync import signing
+
+        header = signing.sign(self.SECRET, self.BODY, now=1_000)
+        self.assertFalse(signing.verify(self.SECRET, self.BODY + b' ', header, now=1_000))
+        self.assertFalse(signing.verify('other', self.BODY, header, now=1_000))
+
+    def test_missing_or_malformed_header_rejected(self):
+        from sync import signing
+
+        for header in (None, '', 't=1', 'garbage'):
+            self.assertFalse(signing.verify(self.SECRET, self.BODY, header, now=1))
+
+    def test_stale_timestamp_rejected(self):
+        from sync import signing
+
+        header = signing.sign(self.SECRET, self.BODY, now=1_000)
+        self.assertTrue(signing.verify(self.SECRET, self.BODY, header, now=1_300))
+        self.assertFalse(signing.verify(self.SECRET, self.BODY, header, now=1_301))
+        self.assertFalse(signing.verify(self.SECRET, self.BODY, header, now=699))
+
+    def test_strict_header_format(self):
+        from sync import signing
+
+        good = signing.sign(self.SECRET, self.BODY, now=1_000)
+        t_part, v_part = good.split(',')
+        sig = v_part[3:]
+        bad = [
+            f'{v_part},{t_part}',  # reordered
+            f'{t_part}, {v_part}',  # whitespace
+            f' {good}',
+            f'{good} ',
+            f'{good},x=1',  # extra part
+            f'{t_part},v1={sig.upper()}',  # uppercase hex
+            f'{t_part},v1={sig[:-1]}',  # short
+            f'{t_part},v1={sig}0',  # long
+            f't=١٠٠٠,{v_part}',  # non-ASCII digits
+            f't=+1000,{v_part}',
+            f't=-1000,{v_part}',
+            f't=,{v_part}',
+            f't=1000,v1=é{sig[1:]}',
+        ]
+        for header in bad:
+            self.assertFalse(signing.verify(self.SECRET, self.BODY, header, now=1_000), header)
+
+    def test_verify_never_raises_on_odd_input(self):
+        from sync import signing
+
+        for header in (b't=1,v1=' + b'0' * 64, 123, '\x00', 't=1,v1=' + 'é' * 64):
+            self.assertFalse(signing.verify(self.SECRET, self.BODY, header, now=1))
+        self.assertFalse(signing.verify(None, self.BODY, 'x', now=1))
+        self.assertFalse(signing.verify('', self.BODY, 'x', now=1))
+
+
+class StorefrontModelTests(TestCase):
+    def test_event_unique_per_connection(self):
+        import uuid
+
+        from django.db import IntegrityError, transaction
+
+        from sync.models import InboundEvent, StorefrontConnection
+
+        conn = StorefrontConnection.objects.create(company=CompanyFactory(), webhook_secret='s')
+        eid = uuid.uuid4()
+        InboundEvent.objects.create(connection=conn, event_id=eid, event_type='order.paid', payload={}, status='applied')
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            InboundEvent.objects.create(connection=conn, event_id=eid, event_type='order.paid', payload={}, status='applied')
+
+    def test_secret_encrypted_at_rest(self):
+        from django.db import connection
+
+        from sync.models import StorefrontConnection
+
+        conn = StorefrontConnection.objects.create(company=CompanyFactory(), webhook_secret='plain-secret-value')
+        with connection.cursor() as cur:
+            cur.execute('SELECT webhook_secret FROM sync_storefrontconnection WHERE id = %s', [conn.pk])
+            raw = cur.fetchone()[0]
+        self.assertNotIn('plain-secret-value', raw)
+        conn.refresh_from_db()
+        self.assertEqual(conn.webhook_secret, 'plain-secret-value')
+
+    def test_base_url_must_be_http_without_credentials(self):
+        from django.core.exceptions import ValidationError
+
+        from sync.models import StorefrontConnection
+
+        company = CompanyFactory()
+        for url in ('ftp://x.example/', 'https://user:pw@x.example/', 'javascript:alert(1)'):
+            conn = StorefrontConnection(company=company, webhook_secret='s', base_url=url)
+            with self.assertRaises(ValidationError, msg=url):
+                conn.full_clean()
+        StorefrontConnection(company=company, webhook_secret='s', base_url='https://backend.m18foods.co.uk/').full_clean()

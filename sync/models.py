@@ -7,8 +7,11 @@ Module for Django models in the sync app of the iq project.
 import re
 import uuid
 
+from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models
+
+from urllib.parse import urlsplit
 
 from common.fields import EncryptedTextField
 
@@ -76,3 +79,57 @@ class ShopifyConnection(models.Model):
 
     def __str__(self):
         return self.shop_domain
+
+
+def validate_base_url(value):
+    """http(s) only, and no credentials in the URL (it is used for outgoing requests)."""
+    parts = urlsplit(value)
+    if parts.scheme not in ('http', 'https') or not parts.hostname:
+        raise ValidationError('Enter an http(s) URL.')
+    if parts.username is not None or parts.password is not None:
+        raise ValidationError('The URL must not contain credentials.')
+
+
+class StorefrontConnection(models.Model):
+    """
+    A company's link to the m18 storefront.
+
+    ``webhook_secret`` signs webhooks in both directions. It is encrypted at rest, set only in the Django
+    admin, and never exposed through the API.
+    """
+
+    company = models.OneToOneField('tenants.Company', on_delete=models.CASCADE, related_name='storefront_connection')
+    name = models.CharField(max_length=60, default='M18 storefront')
+    base_url = models.URLField(blank=True, validators=[validate_base_url])
+    webhook_secret = EncryptedTextField()
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+
+class InboundEvent(models.Model):
+    """A webhook event received from the storefront; unique per ``event_id`` so redelivery is a no-op."""
+
+    STATUS_CHOICES = [
+        ('applied', 'Applied'),
+        ('partial', 'Partial'),
+        ('unmatched', 'Unmatched'),
+    ]
+
+    connection = models.ForeignKey(StorefrontConnection, on_delete=models.CASCADE, related_name='events')
+    event_id = models.UUIDField()
+    event_type = models.CharField(max_length=40)
+    payload = models.JSONField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    detail = models.JSONField(default=list)
+    received_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['connection', 'event_id'], name='unique_inbound_event_per_connection'),
+        ]
+
+    def __str__(self):
+        return f"{self.event_type} {self.event_id}"

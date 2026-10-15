@@ -2,7 +2,7 @@ from django.contrib import admin
 
 from common.tenancy import TenantAdminMixin
 
-from .models import ShopifyConnection, SyncTask
+from .models import ShopifyConnection, StorefrontConnection, SyncTask
 
 
 @admin.register(SyncTask)
@@ -22,3 +22,13 @@ class ShopifyConnectionAdmin(TenantAdminMixin, admin.ModelAdmin):
 
     def get_exclude(self, request, obj=None):
         return ('access_token',) if obj else ()
+
+
+@admin.register(StorefrontConnection)
+class StorefrontConnectionAdmin(TenantAdminMixin, admin.ModelAdmin):
+    """The webhook secret can be entered when connecting the storefront but is never displayed afterwards."""
+
+    list_display = ('name', 'company', 'base_url', 'is_active', 'created_at')
+
+    def get_exclude(self, request, obj=None):
+        return ('webhook_secret',) if obj else ()

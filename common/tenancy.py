@@ -42,6 +42,8 @@ TENANT_LOOKUPS = {
     'pricing.PriceChangeLog': 'product__company',
     'sync.SyncTask': 'company',
     'sync.ShopifyConnection': 'company',
+    'sync.StorefrontConnection': 'company',
+    'sync.InboundEvent': 'connection__company',
     'common.DemandAlert': 'company',
     'common.StockAlert': 'product__company',
     'common.FreightRateCache': 'company',

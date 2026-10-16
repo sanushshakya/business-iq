@@ -13,23 +13,16 @@ from collections import OrderedDict
 from decimal import Decimal
 
 from django.db import transaction
-from django.db.models import F, Sum
+from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import serializers
 
-from inventory.models import Product, StockBatch, StockMovement
+from inventory.ledger import move, take_fefo
+from inventory.models import Product, StockBatch
 
 from .models import Sale, SaleAllocation, SaleItem, TillSession
 
 CENTS = Decimal('0.01')
-
-
-def _move(batch, quantity, movement_type):
-    """Append a ledger entry and apply it to the batch and the product (the batch row must be locked)."""
-    delta = quantity if movement_type == 'inbound' else -quantity
-    StockBatch.objects.filter(pk=batch.pk).update(quantity=F('quantity') + delta)
-    Product.objects.filter(pk=batch.product_id).update(stock_quantity=F('stock_quantity') + delta)
-    StockMovement.objects.create(batch=batch, quantity=quantity, movement_type=movement_type)
 
 
 def session_summary(session):
@@ -122,7 +115,7 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
             continue
         line_total = (product.price * quantity).quantize(CENTS)
         total += line_total
-        plan.append((product, quantity, line_total, batches))
+        plan.append((product, quantity, line_total))
     if problems:
         raise serializers.ValidationError({'items': problems})
 
@@ -137,20 +130,16 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
         session=session, cashier=cashier, payment_method=payment_method,
         total=total, amount_tendered=amount_tendered, change_due=change, client_ref=client_ref,
     )
-    for product, quantity, line_total, batches in plan:
+    for product, quantity, line_total in plan:
         item = SaleItem.objects.create(
             sale=sale, product=product, product_name=product.name, quantity=quantity,
             unit_price=product.price, line_total=line_total,
         )
-        remaining = quantity
-        for batch in batches:
-            take = min(batch.quantity, remaining)
-            if take:
-                _move(batch, take, 'outbound')
-                SaleAllocation.objects.create(item=item, batch=batch, quantity=take)
-                remaining -= take
-            if not remaining:
-                break
+        allocations, shortfall = take_fefo(product, quantity, today=today)
+        if shortfall:  # cannot happen after the check above (rows are locked); never oversell
+            raise serializers.ValidationError({'items': [f'{product.name}: stock changed, try again.']})
+        for batch, taken in allocations:
+            SaleAllocation.objects.create(item=item, batch=batch, quantity=taken)
     return sale, True
 
 
@@ -166,7 +155,7 @@ def void_sale(*, sale, user, reason=''):
     )
     for allocation in allocations:
         batch = StockBatch.objects.select_for_update().get(pk=allocation.batch_id)
-        _move(batch, allocation.quantity, 'inbound')
+        move(batch, allocation.quantity, 'inbound')
     sale.status = Sale.VOIDED
     sale.voided_at = timezone.now()
     sale.voided_by = user

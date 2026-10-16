@@ -272,3 +272,17 @@ class StorefrontConnectionAdminTests(TestCase):
         request = RequestFactory().get('/')
         self.assertEqual(model_admin.get_exclude(request, conn), ('webhook_secret',))
         self.assertEqual(model_admin.get_exclude(request, None), ())
+
+
+class InboundEventAdminTests(TestCase):
+    def test_inbound_events_are_read_only(self):
+        from django.contrib import admin
+        from django.test import RequestFactory
+
+        from sync.models import InboundEvent
+
+        model_admin = admin.site._registry[InboundEvent]
+        request = RequestFactory().get('/')
+        self.assertFalse(model_admin.has_add_permission(request))
+        self.assertFalse(model_admin.has_change_permission(request))
+        self.assertIn('status', model_admin.list_filter)

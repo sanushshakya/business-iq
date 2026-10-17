@@ -36,7 +36,8 @@ class StorefrontConnectionAdmin(TenantAdminMixin, admin.ModelAdmin):
 
 @admin.register(InboundEvent)
 class InboundEventAdmin(TenantAdminMixin, admin.ModelAdmin):
-    """Webhooks received from the storefront. Read-only: they record what was applied to stock."""
+    """Webhooks received from the storefront. Read-only and never deleted: each row is what stops a redelivered
+    order from being applied to stock twice."""
 
     list_display = ('event_type', 'event_id', 'status', 'connection', 'received_at')
     list_filter = ('status', 'event_type')
@@ -47,4 +48,7 @@ class InboundEventAdmin(TenantAdminMixin, admin.ModelAdmin):
         return False
 
     def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
         return False

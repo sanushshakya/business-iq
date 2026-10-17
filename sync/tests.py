@@ -285,4 +285,6 @@ class InboundEventAdminTests(TestCase):
         request = RequestFactory().get('/')
         self.assertFalse(model_admin.has_add_permission(request))
         self.assertFalse(model_admin.has_change_permission(request))
+        # deleting one would let a redelivered order be applied to stock a second time
+        self.assertFalse(model_admin.has_delete_permission(request))
         self.assertIn('status', model_admin.list_filter)

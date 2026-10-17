@@ -48,6 +48,7 @@ ROLE_ROUTES = {
         + _route(r'^/sales/sales/$', 'GET', 'POST')
         + _route(r'^/sales/sales/\d+/$', 'GET')
         + _route(r'^/sales/sales/\d+/void/$', 'POST')
+        + _route(r'^/sync/loyalty/lookup/$', 'POST')
     ),
     DEMAND: (
         PRODUCTS_READ

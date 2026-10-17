@@ -98,6 +98,7 @@ class CreateSaleSerializer(serializers.Serializer):
     amount_tendered = serializers.DecimalField(required=False, allow_null=True, **MONEY)
     items = SaleLineSerializer(many=True, allow_empty=False, max_length=200)
     client_ref = serializers.UUIDField(required=False, allow_null=True, default=None)
+    loyalty_barcode = serializers.CharField(required=False, allow_blank=True, max_length=32, default='')
 
     def validate_session(self, session):
         user = self.context['request'].user

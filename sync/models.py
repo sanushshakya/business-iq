@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models
+from django.utils import timezone
 
 from common.fields import EncryptedTextField
 
@@ -135,3 +136,32 @@ class InboundEvent(models.Model):
 
     def __str__(self):
         return f"{self.event_type} {self.event_id}"
+
+
+class OutboundEvent(models.Model):
+    """
+    A webhook event for the storefront (transactional outbox): written in the same transaction as the change it
+    reports, sent as soon as that commits, and retried by the sweep until delivered or failed.
+    """
+
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('delivered', 'Delivered'),
+        ('failed', 'Failed'),
+    ]
+
+    connection = models.ForeignKey(StorefrontConnection, on_delete=models.CASCADE, related_name='outbound_events')
+    event_id = models.UUIDField(default=uuid.uuid4, unique=True)
+    event_type = models.CharField(max_length=40)
+    payload = models.JSONField()
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    attempts = models.PositiveIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(default=timezone.now)
+    last_error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['status', 'next_attempt_at'])]
+
+    def __str__(self):
+        return f"{self.event_type} {self.event_id} ({self.status})"

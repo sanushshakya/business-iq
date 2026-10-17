@@ -40,4 +40,9 @@ app.conf.beat_schedule = {
         'task': 'pricing.tasks.sync_approved_prices',
         'schedule': crontab(minute='*/15'),
     },
+    # Each event is sent the moment its sale commits; this only retries failures and anything a dead worker dropped.
+    'deliver-storefront-events-every-30-seconds': {
+        'task': 'sync.tasks.deliver_outbound_events',
+        'schedule': 30.0,
+    },
 }

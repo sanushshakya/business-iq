@@ -66,6 +66,8 @@ class Sale(models.Model):
     # Chosen by the till for each sale, so resending after a lost response returns the original sale
     # instead of charging twice.
     client_ref = models.UUIDField(null=True, blank=True)
+    # The customer's storefront loyalty card, if scanned; the points are awarded (and reversed on a void) in m18.
+    loyalty_barcode = models.CharField(max_length=32, blank=True)
 
     class Meta:
         ordering = ['-created_at', '-id']

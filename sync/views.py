@@ -7,16 +7,20 @@ import uuid
 from django.db import IntegrityError, transaction
 from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, viewsets
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from common.tenancy import IsCompanyStaffOrReadOnly, TenantScopedMixin
+from common.tenancy import HasCompany, IsCompanyStaffOrReadOnly, TenantScopedMixin
 from inventory.ledger import take_fefo
 from inventory.models import Product
 
+from . import loyalty
 from .models import InboundEvent, ShopifyConnection, StorefrontConnection, SyncTask
-from .serializers import ShopifyConnectionSerializer, SyncTaskSerializer
+from .outbox import active_connection
+from .serializers import (
+    LoyaltyCustomerSerializer, LoyaltyLookupSerializer, ShopifyConnectionSerializer, SyncTaskSerializer,
+)
 from .signing import verify
 
 logger = logging.getLogger(__name__)
@@ -134,3 +138,36 @@ class StorefrontInboundView(APIView):
         if event.status != 'applied':
             logger.warning('Storefront event %s (%s) was %s: %s', event_id, event_type, event.status, event.detail)
         return Response({'status': event.status})
+
+
+class LoyaltyLookupView(APIView):
+    """
+    ``POST /sync/loyalty/lookup/`` with ``{"barcode"}``: the card holder's first name and points, from the storefront.
+
+    Uses the signed-in user's company's storefront connection. Gives up after 1.5 s (503), so the till can sell
+    without points; 404 for an unknown card, 409 when the company has no active storefront connection.
+    """
+
+    permission_classes = [IsAuthenticated, HasCompany]
+
+    @extend_schema(request=LoyaltyLookupSerializer, responses={200: LoyaltyCustomerSerializer})
+    def post(self, request):
+        serializer = LoyaltyLookupSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        connection = active_connection(request.user.company_id) if request.user.company_id else None
+        if connection is None:
+            return Response(
+                {'code': 'not_configured', 'message': 'Loyalty is not connected for this company.', 'status_code': 409},
+                status=409,
+            )
+        try:
+            customer = loyalty.lookup(connection, serializer.validated_data['barcode'])
+        except loyalty.LoyaltyUnavailable:
+            return Response(
+                {'code': 'loyalty_unavailable', 'message': 'Loyalty is unavailable right now.', 'status_code': 503},
+                status=503,
+            )
+        if customer is None:
+            return Response({'code': 'not_found', 'message': 'No loyalty account for this card.', 'status_code': 404},
+                            status=404)
+        return Response(customer)

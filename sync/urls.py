@@ -11,5 +11,6 @@ router.register(r'shopify-connections', views.ShopifyConnectionViewSet, basename
 
 urlpatterns = [
     path('inbound/storefront/<int:connection_id>/', views.StorefrontInboundView.as_view(), name='storefront-inbound'),
+    path('loyalty/lookup/', views.LoyaltyLookupView.as_view(), name='loyalty-lookup'),
     path('', include(router.urls)),
 ]

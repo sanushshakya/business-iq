@@ -2,7 +2,7 @@ from django.contrib import admin
 
 from common.tenancy import TenantAdminMixin
 
-from .models import InboundEvent, ShopifyConnection, StorefrontConnection, SyncTask
+from .models import InboundEvent, OutboundEvent, ShopifyConnection, StorefrontConnection, SyncTask
 
 
 @admin.register(SyncTask)
@@ -43,6 +43,28 @@ class InboundEventAdmin(TenantAdminMixin, admin.ModelAdmin):
     list_filter = ('status', 'event_type')
     search_fields = ('event_id',)
     readonly_fields = ('connection', 'event_id', 'event_type', 'status', 'detail', 'payload', 'received_at')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(OutboundEvent)
+class OutboundEventAdmin(TenantAdminMixin, admin.ModelAdmin):
+    """Events sent to the storefront (loyalty awards and reversals). Read-only: the sweep owns their state."""
+
+    list_display = ('event_type', 'event_id', 'status', 'attempts', 'next_attempt_at', 'connection', 'created_at')
+    list_filter = ('status', 'event_type')
+    search_fields = ('event_id',)
+    readonly_fields = (
+        'connection', 'event_id', 'event_type', 'status', 'attempts', 'next_attempt_at', 'last_error', 'payload',
+        'created_at',
+    )
 
     def has_add_permission(self, request):
         return False

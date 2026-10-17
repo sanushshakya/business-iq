@@ -19,6 +19,7 @@ from rest_framework import serializers
 
 from inventory.ledger import move, take_fefo
 from inventory.models import Product, StockBatch
+from sync.outbox import active_connection, emit
 
 from .models import Sale, SaleAllocation, SaleItem, TillSession
 
@@ -78,12 +79,15 @@ def close_session(*, session, user, counted_cash, note=''):
 
 
 @transaction.atomic
-def record_sale(*, session, cashier, payment_method, amount_tendered, lines, client_ref=None):
+def record_sale(*, session, cashier, payment_method, amount_tendered, lines, client_ref=None, loyalty_barcode=''):
     """
     ``lines`` is a list of ``(Product, quantity)``. Prices come from the product, never from the client.
 
     Returns ``(sale, created)``. A repeated ``client_ref`` on the same session returns the original sale with
-    ``created=False``, so a retry after a lost response cannot charge twice.
+    ``created=False``, so a retry after a lost response cannot charge twice (or award loyalty points twice).
+
+    With a ``loyalty_barcode`` and an active storefront connection, a ``loyalty.award`` event is written in the
+    same transaction and sent once it commits; the sale never waits on the storefront.
     """
     session = TillSession.objects.select_for_update().get(pk=session.pk)
     if client_ref is not None:
@@ -129,6 +133,7 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
     sale = Sale.objects.create(
         session=session, cashier=cashier, payment_method=payment_method,
         total=total, amount_tendered=amount_tendered, change_due=change, client_ref=client_ref,
+        loyalty_barcode=loyalty_barcode,
     )
     for product, quantity, line_total in plan:
         item = SaleItem.objects.create(
@@ -140,7 +145,17 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
             raise serializers.ValidationError({'items': [f'{product.name}: stock changed, try again.']})
         for batch, taken in allocations:
             SaleAllocation.objects.create(item=item, batch=batch, quantity=taken)
+    if loyalty_barcode:
+        connection = active_connection(session.till.branch.company_id)
+        if connection:
+            emit(connection, 'loyalty.award', {
+                'barcode': loyalty_barcode, 'amount': str(total), 'order_reference': _loyalty_reference(sale),
+            })
     return sale, True
+
+
+def _loyalty_reference(sale):
+    return f'iq-sale-{sale.client_ref or sale.pk}'
 
 
 @transaction.atomic
@@ -161,4 +176,8 @@ def void_sale(*, sale, user, reason=''):
     sale.voided_by = user
     sale.void_reason = reason
     sale.save(update_fields=['status', 'voided_at', 'voided_by', 'void_reason'])
+    if sale.loyalty_barcode:  # a sale is voided at most once (checked above), so this reverses once
+        connection = active_connection(sale.session.till.branch.company_id)
+        if connection:
+            emit(connection, 'loyalty.reverse', {'order_reference': _loyalty_reference(sale)})
     return sale

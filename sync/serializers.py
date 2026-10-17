@@ -1,5 +1,6 @@
 # sync/serializers.py
 
+from rest_framework import serializers
 
 from common.tenancy import TenantModelSerializer
 
@@ -20,3 +21,16 @@ class ShopifyConnectionSerializer(TenantModelSerializer):
         fields = ['id', 'company', 'shop_domain', 'access_token', 'created_at']
         read_only_fields = ['created_at']
         extra_kwargs = {'access_token': {'write_only': True}}
+
+
+class LoyaltyLookupSerializer(serializers.Serializer):
+    barcode = serializers.CharField(max_length=32)
+
+
+class LoyaltyCustomerSerializer(serializers.Serializer):
+    """Only what the till shows: no surname, email or phone ever leaves m18."""
+
+    first_name = serializers.CharField()
+    points_balance = serializers.IntegerField()
+    tier = serializers.CharField()
+    points_gbp_value = serializers.DecimalField(max_digits=12, decimal_places=2)

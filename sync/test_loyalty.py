@@ -212,7 +212,7 @@ class DeliveryTests(LoyaltyTestCase):
         event = self.emit_award()
         self.assertTrue(deliver_outbound_event(event.pk))
         (url,), kwargs = post.call_args
-        self.assertEqual(url, BASE + 'rewards/api/integration/events/')
+        self.assertEqual(url, BASE + 'integration/events/')
         self.assertEqual((kwargs['timeout'], kwargs['allow_redirects']), (5, False))
         self.assertTrue(verify(SECRET, kwargs['data'], kwargs['headers']['X-Integration-Signature']))
         self.assertEqual(json.loads(kwargs['data']), event.payload)

@@ -45,6 +45,8 @@ TENANT_LOOKUPS = {
     'sync.StorefrontConnection': 'company',
     'sync.InboundEvent': 'connection__company',
     'sync.OutboundEvent': 'connection__company',
+    'sync.StockSyncState': 'product__company',
+    'sync.StockReconciliation': 'connection__company',
     'common.DemandAlert': 'company',
     'common.StockAlert': 'product__company',
     'common.FreightRateCache': 'company',

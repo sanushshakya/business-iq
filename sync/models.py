@@ -165,3 +165,43 @@ class OutboundEvent(models.Model):
 
     def __str__(self):
         return f"{self.event_type} {self.event_id} ({self.status})"
+
+
+class StockSyncState(models.Model):
+    """
+    Whether a storefront-linked product's online stock needs sending (``pending``), and what was sent last.
+
+    ``version`` goes up by one with every send, so the storefront can ignore a snapshot older than the one it has.
+    """
+
+    product = models.OneToOneField('inventory.Product', on_delete=models.CASCADE, related_name='stock_sync')
+    pending = models.BooleanField(default=True)
+    version = models.PositiveBigIntegerField(default=0)
+    last_sent_available = models.IntegerField(null=True, blank=True)
+    changed_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        indexes = [models.Index(fields=['pending'])]
+
+    def __str__(self):
+        return f"{self.product} v{self.version}{' (pending)' if self.pending else ''}"
+
+
+class StockReconciliation(models.Model):
+    """
+    One nightly comparison of IQ's online stock with what the storefront holds. ``mismatches`` lists
+    ``{product_id, kind, iq, m18}`` where kind is ``different``, ``missing_in_m18`` or ``not_linked_in_iq``.
+    Every linked product is resent after the run, so differences are fixed; this row is the report.
+    """
+
+    connection = models.ForeignKey(StorefrontConnection, on_delete=models.CASCADE, related_name='reconciliations')
+    ran_at = models.DateTimeField(auto_now_add=True)
+    checked = models.PositiveIntegerField(default=0)
+    mismatches = models.JSONField(default=list)
+    error = models.CharField(max_length=200, blank=True)
+
+    class Meta:
+        ordering = ['-ran_at', '-pk']
+
+    def __str__(self):
+        return f"Stock check {self.ran_at:%Y-%m-%d %H:%M}: {len(self.mismatches)} mismatch(es)"

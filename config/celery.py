@@ -41,6 +41,16 @@ app.conf.beat_schedule = {
         'schedule': crontab(minute='*/15'),
     },
     # Each event is sent the moment its sale commits; this only retries failures and anything a dead worker dropped.
+    # Online stock for the storefront: changed products are sent in batches within ~15 s.
+    'push-storefront-stock-every-15-seconds': {
+        'task': 'sync.tasks.push_storefront_stock',
+        'schedule': 15.0,
+    },
+    # After midnight, so stock that has just expired drops off the storefront too.
+    'reconcile-storefront-stock-nightly': {
+        'task': 'sync.tasks.reconcile_storefront_stock',
+        'schedule': crontab(hour=0, minute=30),
+    },
     'deliver-storefront-events-every-30-seconds': {
         'task': 'sync.tasks.deliver_outbound_events',
         'schedule': 30.0,

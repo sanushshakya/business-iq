@@ -2,7 +2,9 @@ from django.contrib import admin
 
 from common.tenancy import TenantAdminMixin
 
-from .models import InboundEvent, OutboundEvent, ShopifyConnection, StorefrontConnection, SyncTask
+from .models import (
+    InboundEvent, OutboundEvent, ShopifyConnection, StockReconciliation, StockSyncState, StorefrontConnection, SyncTask,
+)
 
 
 @admin.register(SyncTask)
@@ -74,3 +76,35 @@ class OutboundEventAdmin(TenantAdminMixin, admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+class ReadOnlyAdmin(TenantAdminMixin, admin.ModelAdmin):
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(StockSyncState)
+class StockSyncStateAdmin(ReadOnlyAdmin):
+    """Online stock last sent to the storefront per product; ``pending`` ones go out within ~15 s."""
+
+    list_display = ('product', 'pending', 'last_sent_available', 'version', 'changed_at')
+    list_filter = ('pending',)
+    search_fields = ('product__name', 'product__external_id')
+
+
+@admin.register(StockReconciliation)
+class StockReconciliationAdmin(ReadOnlyAdmin):
+    """Nightly stock comparison with the storefront. Mismatches are fixed by the resend that follows each run."""
+
+    list_display = ('ran_at', 'connection', 'checked', 'mismatch_count', 'error')
+    readonly_fields = ('connection', 'ran_at', 'checked', 'mismatches', 'error')
+
+    @admin.display(description='Mismatches')
+    def mismatch_count(self, obj):
+        return len(obj.mismatches)

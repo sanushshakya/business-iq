@@ -227,3 +227,72 @@ class ReconcileTests(StockPushTestCase):
         errors = list(StockReconciliation.objects.order_by('pk').values_list('error', flat=True))
         self.assertEqual(errors, ['ConnectionError', 'HTTP 503'])
         self.assertEqual(self.pending(), {product.pk})
+
+
+class PricePushTests(StockPushTestCase):
+    def items(self):
+        return OutboundEvent.objects.latest('pk').payload['data']['items']
+
+    def test_price_travels_only_when_switched_on(self):
+        product = self.linked(price='4.5')
+        self.batch(product, 2)
+        push_storefront_stock()
+        self.assertNotIn('price', self.items()[0])
+
+        StorefrontConnection.objects.filter(pk=self.connection.pk).update(push_prices=True)
+        product.refresh_from_db()
+        product.save()
+        push_storefront_stock()
+        self.assertEqual(self.items(), [{'product_id': product.external_id, 'online_available': 2,
+                                         'version': 2, 'price': '4.50'}])
+
+    def test_an_approved_change_goes_out_on_the_next_sweep(self):
+        from decimal import Decimal
+
+        from rest_framework.test import APIClient
+
+        from common.tests.factories import UserFactory
+        from pricing.models import PriceChangeLog
+
+        StorefrontConnection.objects.filter(pk=self.connection.pk).update(push_prices=True)
+        product = self.linked(price=Decimal('3.00'))
+        push_storefront_stock()
+        log = PriceChangeLog.objects.create(product=product, old_price=Decimal('3.00'), new_price=Decimal('2.49'))
+        client = APIClient()
+        client.force_authenticate(UserFactory(company=self.company, is_staff=True))
+        response = client.post(f'/pricing/price-changes/{log.pk}/approve/')
+        self.assertEqual(response.status_code, 200, response.content)
+        push_storefront_stock()
+        self.assertEqual(self.items()[0]['price'], '2.49')
+        self.assertEqual(self.items()[0]['version'], 2)
+
+    def test_switching_on_in_the_admin_queues_every_linked_product(self):
+        from django.contrib.admin.sites import site
+
+        a, b = self.linked(), self.linked()
+        StockSyncState.objects.update(pending=False)
+        admin = site._registry[StorefrontConnection]
+        form = mock.Mock(changed_data=['push_prices'])
+        self.connection.push_prices = True
+        with self.captureOnCommitCallbacks(execute=True):
+            admin.save_model(mock.Mock(), self.connection, form, True)
+        self.assertEqual(self.pending(), {a.pk, b.pk})
+
+
+@mock.patch('sync.tasks.requests.post')
+class PriceReconcileTests(StockPushTestCase):
+    def test_price_differences_are_reported(self, post):
+        from sync.models import StockReconciliation
+        from sync.tasks import reconcile_storefront_stock
+
+        same, drifted, old_m18 = self.linked(price='2.00'), self.linked(price='3.00'), self.linked(price='1.00')
+        post.return_value = m18_reply(200, [
+            {'product_id': same.external_id, 'iq_available': 0, 'price': '2.00'},
+            {'product_id': drifted.external_id, 'iq_available': 0, 'price': '3.49'},
+            {'product_id': old_m18.external_id, 'iq_available': 0},  # an m18 that does not send prices
+        ])
+        with self.assertLogs('sync.tasks', 'WARNING'):
+            reconcile_storefront_stock()
+        self.assertEqual(StockReconciliation.objects.get().mismatches, [
+            {'product_id': drifted.external_id, 'kind': 'price_different', 'iq': '3.00', 'm18': '3.49'},
+        ])

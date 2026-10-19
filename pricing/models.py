@@ -111,7 +111,8 @@ class PriceChangeLog(models.Model):
     """
     Record of a change to a product's price.
 
-    Approved, unprocessed logs are pushed to Shopify by ``pricing.tasks.sync_approved_prices``.
+    Approved, unprocessed logs are pushed to Shopify by ``pricing.tasks.sync_approved_prices``. Approval sets
+    ``Product.price``, which reaches the m18 storefront with the product's next stock snapshot (``sync.stock``).
     """
 
     product = models.ForeignKey('inventory.Product', on_delete=models.CASCADE, related_name='price_changes')

@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.db import transaction
 
 from common.tenancy import TenantAdminMixin
 
@@ -30,10 +31,19 @@ class ShopifyConnectionAdmin(TenantAdminMixin, admin.ModelAdmin):
 class StorefrontConnectionAdmin(TenantAdminMixin, admin.ModelAdmin):
     """The webhook secret can be entered when connecting the storefront but is never displayed afterwards."""
 
-    list_display = ('name', 'company', 'base_url', 'is_active', 'created_at')
+    list_display = ('name', 'company', 'base_url', 'is_active', 'push_prices', 'created_at')
 
     def get_exclude(self, request, obj=None):
         return ('webhook_secret',) if obj else ()
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        if obj.push_prices and 'push_prices' in form.changed_data:
+            # Prices only travel with a product's snapshot: queue them all so every price goes out on the next sweep.
+            from .stock import mark_all
+
+            company_id = obj.company_id
+            transaction.on_commit(lambda: mark_all(company_id))
 
 
 @admin.register(InboundEvent)

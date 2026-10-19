@@ -3,6 +3,7 @@
 import json
 import logging
 from datetime import timedelta
+from decimal import Decimal
 from urllib.parse import urljoin
 
 import requests
@@ -123,6 +124,10 @@ def deliver_outbound_events(batch_size=50):
     return sum(1 for pk in due if deliver_outbound_event(pk))
 
 
+def _price(value):
+    return str(Decimal(value).quantize(Decimal('0.01')))
+
+
 def _push_stock_batch(connection):
     """Send up to ``STOCK_BATCH_SIZE`` pending products for ``connection``. Returns ``(sent, maybe_more)``."""
     from .outbox import emit
@@ -143,11 +148,14 @@ def _push_stock_batch(connection):
         for state in linked:
             state.version += 1
             state.last_sent_available = available[state.product_id]
-            items.append({
+            item = {
                 'product_id': state.product.external_id,
                 'online_available': state.last_sent_available,
                 'version': state.version,
-            })
+            }
+            if connection.push_prices:
+                item['price'] = _price(state.product.price)
+            items.append(item)
         for state in states:
             state.pending = False
         StockSyncState.objects.bulk_update(states, ['pending', 'version', 'last_sent_available'])
@@ -203,9 +211,13 @@ def _compare(connection, theirs):
         if item is None:
             mismatches.append({'product_id': product.external_id, 'kind': 'missing_in_m18',
                                'iq': ours[product.pk], 'm18': None})
-        elif item.get('iq_available') != ours[product.pk]:
+            continue
+        if item.get('iq_available') != ours[product.pk]:
             mismatches.append({'product_id': product.external_id, 'kind': 'different',
                                'iq': ours[product.pk], 'm18': item.get('iq_available')})
+        if 'price' in item and item['price'] != _price(product.price):
+            mismatches.append({'product_id': product.external_id, 'kind': 'price_different',
+                               'iq': _price(product.price), 'm18': item['price']})
     linked_ids = {product.external_id for product in products}
     for product_id, item in theirs.items():
         if item.get('iq_managed') and product_id not in linked_ids:
@@ -217,7 +229,7 @@ def _compare(connection, theirs):
 @shared_task
 def reconcile_storefront_stock():
     """
-    Nightly: compare IQ's online stock with the storefront's, record the differences (``StockReconciliation``),
+    Nightly: compare IQ's online stock (and prices) with the storefront's, record the differences (``StockReconciliation``),
     then queue every linked product so the next sweep resends it. That fixes any drift and applies stock that
     expired overnight. A sale between the two reads can show as a difference; the resend corrects it anyway.
     """

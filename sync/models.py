@@ -98,7 +98,8 @@ class StorefrontConnection(models.Model):
     A company's link to the m18 storefront.
 
     ``webhook_secret`` signs webhooks in both directions. It is encrypted at rest, set only in the Django
-    admin, and never exposed through the API.
+    admin, and never exposed through the API. ``push_prices`` adds each linked product's price to its
+    ``stock.changed`` snapshot (Phase 3).
     """
 
     company = models.OneToOneField('tenants.Company', on_delete=models.CASCADE, related_name='storefront_connection')
@@ -106,6 +107,11 @@ class StorefrontConnection(models.Model):
     base_url = models.URLField(blank=True, validators=[validate_base_url])
     webhook_secret = EncryptedTextField()
     is_active = models.BooleanField(default=True)
+    push_prices = models.BooleanField(
+        default=False,
+        help_text='Send IQ prices with the stock updates; the storefront then takes its prices for linked products '
+                  'from IQ only. Check the nightly report for price differences before switching on.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

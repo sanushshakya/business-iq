@@ -12,6 +12,7 @@ python manage.py migrate              # SQLite by default (db.sqlite3)
 python manage.py runserver
 python manage.py seed_demo_data       # idempotent demo company + owner (lives in tenants/)
 python manage.py seed_cultural_events # idempotent placeholder CulturalEvents (lives in demand/)
+python manage.py seed --fixture x.json  # snapshot into an empty DB + superuser from DJANGO_SUPERUSER_* (tenants/)
 
 pytest                                # whole suite (use this, not `manage.py test`)
 pytest authentication/tests.py::PasswordResetConfirmTests::test_valid_token_resets_password
@@ -86,6 +87,7 @@ GitHub Actions only (there is no CircleCI config). `ci.yml` has `test` (Postgres
 
 - Migrations are a fresh initial set; most apps have a `0001_initial` plus `0002_initial` because of cross-app foreign keys (`authentication` and `sync` add later migrations on top). Delete any old local DB rather than migrating it forward.
 - Docker: `docker compose up --build` runs Postgres, Redis, daphne, a worker and beat; compose overrides `DB_*`/`REDIS_*` to the containers and requires `SECRET_KEY` and `DB_PASSWORD`. Code is baked into the image (no bind mount), so rebuild after changes. `scripts/healthcheck.py` sends the first `ALLOWED_HOSTS` entry as the Host header. 
+- The workspace root (outside this repo) has a `docker-compose.yml` running IQ, m18 and the frontend together on one Postgres (databases `iq`, `m18`) and one Redis (IQ db 0, m18 db 1); each backend runs `migrate` then `manage.py seed --fixture /seed/<name>.json`. `seed` mutes model signals during `loaddata` (otherwise `sync/signals.py` creates `StockSyncState` rows that clash with the snapshot's).
 - Dependencies live in a single `requirements.txt` (runtime plus test/lint tools; the Docker image installs it too). Settings support Postgres via `DB_ENGINE`/`DB_*`; the full test suite passes on both SQLite and Postgres.
 - Tests build data with factories in `common/tests/factories.py`. A test acting as a user must create its data under `user.company`, otherwise the scoped API correctly hides it.
 - `PriceRecommendationService.apply_decay_pricing` is idempotent: markdowns are computed from the pre-markdown price recorded in `PriceChangeLog`, so it is safe to run repeatedly.

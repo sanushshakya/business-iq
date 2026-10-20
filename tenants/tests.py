@@ -229,3 +229,94 @@ class TenantsApiTests(TestCase):
         client = self.client_for(self.staff)
         self.assertEqual(client.post(reverse('till-list'), {'branch': branch.pk, 'number': 1, 'device_id': 'D-1'}).status_code, 201)
         self.assertEqual(client.post(reverse('till-list'), {'branch': branch.pk, 'number': 2, 'device_id': 'D-1'}).status_code, 400)
+
+
+class SeedCommandTests(TestCase):
+    """``manage.py seed``: snapshot into an empty database, superuser from the environment."""
+
+    def fixture(self, objects):
+        import json
+        import tempfile
+
+        handle = tempfile.NamedTemporaryFile('w', suffix='.json', delete=False)
+        json.dump(objects, handle)
+        handle.close()
+        self.addCleanup(__import__('os').unlink, handle.name)
+        return handle.name
+
+    def snapshot(self):
+        # The connection comes before the product, so an unmuted Product receiver would create a
+        # StockSyncState that clashes with the snapshot's own row.
+        return self.fixture([
+            {'model': 'tenants.company', 'pk': 7, 'fields': {
+                'name': 'Snap Ltd', 'registration_number': 'SNAP', 'address': 'x', 'created_at': '2026-01-01T00:00:00Z'}},
+            {'model': 'tenants.customuser', 'pk': 3, 'fields': {
+                'password': '!', 'email': 'old@example.com', 'is_staff': False, 'is_active': True,
+                'created_at': '2026-01-01T00:00:00Z', 'company': 7, 'name': '', 'role': '', 'code_hash': None,
+                'is_superuser': False, 'last_login': None, 'groups': [], 'user_permissions': []}},
+            {'model': 'sync.storefrontconnection', 'pk': 2, 'fields': {
+                'company': 7, 'name': 'M18', 'base_url': 'http://localhost:8001/', 'webhook_secret': 'snap-secret',
+                'is_active': True, 'push_prices': False, 'created_at': '2026-01-01T00:00:00Z'}},
+            {'model': 'inventory.product', 'pk': 5, 'fields': {
+                'name': 'Noodles', 'description': '', 'price': '1.79', 'stock_quantity': 0, 'reorder_threshold': 5,
+                'commodity_code': '', 'category': None, 'company': 7, 'shopify_product_id': None,
+                'external_id': 'cd3553d8-61ad-447e-9ddf-607c91044d88', 'online_buffer': 0}},
+            {'model': 'sync.stocksyncstate', 'pk': 9, 'fields': {
+                'product': 5, 'pending': False, 'version': 14, 'last_sent_available': 0,
+                'changed_at': '2026-01-01T00:00:00Z'}},
+        ])
+
+    def seed(self, fixture=None, **env):
+        from unittest import mock
+
+        args = ['--fixture', fixture] if fixture else []
+        with mock.patch.dict('os.environ', env):
+            call_command('seed', *args, stdout=StringIO())
+
+    def test_loads_snapshot_and_creates_superuser_in_its_company(self):
+        from django.db.models.signals import post_save
+
+        from sync.models import StockSyncState, StorefrontConnection
+
+        receivers = list(post_save.receivers)
+        self.seed(self.snapshot(), DJANGO_SUPERUSER_EMAIL='root@example.com', DJANGO_SUPERUSER_PASSWORD='pw-123456')
+
+        self.assertEqual(list(post_save.receivers), receivers)
+        state = StockSyncState.objects.get()
+        self.assertEqual((state.pk, state.version), (9, 14))
+        self.assertEqual(StorefrontConnection.objects.get().webhook_secret, 'snap-secret')
+        root = get_user_model().objects.get(email='root@example.com')
+        self.assertTrue(root.is_superuser and root.is_staff and root.check_password('pw-123456'))
+        self.assertEqual(root.company_id, 7)
+
+    def test_rerun_skips_the_snapshot_and_keeps_the_password(self):
+        snapshot = self.snapshot()
+        env = {'DJANGO_SUPERUSER_EMAIL': 'root@example.com', 'DJANGO_SUPERUSER_PASSWORD': 'pw-123456'}
+        self.seed(snapshot, **env)
+        Company.objects.filter(pk=7).update(name='Renamed')
+        self.seed(snapshot, **{**env, 'DJANGO_SUPERUSER_PASSWORD': 'other-pw'})
+
+        self.assertEqual(Company.objects.get(pk=7).name, 'Renamed')
+        self.assertTrue(get_user_model().objects.get(email='root@example.com').check_password('pw-123456'))
+
+    def test_promotes_an_existing_user(self):
+        self.seed(self.snapshot(), DJANGO_SUPERUSER_EMAIL='OLD@example.com')
+        user = get_user_model().objects.get(email='old@example.com')
+        self.assertTrue(user.is_superuser and user.is_staff)
+
+    def test_missing_fixture_and_password(self):
+        from django.core.management.base import CommandError
+
+        self.seed('/nonexistent/seed.json')
+        self.assertFalse(get_user_model().objects.exists())
+        with self.assertRaises(CommandError):
+            self.seed(DJANGO_SUPERUSER_EMAIL='root@example.com')
+
+    def test_storefront_settings_from_the_environment(self):
+        from sync.models import StorefrontConnection
+
+        self.seed(self.snapshot(), STOREFRONT_BASE_URL='http://m18.internal:8000/',
+                  STOREFRONT_WEBHOOK_SECRET='compose-secret')
+        connection = StorefrontConnection.objects.get()
+        self.assertEqual(connection.base_url, 'http://m18.internal:8000/')
+        self.assertEqual(connection.webhook_secret, 'compose-secret')

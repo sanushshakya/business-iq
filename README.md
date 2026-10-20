@@ -48,6 +48,12 @@ and `DB_PASSWORD` are read from `.env`. Code is baked into the image, so rebuild
 (`docker compose up --build`). To use Postgres without Docker, set `DB_ENGINE=django.db.backends.postgresql`
 and the `DB_*` values in `.env`.
 
+`python manage.py seed --fixture <dumpdata.json>` loads a data snapshot into an empty database (skipped once
+it has users), creates the superuser from `DJANGO_SUPERUSER_EMAIL` / `DJANGO_SUPERUSER_PASSWORD` if missing
+(in the first company), and, when `STOREFRONT_BASE_URL` / `STOREFRONT_WEBHOOK_SECRET` are set, writes them to
+every storefront connection. Model signals are muted while the snapshot loads. The workspace-level
+`docker-compose.yml` (next to this repo, with `m18-backend-pwa/` and `fe/`) runs it on every start.
+
 ## Authentication
 
 ```bash

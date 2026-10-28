@@ -122,7 +122,7 @@ token lifetimes, login/refresh throttles, field-encryption keys, and the externa
 | Demand | `/demand/demands/`, `events/`, `keywords/`; calendar: `/calendar/upcoming/` (next 3 months), `events/`, `alerts/` |
 | Alerts | `/common/api/alerts/stock/`, `/common/api/alerts/demand/create/`, `.../demand/dismiss/{id}/` |
 | Logistics | `/logistics/freight-alerts/`, `providers/`, `deliveries/`, `suppliers/`, `alternative-suppliers/` (read-only), `freight-rates/` (read-only) |
-| Pricing | `/pricing/price-changes/` (request, `approve`), `recommendation/`, `invoices/` (with file upload and `.../{id}/file/` download), `invoice-items/`, `plans/`, `subscriptions/` |
+| Pricing | `/pricing/price-changes/` (request, `approve`, `reject`), `recommendation/`, `invoices/` (with file upload and `.../{id}/file/` download), `invoice-items/`, `plans/`, `subscriptions/` |
 | Settings | `/common/api/settings/` (per-company key/value; staff write) |
 | Shopify / sync | `/sync/shopify-connections/`, `/sync/tasks/` |
 
@@ -134,7 +134,9 @@ the expected reorder and stock-out dates.
 
 **Price changes need approval.** Requesting a change (or the nightly markdown job proposing one) only records it. Staff approve it
 to apply the new price to the product (refused if the price has moved in the meantime), and the Shopify sync then pushes approved
-prices to the store. `POST /pricing/recommendation/` works out landed cost (price plus import duty) and a recommended selling price.
+prices to the store; or reject it, which keeps it as a record that can never be approved. Both take an optional `{"note"}`, and each
+change records its `source` (`manual` or `decay_markdown`), who requested it and who decided when. The nightly job does not
+propose a markdown again at prices staff already rejected. `POST /pricing/recommendation/` works out landed cost (price plus import duty) and a recommended selling price.
 
 ### Scheduled jobs (Celery beat, `config/celery.py`)
 

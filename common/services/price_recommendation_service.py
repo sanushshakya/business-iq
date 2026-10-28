@@ -63,7 +63,7 @@ class PriceRecommendationService:
         product = stock_batch.product
         applied = list(
             PriceChangeLog.objects.filter(
-                stock_batch=stock_batch, product=product, reason=self.DECAY_REASON, is_approved=True
+                stock_batch=stock_batch, product=product, source=PriceChangeLog.DECAY_MARKDOWN, is_approved=True
             ).order_by('changed_at', 'pk')
         )
         if applied and applied[-1].new_price == product.price:
@@ -78,18 +78,22 @@ class PriceRecommendationService:
         approve. Returns ``(log_or_None, changed)``; ``changed`` is False when nothing new needed recording.
         """
         product = stock_batch.product
-        pending = PriceChangeLog.objects.filter(stock_batch=stock_batch, reason=self.DECAY_REASON, is_approved=False)
+        markdowns = PriceChangeLog.objects.filter(stock_batch=stock_batch, source=PriceChangeLog.DECAY_MARKDOWN)
+        pending = markdowns.filter(is_approved=False, is_rejected=False)
         discount = calculate_markdown_percentage(self.shelf_life_remaining_percent(stock_batch))
         new_price = None
         if discount:
             new_price = (self.base_price_for(stock_batch) * (Decimal(100) - discount) / Decimal(100)).quantize(Decimal('0.01'))
         if new_price is None or new_price == product.price:
             return (None, bool(pending.delete()[0]))  # nothing to propose; drop any stale proposal
+        if markdowns.filter(is_rejected=True, old_price=product.price, new_price=new_price).exists():
+            return (None, bool(pending.delete()[0]))  # staff already said no to exactly this markdown
 
         log = pending.first()
         if log is None:
             log = PriceChangeLog.objects.create(
-                product=product, stock_batch=stock_batch, old_price=product.price, new_price=new_price, reason=self.DECAY_REASON
+                product=product, stock_batch=stock_batch, old_price=product.price, new_price=new_price,
+                reason=self.DECAY_REASON, source=PriceChangeLog.DECAY_MARKDOWN,
             )
             self.logger.info("Proposed %s%% markdown for %s: %s -> %s", discount, product.name, product.price, new_price)
             return log, True
@@ -117,7 +121,10 @@ class PriceRecommendationService:
                 driving[batch.product_id] = (remaining, batch)
 
         changes = sum(self.propose_markdown(batch)[1] for _, batch in driving.values())
-        stale = PriceChangeLog.objects.filter(reason=self.DECAY_REASON, is_approved=False).exclude(
+        # Rejected markdowns are a record (and stop the same markdown being proposed again): never drop them.
+        stale = PriceChangeLog.objects.filter(
+            source=PriceChangeLog.DECAY_MARKDOWN, is_approved=False, is_rejected=False
+        ).exclude(
             stock_batch__in=[batch for _, batch in driving.values()]
         )
         return changes + stale.delete()[0]

@@ -102,6 +102,128 @@ class PriceChangeApiTests(TestCase):
         self.assertEqual(self.client.delete(reverse('pricechangelog-detail', args=[pending.pk])).status_code, 204)
         self.assertEqual(PriceChangeLog.objects.count(), 1)
 
+    # ---- who asked, who decided
+    def test_a_request_records_who_asked_and_is_manual(self):
+        response = self.request_change(
+            source='decay_markdown', requested_by=self.member.pk, is_rejected=True, decided_by=self.member.pk,
+            decision_note='sneaky',
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        body = response.json()
+        self.assertEqual((body['source'], body['requested_by'], body['requested_by_name']),
+                         ('manual', self.staff.pk, self.staff.display_name))
+        self.assertEqual((body['is_rejected'], body['decided_by'], body['decided_at'], body['decision_note']),
+                         (False, None, None, ''))
+
+    def test_approving_records_who_decided_when_and_the_note(self):
+        log = self.log()
+        response = self.client.post(reverse('pricechangelog-approve', args=[log.pk]), {'note': 'ok for the weekend'})
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertEqual((body['decided_by'], body['decided_by_name'], body['decision_note']),
+                         (self.staff.pk, self.staff.display_name, 'ok for the weekend'))
+        self.assertIsNotNone(body['decided_at'])
+
+    # ---- rejecting
+    def reject(self, log, **data):
+        return self.client.post(reverse('pricechangelog-reject', args=[log.pk]), data)
+
+    def test_rejecting_keeps_a_record_and_the_price_never_changes(self):
+        log = self.log()
+        response = self.reject(log, note='too deep a cut')
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertEqual((body['is_rejected'], body['is_approved'], body['decided_by'], body['decision_note']),
+                         (True, False, self.staff.pk, 'too deep a cut'))
+        self.assertIsNotNone(body['decided_at'])
+        # a rejected change can never be approved, deleted or pushed afterwards
+        self.assertEqual(self.client.post(reverse('pricechangelog-approve', args=[log.pk])).status_code, 409)
+        self.assertEqual(self.client.delete(reverse('pricechangelog-detail', args=[log.pk])).status_code, 409)
+        self.product.refresh_from_db()
+        log.refresh_from_db()
+        self.assertEqual((self.product.price, log.is_approved, log.is_processed), (Decimal('10.00'), False, False))
+        with mock.patch('pricing.tasks.ShopifyService') as service_cls:
+            self.assertEqual(sync_approved_prices(), 0)
+        service_cls.assert_not_called()
+
+    def test_rejecting_twice_is_harmless_and_keeps_the_first_decision(self):
+        log = self.log()
+        self.reject(log, note='first')
+        response = self.reject(log, note='second')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['decision_note'], 'first')
+
+    def test_an_approved_change_cannot_be_rejected(self):
+        log = self.log()
+        self.client.post(reverse('pricechangelog-approve', args=[log.pk]))
+        self.assertEqual(self.reject(log).status_code, 409)
+        log.refresh_from_db()
+        self.assertFalse(log.is_rejected)
+
+    def test_only_staff_can_reject(self):
+        member = APIClient()
+        member.force_authenticate(self.member)
+        log = self.log()
+        self.assertEqual(member.post(reverse('pricechangelog-reject', args=[log.pk])).status_code, 403)
+        log.refresh_from_db()
+        self.assertFalse(log.is_rejected)
+
+    def test_another_companys_change_cannot_be_rejected(self):
+        other = self.log(product=ProductFactory(price=Decimal('10.00')))
+        self.assertEqual(self.reject(other).status_code, 404)
+
+    def test_a_rejected_markdown_is_not_proposed_again_at_the_same_price(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from inventory.models import StockBatch
+        from pricing.tasks import propose_decay_markdowns
+
+        batch = StockBatchFactory(product=self.product, expiration_date=timezone.localdate() + timedelta(days=10))
+        StockBatch.objects.filter(pk=batch.pk).update(receive_date=timezone.now() - timedelta(days=90))
+        propose_decay_markdowns()
+        proposal = PriceChangeLog.objects.get()
+        self.assertEqual(proposal.source, 'decay_markdown')
+        self.reject(proposal)
+        self.assertEqual(propose_decay_markdowns(), 0)
+        self.assertEqual(PriceChangeLog.objects.count(), 1)  # the rejected one is kept, not refreshed or replaced
+        proposal.refresh_from_db()
+        self.assertTrue(proposal.is_rejected)
+
+    def test_a_rejected_markdown_survives_its_batch_selling_out(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from inventory.models import StockBatch
+        from pricing.tasks import propose_decay_markdowns
+
+        batch = StockBatchFactory(product=self.product, expiration_date=timezone.localdate() + timedelta(days=10))
+        StockBatch.objects.filter(pk=batch.pk).update(receive_date=timezone.now() - timedelta(days=90))
+        propose_decay_markdowns()
+        proposal = PriceChangeLog.objects.get()
+        self.reject(proposal)
+        StockBatch.objects.filter(pk=batch.pk).update(quantity=0)  # no longer drives the price
+        propose_decay_markdowns()
+        self.assertTrue(PriceChangeLog.objects.filter(pk=proposal.pk, is_rejected=True).exists())
+
+    def test_a_manual_request_with_the_markdown_reason_text_is_left_alone(self):
+        from pricing.tasks import propose_decay_markdowns
+
+        self.request_change(reason='decay_markdown')
+        propose_decay_markdowns()
+        self.assertEqual(PriceChangeLog.objects.get().source, 'manual')  # still there, still pending
+
+    def test_an_invalid_note_changes_nothing(self):
+        log = self.log()
+        response = self.client.post(reverse('pricechangelog-approve', args=[log.pk]), {'note': 'x' * 256})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('note', response.json())
+        self.product.refresh_from_db()
+        log.refresh_from_db()
+        self.assertEqual((self.product.price, log.is_approved), (Decimal('10.00'), False))
+
     def test_the_nightly_job_proposes_markdowns_for_staff_to_approve(self):
         from datetime import timedelta
 
@@ -466,3 +588,25 @@ class BillingAndInvoiceValidationTests(TestCase):
             self.client.post(reverse('invoicelineitem-list'), {**payload, 'total_price': '7.50'}).status_code, 201)
         self.assertEqual(
             self.client.post(reverse('invoicelineitem-list'), {**payload, 'quantity': 0, 'total_price': '0'}).status_code, 400)
+
+
+class BackfillPriceChangeSourceTests(TestCase):
+    def test_markdowns_get_their_source_and_the_reverse_undoes_it(self):
+        from importlib import import_module
+
+        from django.apps import apps
+
+        migration = import_module('pricing.migrations.0006_backfill_price_change_source')
+        product = ProductFactory(price=Decimal('5.00'))
+        markdown = PriceChangeLog.objects.create(
+            product=product, old_price=Decimal('5.00'), new_price=Decimal('4.00'), reason='decay_markdown'
+        )
+        manual = PriceChangeLog.objects.create(
+            product=product, old_price=Decimal('5.00'), new_price=Decimal('6.00'), reason='new supplier price'
+        )
+        migration.mark_markdowns(apps, None)
+        self.assertEqual([log.source for log in PriceChangeLog.objects.order_by('pk')], ['decay_markdown', 'manual'])
+        migration.unmark_markdowns(apps, None)
+        markdown.refresh_from_db()
+        manual.refresh_from_db()
+        self.assertEqual((markdown.source, manual.source), ('manual', 'manual'))

@@ -138,6 +138,12 @@ prices to the store; or reject it, which keeps it as a record that can never be 
 change records its `source` (`manual` or `decay_markdown`), who requested it and who decided when. The nightly job does not
 propose a markdown again at prices staff already rejected. `POST /pricing/recommendation/` works out landed cost (price plus import duty) and a recommended selling price.
 
+**Linking the online shop's catalogue.** `python manage.py import_storefront_products --company <reg> [--dry-run]` links every
+m18 product to an IQ product: by the shop's id, then barcode (from the signed `integration/stock/` snapshot), then exact name;
+anything unmatched is created with an opening batch. Several matches are left for review. Each run is saved as a *Catalogue import*
+in the admin, where staff link the leftovers by hand or mark them *not sold online*; the run ends with
+`m18 products: N — linked L, excluded E, needs attention A`. Safe to repeat: nothing is duplicated and existing stock is never changed.
+
 ### Scheduled jobs (Celery beat, `config/celery.py`)
 
 | Job | When (UTC) | What it does |

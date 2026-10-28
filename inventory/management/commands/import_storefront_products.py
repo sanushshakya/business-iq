@@ -1,16 +1,18 @@
 import json
 import time
 from datetime import timedelta
+from urllib.parse import urljoin
 
 import requests
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
-from sync.catalogue import import_catalogue, summary
+from sync.catalogue import barcodes_of, import_catalogue, summary
 from sync.models import CatalogueImportItem as Item
+from sync.models import StorefrontConnection
+from sync.tasks import storefront_snapshot
 from tenants.models import Company
 
-DEFAULT_API = 'https://backend.m18foods.co.uk/shop/api/'
 OPENING_BATCH = 'OPENING'
 PAGE_SIZE = 100
 
@@ -60,7 +62,7 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('--company', default='M18-DEMO', help='Registration number of the company (default M18-DEMO).')
-        parser.add_argument('--api-url', default=DEFAULT_API)
+        parser.add_argument('--api-url', help="The shop's public product API (default: the storefront connection's base URL + shop/api/).")
         parser.add_argument('--file', help='Read a saved catalogue ({"products": [...], "categories": {"id": "name"}}) instead of the API.')
         parser.add_argument(
             '--expiry-days', type=int, default=365,
@@ -74,16 +76,27 @@ class Command(BaseCommand):
         except Company.DoesNotExist:
             raise CommandError(f"No company with registration number {options['company']!r}.")
 
+        connection = StorefrontConnection.objects.filter(company=company, is_active=True).exclude(base_url='').first()
+        barcodes = {}
         if options['file']:
             with open(options['file']) as fh:
-                catalog = json.load(fh)
+                catalog = json.load(fh)  # barcodes, if any, are in the file's own entries
         else:
-            self.stdout.write(f"Downloading products from {options['api_url']} ...")
-            catalog = fetch_catalog(options['api_url'])
+            api_url = options['api_url'] or (connection and urljoin(connection.base_url, 'shop/api/'))
+            if not api_url:
+                raise CommandError(f'{company} has no storefront connection: give --api-url or --file.')
+            if connection:
+                try:  # the public API hides the main barcode; the signed snapshot has it
+                    barcodes = {pid: barcodes_of(item) for pid, item in storefront_snapshot(connection).items()}
+                except RuntimeError as exc:
+                    raise CommandError(f'Could not read barcodes from the storefront: {exc}') from exc
+            self.stdout.write(f'Downloading products from {api_url} ...')
+            catalog = fetch_catalog(api_url)
 
         run = import_catalogue(
-            company, catalog, barcodes={}, expiry=timezone.localdate() + timedelta(days=options['expiry_days']),
+            company, catalog, barcodes=barcodes, expiry=timezone.localdate() + timedelta(days=options['expiry_days']),
             dry_run=options['dry_run'], source='file' if options['file'] else 'api',
+            keep_prices=bool(connection and connection.push_prices),
         )
         self.report(run)
 

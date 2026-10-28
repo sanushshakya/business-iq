@@ -1,10 +1,14 @@
-from django.contrib import admin
+from django import forms
+from django.contrib import admin, messages
 from django.db import transaction
 
 from common.tenancy import TenantAdminMixin
+from inventory.models import Product
 
+from .catalogue import exclude_item, link_item, summary
 from .models import (
-    InboundEvent, OutboundEvent, ShopifyConnection, StockReconciliation, StockSyncState, StorefrontConnection, SyncTask,
+    CatalogueImport, CatalogueImportItem, InboundEvent, OutboundEvent, ShopifyConnection, StockReconciliation,
+    StockSyncState, StorefrontConnection, StorefrontExclusion, SyncTask,
 )
 
 
@@ -118,3 +122,113 @@ class StockReconciliationAdmin(ReadOnlyAdmin):
     @admin.display(description='Mismatches')
     def mismatch_count(self, obj):
         return len(obj.mismatches)
+
+
+class CatalogueImportItemInline(admin.TabularInline):
+    model = CatalogueImportItem
+    fields = ('name', 'outcome', 'detail', 'product', 'm18_price', 'iq_price', 'resolved_by')
+    readonly_fields = fields
+    extra = 0
+    can_delete = False
+    show_change_link = True
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(CatalogueImport)
+class CatalogueImportAdmin(ReadOnlyAdmin):
+    """Runs of ``import_storefront_products``. Act on the items that need attention from the item list."""
+
+    list_display = ('ran_at', 'dry_run', 'source', 'run_by', 'result')
+    list_filter = ('dry_run',)
+    readonly_fields = ('ran_at', 'run_by', 'dry_run', 'source', 'result')
+    exclude = ('counts',)
+    inlines = [CatalogueImportItemInline]
+
+    @admin.display(description='Result')
+    def result(self, run):
+        return summary(run)
+
+
+class LinkItemForm(forms.ModelForm):
+    """The one thing staff can change on an import item: which unlinked IQ product it is."""
+
+    link_to = forms.ModelChoiceField(
+        queryset=Product.objects.none(), required=False, label='Link to IQ product',
+        help_text="One of the company's products not yet linked to the shop.",
+    )
+
+    class Meta:
+        model = CatalogueImportItem
+        fields = []
+
+    def clean_link_to(self):
+        product = self.cleaned_data['link_to']
+        item = self.instance
+        if product and Product.objects.filter(company=item.run.company, external_id=item.m18_product_id).exists():
+            raise forms.ValidationError('This m18 product is already linked to an IQ product.')
+        return product
+
+
+@admin.register(CatalogueImportItem)
+class CatalogueImportItemAdmin(TenantAdminMixin, admin.ModelAdmin):
+    """
+    One m18 product in an import. For ambiguous or skipped ones: pick the IQ product it is ("Link to IQ product"),
+    or select them in the list and "Mark not sold online".
+    """
+
+    form = LinkItemForm
+    list_display = ('name', 'outcome', 'product', 'm18_price', 'iq_price', 'resolved_by', 'run')
+    list_filter = ('outcome', 'run')
+    search_fields = ('name', 'm18_product_id', 'barcode')
+    list_select_related = ('product', 'run', 'resolved_by')
+    readonly_fields = ('run', 'm18_product_id', 'name', 'barcode', 'outcome', 'detail', 'product', 'candidates',
+                       'm18_price', 'iq_price', 'resolved_by', 'resolved_at')
+    actions = ['mark_not_sold_online']
+
+    def can_link(self, item):
+        return item is not None and item.outcome in CatalogueImportItem.NEEDS_ATTENTION and item.resolved_at is None
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def get_fields(self, request, obj=None):
+        return (['link_to'] if self.can_link(obj) else []) + list(self.readonly_fields)
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        kwargs['fields'] = []
+        form = super().get_form(request, obj, change, **kwargs)
+        if self.can_link(obj):
+            form.base_fields['link_to'].queryset = Product.objects.filter(
+                company=obj.run.company, external_id=''
+            ).order_by('name')
+        else:
+            form.base_fields.pop('link_to', None)
+        return form
+
+    def save_model(self, request, obj, form, change):
+        product = form.cleaned_data.get('link_to')
+        if product and self.can_link(obj):
+            link_item(obj, product, request.user)
+
+    @admin.action(description='Mark not sold online')
+    def mark_not_sold_online(self, request, queryset):
+        for item in queryset.select_related('run'):
+            exclude_item(item, request.user)
+        self.message_user(request, f'{queryset.count()} product(s) marked not sold online.', messages.SUCCESS)
+
+
+@admin.register(StorefrontExclusion)
+class StorefrontExclusionAdmin(TenantAdminMixin, admin.ModelAdmin):
+    """m18 products the import skips. Delete one to have the next import link or create it again."""
+
+    list_display = ('name', 'm18_product_id', 'reason', 'excluded_by', 'excluded_at')
+    search_fields = ('name', 'm18_product_id')
+    readonly_fields = ('m18_product_id', 'name', 'excluded_by', 'excluded_at')
+
+    def has_add_permission(self, request):
+        return False

@@ -10,6 +10,7 @@ is saved as a ``CatalogueImport`` whose items staff review in the admin; a dry r
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
+from django.utils import timezone
 
 from inventory.models import Product, ProductCategory, StockBatch
 
@@ -165,3 +166,24 @@ class _Categories:
             self.cache[name] = (ProductCategory.objects.filter(name=name).first() if self.dry_run
                                 else ProductCategory.objects.get_or_create(name=name)[0])
         return self.cache[name]
+
+
+def link_item(item, product, user):
+    """Staff linked an import item to an IQ product by hand (admin)."""
+    with transaction.atomic():
+        link(product, item.m18_product_id, [item.barcode] if item.barcode else [])
+        item.product, item.resolved_by, item.resolved_at = product, user, timezone.now()
+        item.save(update_fields=['product', 'resolved_by', 'resolved_at'])
+
+
+def exclude_item(item, user, reason=''):
+    """Staff marked an import item "not sold online" (admin); the next import skips it. Idempotent."""
+    with transaction.atomic():
+        exclusion, _ = StorefrontExclusion.objects.get_or_create(
+            company=item.run.company, m18_product_id=item.m18_product_id,
+            defaults={'name': item.name, 'excluded_by': user, 'reason': reason},
+        )
+        if item.resolved_at is None:
+            item.resolved_by, item.resolved_at = user, timezone.now()
+            item.save(update_fields=['resolved_by', 'resolved_at'])
+    return exclusion

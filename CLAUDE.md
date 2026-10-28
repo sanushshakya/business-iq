@@ -94,3 +94,15 @@ GitHub Actions only (there is no CircleCI config). `ci.yml` has `test` (Postgres
 - External services: AlAdhan (Hijri dates) and the UK Trade Tariff (duty) are public and verified live (`RUN_LIVE_TESTS=1 pytest common/tests/test_live_integrations.py`); the tariff service also resolves country-group preferences (EU, trade schemes) via `/geographical_areas/{group}`; Shopify is only covered by mocked tests. Shopify uses the GraphQL Admin API (the REST product/variant endpoints are deprecated) and `SHOPIFY_API_VERSION` must be kept on a supported version. `ShopifyConnection.shop_domain` is validated against `*.myshopify.com` because it becomes part of an outgoing request URL (SSRF). The tariff fixture `common/tests/fixtures/tariff_0804100099.json` is a trimmed real response.
 - `SECRET_KEY` must be 32+ characters outside `DEBUG`, and the placeholder once committed to this public repo (checked by hash in `config/settings.py`) is refused.
 - Human-entered identifiers must be unique per company, never globally (a global unique constraint lets one tenant detect another's data): `SupplierInvoice.invoice_number` is per company and `StockBatch.batch_number` per product. `SyncTask.task_id` is deliberately global: it is a system-generated id (read-only in the API) the Celery task looks up on its own. A company has at most one `ShopifyConnection`, and only company staff can change it.
+
+## Workspace rules
+Shared rules live in the workspace CLAUDE.md (one folder up) and in the workspace skills
+(tenant-model, stock-ledger, money-vat-weights, integration-event). Follow them.
+
+## Where things go in this repo
+- New domain apps are top-level directories; `config/` is only settings.
+- Stock changes: `inventory/ledger.py` only. Till logic: `sales/services.py`.
+- Cross-service code: `sync/` (signing, outbox, inbox, tasks).
+- Roles: `authentication/role_access.py`. Tenancy: `common/tenancy.py`.
+- Scheduled jobs: add to the Celery beat schedule and to the job table in README.
+- Tests: pytest, next to the app (`<app>/tests/`). Live external-API tests stay opt-in.

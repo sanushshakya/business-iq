@@ -7,6 +7,7 @@ from unittest import mock
 
 import requests
 from django.core.cache import cache
+from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -151,6 +152,8 @@ class LookupTests(LoyaltyTestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()['code'], 'not_found')
 
+    # The key check reads LocMemCache internals; Docker settings use Redis.
+    @override_settings(CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}})
     def test_lookup_hit_is_cached(self, post):
         post.return_value = reply(200, CUSTOMER)
         self.assertEqual(self.lookup().json(), CUSTOMER)

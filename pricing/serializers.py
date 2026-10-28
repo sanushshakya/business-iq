@@ -119,12 +119,19 @@ class PriceChangeLogSerializer(TenantModelSerializer):
     """
     A requested change to a product's price. Clients choose the product and the new price; ``old_price`` is taken
     from the product, and approval and processing only happen through the ``approve`` action and the Shopify sync.
+    Who asked and who decided are recorded by the server; ``source`` is ``manual`` for every request made here.
     """
+
+    requested_by_name = serializers.CharField(source='requested_by.display_name', read_only=True, default=None)
+    decided_by_name = serializers.CharField(source='decided_by.display_name', read_only=True, default=None)
 
     class Meta:
         model = PriceChangeLog
         fields = '__all__'
-        read_only_fields = ['old_price', 'changed_at', 'is_approved', 'is_processed']
+        read_only_fields = [
+            'old_price', 'changed_at', 'is_approved', 'is_processed', 'source', 'requested_by',
+            'is_rejected', 'decided_by', 'decided_at', 'decision_note',
+        ]
 
     def validate_new_price(self, value):
         if value <= 0:
@@ -139,6 +146,12 @@ class PriceChangeLogSerializer(TenantModelSerializer):
         if attrs['new_price'] == product.price:
             raise serializers.ValidationError({'new_price': 'This is already the product price.'})
         return attrs
+
+
+class PriceDecisionSerializer(serializers.Serializer):
+    """Body of an approve or reject: an optional note kept with the decision."""
+
+    note = serializers.CharField(max_length=255, required=False, allow_blank=True, default='')
 
 
 class PriceRecommendationRequestSerializer(serializers.Serializer):

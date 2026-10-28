@@ -111,8 +111,14 @@ class PriceChangeLog(models.Model):
     """
     Record of a change to a product's price.
 
-    Approved, unprocessed logs are pushed to Shopify by ``pricing.tasks.sync_approved_prices``.
+    Approved, unprocessed logs are pushed to Shopify by ``pricing.tasks.sync_approved_prices``. Approval sets
+    ``Product.price``, which reaches the m18 storefront with the product's next stock snapshot (``sync.stock``).
+    A rejected change is kept as a record and can never be approved afterwards.
     """
+
+    MANUAL = 'manual'
+    DECAY_MARKDOWN = 'decay_markdown'
+    SOURCE_CHOICES = [(MANUAL, 'Manual'), (DECAY_MARKDOWN, 'Near-expiry markdown')]
 
     product = models.ForeignKey('inventory.Product', on_delete=models.CASCADE, related_name='price_changes')
     stock_batch = models.ForeignKey(
@@ -122,7 +128,17 @@ class PriceChangeLog(models.Model):
     new_price = models.DecimalField(max_digits=10, decimal_places=2)
     reason = models.CharField(max_length=100, blank=True)
     changed_at = models.DateTimeField(auto_now_add=True)
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default=MANUAL)
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='+'
+    )
     is_approved = models.BooleanField(default=False)
+    is_rejected = models.BooleanField(default=False)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='+'
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.CharField(max_length=255, blank=True)
     is_processed = models.BooleanField(default=False)
 
     class Meta:

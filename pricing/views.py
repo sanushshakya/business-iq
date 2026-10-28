@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from django.db import transaction
 from django.http import FileResponse, Http404
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -20,6 +21,7 @@ from .models import InvoiceLineItem, PriceChangeLog, PricingPlan, Subscription, 
 from .serializers import (
     InvoiceLineItemSerializer,
     PriceChangeLogSerializer,
+    PriceDecisionSerializer,
     PriceRecommendationRequestSerializer,
     PriceRecommendationSerializer,
     PricingPlanSerializer,
@@ -77,8 +79,9 @@ class PriceChangeLogViewSet(
     viewsets.GenericViewSet,
 ):
     """
-    Price changes awaiting or past approval. Staff request a change (or the nightly markdown job proposes one),
-    approve it to apply the new price to the product, and the Shopify sync then pushes it to the store.
+    Price changes awaiting or past a decision. Staff request a change (or the nightly markdown job proposes one),
+    approve it to apply the new price to the product (the Shopify sync and the storefront push then send it on),
+    or reject it. Decisions record who made them, when, and an optional note; decided changes are a record.
     """
 
     queryset = PriceChangeLog.objects.all()
@@ -86,35 +89,69 @@ class PriceChangeLogViewSet(
     permission_classes = [IsCompanyStaffOrReadOnly]
 
     def perform_create(self, serializer):
-        serializer.save(old_price=serializer.validated_data['product'].price)
+        serializer.save(
+            old_price=serializer.validated_data['product'].price, source=PriceChangeLog.MANUAL, requested_by=self.request.user
+        )
 
     def destroy(self, request, *args, **kwargs):
-        if self.get_object().is_approved:
-            return Response({'detail': 'Approved price changes are a record and cannot be deleted.'}, status=status.HTTP_409_CONFLICT)
+        log = self.get_object()
+        if log.is_approved or log.is_rejected:
+            return Response({'detail': 'Decided price changes are a record and cannot be deleted.'}, status=status.HTTP_409_CONFLICT)
         return super().destroy(request, *args, **kwargs)
 
-    @extend_schema(request=None, responses=PriceChangeLogSerializer)
+    def _locked_log(self):
+        """The change, locked so that an approve and a reject of it cannot both succeed."""
+        return PriceChangeLog.objects.select_for_update().get(pk=self.get_object().pk)
+
+    def _note(self):
+        body = PriceDecisionSerializer(data=self.request.data)
+        body.is_valid(raise_exception=True)
+        return body.validated_data['note']
+
+    def _decide(self, log, note, **fields):
+        fields.update(decided_by=self.request.user, decided_at=timezone.now(), decision_note=note)
+        for name, value in fields.items():
+            setattr(log, name, value)
+        log.save(update_fields=list(fields))
+
+    @extend_schema(request=PriceDecisionSerializer, responses=PriceChangeLogSerializer)
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
         """
         Approve the change: the product takes the new price now, and the next sync pushes it to Shopify.
 
-        Refused (409) if the product's price is no longer the one the change was based on.
+        Refused (409) if the change was rejected, or if the product's price is no longer the one it was based on.
         """
+        note = self._note()
         with transaction.atomic():
-            log = self.get_object()
+            log = self._locked_log()
             if log.is_approved:
                 return Response(self.get_serializer(log).data)  # approving twice is harmless
+            if log.is_rejected:
+                return Response({'detail': 'This change was rejected and cannot be approved.'}, status=status.HTTP_409_CONFLICT)
             product = Product.objects.select_for_update().get(pk=log.product_id)
             if product.price != log.old_price:
                 return Response(
-                    {'detail': f'The price is now {product.price}, not {log.old_price}. Delete this change and request a new one.'},
+                    {'detail': f'The price is now {product.price}, not {log.old_price}. Reject this change and request a new one.'},
                     status=status.HTTP_409_CONFLICT,
                 )
             product.price = log.new_price
             product.save(update_fields=['price'])
-            log.is_approved = True
-            log.save(update_fields=['is_approved'])
+            self._decide(log, note, is_approved=True)
+        return Response(self.get_serializer(log).data)
+
+    @extend_schema(request=PriceDecisionSerializer, responses=PriceChangeLogSerializer)
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        """Reject the change: the price stays as it is and the change is kept as a record. Refused (409) once approved."""
+        note = self._note()
+        with transaction.atomic():
+            log = self._locked_log()
+            if log.is_rejected:
+                return Response(self.get_serializer(log).data)  # rejecting twice keeps the first decision
+            if log.is_approved:
+                return Response({'detail': 'This change is already approved.'}, status=status.HTTP_409_CONFLICT)
+            self._decide(log, note, is_rejected=True)
         return Response(self.get_serializer(log).data)
 
 

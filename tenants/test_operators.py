@@ -321,6 +321,20 @@ class RoleAccessTests(OperatorTestCase):
                 else:
                     self.assertEqual(status, 403, (role, path))
 
+    def test_stock_operators_see_price_changes_but_cannot_decide_them(self):
+        from decimal import Decimal
+
+        from pricing.models import PriceChangeLog
+
+        log = PriceChangeLog.objects.create(
+            product=ProductFactory(company=self.company), old_price=Decimal('2.00'), new_price=Decimal('1.50')
+        )
+        stock, _ = self.operator_client(self.create_operator('S', role=STOCK)['code'])
+        for action in ('approve', 'reject'):
+            self.assertEqual(stock.post(f'/pricing/price-changes/{log.pk}/{action}/').status_code, 403, action)
+        log.refresh_from_db()
+        self.assertEqual((log.is_approved, log.is_rejected), (False, False))
+
     def test_writes_follow_the_role(self):
         demand, _ = self.operator_client(self.create_operator('D', role=DEMAND)['code'])
         freight, _ = self.operator_client(self.create_operator('F', role=FREIGHT)['code'])

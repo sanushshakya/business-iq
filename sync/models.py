@@ -118,6 +118,31 @@ class StorefrontConnection(models.Model):
     def __str__(self):
         return self.name
 
+    def save(self, *args, **kwargs):
+        """Record every switch of ``push_prices`` (``PricePushChange``); set ``changed_by`` first to say who."""
+        was_on = (StorefrontConnection.objects.filter(pk=self.pk).values_list('push_prices', flat=True).first()
+                  if self.pk else False)
+        super().save(*args, **kwargs)
+        if bool(was_on) != self.push_prices:
+            PricePushChange.objects.create(connection=self, turned_on=self.push_prices,
+                                           changed_by=getattr(self, 'changed_by', None))
+
+
+class PricePushChange(models.Model):
+    """Audit: who switched a connection's ``push_prices`` on or off, and when. Written by ``StorefrontConnection.save``."""
+
+    connection = models.ForeignKey(StorefrontConnection, on_delete=models.CASCADE, related_name='price_push_changes')
+    turned_on = models.BooleanField()
+    changed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+                                   related_name='+')
+    changed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-changed_at', '-pk']
+
+    def __str__(self):
+        return f"Price push {'on' if self.turned_on else 'off'} {self.changed_at:%Y-%m-%d %H:%M}"
+
 
 class InboundEvent(models.Model):
     """A webhook event received from the storefront; unique per ``event_id`` so redelivery is a no-op."""

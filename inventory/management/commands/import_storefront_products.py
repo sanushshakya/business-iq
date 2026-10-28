@@ -1,17 +1,18 @@
 import json
 import time
 from datetime import timedelta
-from decimal import Decimal, InvalidOperation
+from urllib.parse import urljoin
 
 import requests
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
 from django.utils import timezone
 
-from inventory.models import Product, ProductCategory, StockBatch
+from sync.catalogue import barcodes_of, import_catalogue, summary
+from sync.models import CatalogueImportItem as Item
+from sync.models import StorefrontConnection
+from sync.tasks import storefront_snapshot
 from tenants.models import Company
 
-DEFAULT_API = 'https://backend.m18foods.co.uk/shop/api/'
 OPENING_BATCH = 'OPENING'
 PAGE_SIZE = 100
 
@@ -53,14 +54,15 @@ def product_name(raw):
 
 class Command(BaseCommand):
     help = (
-        "Import the online shop's products into a company. Safe to repeat: products are matched on the shop's id, "
-        'so a re-run updates names, descriptions and prices but never stock. New products with stock get one '
-        f'"{OPENING_BATCH}" batch so the till can sell them.'
+        "Link the online shop's products to a company's IQ products (sync.catalogue): by the shop's id, then barcode, "
+        'then exact name; anything unmatched is created, with one '
+        f'"{OPENING_BATCH}" batch if it has stock. Safe to repeat; stock of existing products is never changed. '
+        'Every run is saved as a catalogue import report (admin).'
     )
 
     def add_arguments(self, parser):
         parser.add_argument('--company', default='M18-DEMO', help='Registration number of the company (default M18-DEMO).')
-        parser.add_argument('--api-url', default=DEFAULT_API)
+        parser.add_argument('--api-url', help="The shop's public product API (default: the storefront connection's base URL + shop/api/).")
         parser.add_argument('--file', help='Read a saved catalogue ({"products": [...], "categories": {"id": "name"}}) instead of the API.')
         parser.add_argument(
             '--expiry-days', type=int, default=365,
@@ -74,69 +76,38 @@ class Command(BaseCommand):
         except Company.DoesNotExist:
             raise CommandError(f"No company with registration number {options['company']!r}.")
 
+        connection = StorefrontConnection.objects.filter(company=company, is_active=True).exclude(base_url='').first()
+        barcodes = {}
         if options['file']:
             with open(options['file']) as fh:
-                catalog = json.load(fh)
+                catalog = json.load(fh)  # barcodes, if any, are in the file's own entries
         else:
-            self.stdout.write(f"Downloading products from {options['api_url']} ...")
-            catalog = fetch_catalog(options['api_url'])
+            api_url = options['api_url'] or (connection and urljoin(connection.base_url, 'shop/api/'))
+            if not api_url:
+                raise CommandError(f'{company} has no storefront connection: give --api-url or --file.')
+            if connection:
+                try:  # the public API hides the main barcode; the signed snapshot has it
+                    barcodes = {pid: barcodes_of(item) for pid, item in storefront_snapshot(connection).items()}
+                except RuntimeError as exc:
+                    raise CommandError(f'Could not read barcodes from the storefront: {exc}') from exc
+            self.stdout.write(f'Downloading products from {api_url} ...')
+            catalog = fetch_catalog(api_url)
 
-        result = self.import_catalog(
-            company, catalog, expiry=timezone.localdate() + timedelta(days=options['expiry_days']),
-            dry_run=options['dry_run'],
+        run = import_catalogue(
+            company, catalog, barcodes=barcodes, expiry=timezone.localdate() + timedelta(days=options['expiry_days']),
+            dry_run=options['dry_run'], source='file' if options['file'] else 'api',
+            keep_prices=bool(connection and connection.push_prices),
         )
+        self.report(run)
+
+    def report(self, run):
+        counts, items = run.counts, run.items.all()
+        linked = sum(counts.get(outcome, 0) for outcome in (Item.UPDATED, Item.LINKED_BARCODE, Item.LINKED_NAME))
         self.stdout.write(self.style.SUCCESS(
-            f"{'Would import' if options['dry_run'] else 'Imported'}: {result['created']} new, "
-            f"{result['updated']} updated, {len(result['skipped'])} skipped."
+            f"{'Would import' if run.dry_run else 'Imported'}: {counts.get(Item.CREATED, 0)} new, "
+            f"{linked} updated, {counts.get(Item.SKIPPED, 0)} skipped."
         ))
-        for name, reason in result['skipped']:
-            self.stdout.write(f'  skipped {name}: {reason}')
-
-    @transaction.atomic
-    def import_catalog(self, company, catalog, expiry, dry_run=False):
-        category_names = catalog.get('categories', {})
-        categories, existing = {}, {p.external_id: p for p in Product.objects.filter(company=company).exclude(external_id='')}
-        result = {'created': 0, 'updated': 0, 'skipped': []}
-
-        for raw in catalog['products']:
-            name = product_name(raw)
-            external_id = str(raw['product_id'])
-            try:
-                price = Decimal(str(raw['price'])).quantize(Decimal('0.01'))
-            except (InvalidOperation, KeyError):
-                price = Decimal(0)
-            if price <= 0:
-                result['skipped'].append((name, 'no price'))
-                continue
-            if not raw.get('is_active', True):
-                result['skipped'].append((name, 'inactive'))
-                continue
-
-            category = None
-            category_name = category_names.get(str(raw.get('category')))
-            if category_name:
-                if category_name not in categories:
-                    categories[category_name] = (
-                        ProductCategory.objects.filter(name=category_name).first()
-                        if dry_run else ProductCategory.objects.get_or_create(name=category_name)[0]
-                    )
-                category = categories[category_name]
-
-            product = existing.get(external_id)
-            fields = {'name': name[:255], 'description': (raw.get('description') or '').strip(), 'price': price, 'category': category}
-            if product:
-                result['updated'] += 1
-                if not dry_run:
-                    for key, value in fields.items():
-                        setattr(product, key, value)
-                    product.save(update_fields=list(fields))
-                continue
-
-            result['created'] += 1
-            if dry_run:
-                continue
-            quantity = max(int(raw.get('stock_quantity') or 0), 0)
-            product = Product.objects.create(company=company, external_id=external_id, stock_quantity=quantity, **fields)
-            if quantity:
-                StockBatch.objects.create(product=product, batch_number=OPENING_BATCH, quantity=quantity, expiration_date=expiry)
-        return result
+        self.stdout.write(summary(run))
+        for item in items:
+            if item.outcome in Item.NEEDS_ATTENTION:
+                self.stdout.write(f'  {item.outcome} {item.name}: {item.detail}')

@@ -107,3 +107,66 @@ class FetchCatalogTests(TestCase):
                 catalog = fetch_catalog('https://shop.test/api')
         self.assertEqual([p['product_id'] for p in catalog['products']], ['a', 'b'])
         self.assertEqual(catalog['categories'], {'14': 'Asian'})
+
+
+class ImportFromTheConnectionTests(TestCase):
+    """Without --file the catalogue comes from the connection's shop and the barcodes from its signed snapshot."""
+
+    COMMAND = 'inventory.management.commands.import_storefront_products'
+
+    def setUp(self):
+        from sync.models import StorefrontConnection
+
+        self.company = CompanyFactory(registration_number='M18-TEST')
+        self.connection = StorefrontConnection.objects.create(
+            company=self.company, base_url='https://shop.example.com/', webhook_secret='s'
+        )
+
+    def run_import(self, catalog=None, snapshot=None, **options):
+        catalog = catalog or {'products': [raw('a', 'Ghee'), raw('b', 'Rice')], 'categories': CATEGORIES}
+        out = StringIO()
+        with mock.patch(f'{self.COMMAND}.fetch_catalog', return_value=catalog) as fetch, \
+                mock.patch(f'{self.COMMAND}.storefront_snapshot', return_value=snapshot or {}) as snap:
+            call_command('import_storefront_products', company='M18-TEST', stdout=out, **options)
+        return out.getvalue(), fetch, snap
+
+    def test_api_url_comes_from_the_connection(self):
+        from common.tests.factories import ProductFactory
+
+        mine = ProductFactory(company=self.company, name='Our ghee', barcode='501')
+        _, fetch, snap = self.run_import(snapshot={'a': {'product_id': 'a', 'barcode': '501', 'alternate_barcodes': []}})
+        fetch.assert_called_once_with('https://shop.example.com/shop/api/')
+        snap.assert_called_once_with(self.connection)
+        mine.refresh_from_db()
+        self.assertEqual(mine.external_id, 'a')  # linked by the snapshot's barcode
+
+    def test_without_a_connection_or_file_it_stops(self):
+        from sync.models import CatalogueImport
+
+        self.connection.delete()
+        with self.assertRaisesMessage(CommandError, 'no storefront connection'):
+            self.run_import()
+        self.assertFalse(CatalogueImport.objects.exists())
+
+    def test_snapshot_failure_stops_before_writing(self):
+        from sync.models import CatalogueImport
+
+        out = StringIO()
+        with mock.patch(f'{self.COMMAND}.fetch_catalog', return_value={'products': [raw('a', 'Ghee')], 'categories': {}}), \
+                mock.patch(f'{self.COMMAND}.storefront_snapshot', side_effect=RuntimeError('HTTP 503')):
+            with self.assertRaisesMessage(CommandError, 'HTTP 503'):
+                call_command('import_storefront_products', company='M18-TEST', stdout=out)
+        self.assertFalse(CatalogueImport.objects.exists())
+        self.assertFalse(Product.objects.exists())
+
+    def test_prints_the_summary_line(self):
+        out, _, _ = self.run_import()
+        self.assertIn('m18 products: 2 — linked 2, excluded 0, needs attention 0', out)
+
+    def test_prices_are_kept_once_the_connection_pushes_them(self):
+        self.run_import()
+        Product.objects.filter(external_id='a').update(price='9.99')
+        self.connection.push_prices = True
+        self.connection.save()
+        self.run_import()
+        self.assertEqual(str(Product.objects.get(external_id='a').price), '9.99')

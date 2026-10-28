@@ -8,6 +8,7 @@ import re
 import uuid
 from urllib.parse import urlsplit
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models
@@ -211,3 +212,72 @@ class StockReconciliation(models.Model):
 
     def __str__(self):
         return f"Stock check {self.ran_at:%Y-%m-%d %H:%M}: {len(self.mismatches)} mismatch(es)"
+
+
+class StorefrontExclusion(models.Model):
+    """An m18 product the company does not sell through IQ ("not sold online"): the catalogue import skips it."""
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='storefront_exclusions')
+    m18_product_id = models.CharField(max_length=64, help_text="The m18 product's id.")
+    name = models.CharField(max_length=255)
+    reason = models.CharField(max_length=255, blank=True)
+    excluded_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='+')
+    excluded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name', 'pk']
+        constraints = [models.UniqueConstraint(fields=['company', 'm18_product_id'], name='uniq_storefront_exclusion')]
+
+    def __str__(self):
+        return f"Not sold online: {self.name}"
+
+
+class CatalogueImport(models.Model):
+    """One run of ``import_storefront_products``: what happened to each m18 product (``items``)."""
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='catalogue_imports')
+    ran_at = models.DateTimeField(auto_now_add=True)
+    run_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='+')
+    dry_run = models.BooleanField(default=False)
+    source = models.CharField(max_length=20, default='api', help_text='api or file')
+    counts = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ['-ran_at', '-pk']
+
+    def __str__(self):
+        from .catalogue import summary
+
+        return f"Catalogue import {self.ran_at:%Y-%m-%d %H:%M}{' (dry run)' if self.dry_run else ''}: {summary(self)}"
+
+
+class CatalogueImportItem(models.Model):
+    """One m18 product in a catalogue import, and what the import did with it."""
+
+    UPDATED, LINKED_BARCODE, LINKED_NAME, CREATED = 'updated', 'linked_barcode', 'linked_name', 'created'
+    AMBIGUOUS, SKIPPED, EXCLUDED = 'ambiguous', 'skipped', 'excluded'
+    OUTCOMES = [
+        (UPDATED, 'Already linked, updated'), (LINKED_BARCODE, 'Linked by barcode'), (LINKED_NAME, 'Linked by name'),
+        (CREATED, 'Created in IQ'), (AMBIGUOUS, 'Ambiguous: several IQ products match'),
+        (SKIPPED, 'Skipped (no price or inactive)'), (EXCLUDED, 'Not sold online'),
+    ]
+    NEEDS_ATTENTION = (AMBIGUOUS, SKIPPED)
+
+    run = models.ForeignKey(CatalogueImport, on_delete=models.CASCADE, related_name='items')
+    m18_product_id = models.CharField(max_length=64, help_text="The m18 product's id.")
+    name = models.CharField(max_length=255)
+    barcode = models.CharField(max_length=32, blank=True)
+    outcome = models.CharField(max_length=20, choices=OUTCOMES)
+    detail = models.CharField(max_length=255, blank=True)
+    product = models.ForeignKey('inventory.Product', null=True, blank=True, on_delete=models.SET_NULL, related_name='+')
+    candidates = models.JSONField(default=list, blank=True)
+    m18_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    iq_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    resolved_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='+')
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['run', 'name', 'pk']
+
+    def __str__(self):
+        return f"{self.name}: {self.get_outcome_display()}"

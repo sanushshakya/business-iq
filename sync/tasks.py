@@ -179,8 +179,8 @@ def push_storefront_stock():
     return sent
 
 
-def _storefront_stock(connection):
-    """m18's ``{product_id: item}`` for every product it has. Raises ``RuntimeError`` with a short reason."""
+def storefront_snapshot(connection):
+    """m18's ``{product_id: item}`` for every product it has (stock, price, name, barcodes). Raises ``RuntimeError`` with a short reason."""
     body = b'{}'
     try:
         response = requests.post(
@@ -238,7 +238,7 @@ def reconcile_storefront_stock():
     for connection in StorefrontConnection.objects.filter(is_active=True).exclude(base_url=''):
         run = StockReconciliation(connection=connection)
         try:
-            run.checked, run.mismatches = _compare(connection, _storefront_stock(connection))
+            run.checked, run.mismatches = _compare(connection, storefront_snapshot(connection))
         except RuntimeError as exc:
             run.error = str(exc)[:200]
             logger.warning('Storefront stock check for connection %s failed: %s', connection.pk, run.error)

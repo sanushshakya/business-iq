@@ -43,6 +43,8 @@ class Product(models.Model):
     shopify_product_id = models.BigIntegerField(null=True, blank=True)
     # The id this product has in the system it was imported from (e.g. the online shop), so re-imports update it.
     external_id = models.CharField(max_length=64, blank=True)
+    # Main pack barcode (EAN/UPC). Not unique: real catalogues share and reuse codes.
+    barcode = models.CharField(max_length=32, blank=True, db_index=True)
     # Units kept back for the physical shop: the online storefront is offered in-date stock minus this.
     online_buffer = models.PositiveIntegerField(default=0, help_text='Keep for shop: units never offered online.')
 

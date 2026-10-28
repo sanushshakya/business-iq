@@ -120,6 +120,19 @@ class CatalogueImportTests(TestCase):
         product.refresh_from_db()
         self.assertEqual(product.price, Decimal('9.99'))
 
+    def test_an_unpriced_m18_row_never_zeroes_a_linked_price(self):
+        mine = ProductFactory(company=self.company, name='Ghee', price=Decimal('4.00'), external_id='z1')
+        self.run_import([raw('z1', 'Ghee', price='0')])
+        mine.refresh_from_db()
+        self.assertEqual(mine.price, Decimal('4.00'))
+
+    def test_a_name_match_with_a_different_barcode_is_not_linked(self):
+        other_pack = ProductFactory(company=self.company, name='Ghee', barcode='5099')
+        run = self.run_import([raw('g1', 'Ghee')], barcodes={'g1': ['5011']})
+        self.assertEqual(self.outcomes(run), {'g1': 'created'})
+        other_pack.refresh_from_db()
+        self.assertEqual(other_pack.external_id, '')
+
     def test_dry_run_saves_only_the_report(self):
         ProductFactory(company=self.company, name='Chickpeas')
         run = self.run_import([raw('c1', 'Chickpeas'), raw('d1', 'Dates')], dry_run=True)

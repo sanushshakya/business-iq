@@ -180,7 +180,7 @@ class CatalogueImportItemAdmin(TenantAdminMixin, admin.ModelAdmin):
 
     form = LinkItemForm
     list_display = ('name', 'outcome', 'product', 'm18_price', 'iq_price', 'resolved_by', 'run')
-    list_filter = ('outcome', 'run')
+    list_filter = ('outcome', ('run', admin.RelatedOnlyFieldListFilter))  # only this company's runs
     search_fields = ('name', 'm18_product_id', 'barcode')
     list_select_related = ('product', 'run', 'resolved_by')
     readonly_fields = ('run', 'm18_product_id', 'name', 'barcode', 'outcome', 'detail', 'product', 'candidates',
@@ -217,9 +217,12 @@ class CatalogueImportItemAdmin(TenantAdminMixin, admin.ModelAdmin):
 
     @admin.action(description='Mark not sold online')
     def mark_not_sold_online(self, request, queryset):
-        for item in queryset.select_related('run'):
+        items = queryset.filter(outcome__in=CatalogueImportItem.NEEDS_ATTENTION).select_related('run')
+        for item in items:
             exclude_item(item, request.user)
-        self.message_user(request, f'{queryset.count()} product(s) marked not sold online.', messages.SUCCESS)
+        skipped = queryset.count() - len(items)
+        note = f' {skipped} already linked or excluded, left as they were.' if skipped else ''
+        self.message_user(request, f'{len(items)} product(s) marked not sold online.{note}', messages.SUCCESS)
 
 
 @admin.register(StorefrontExclusion)

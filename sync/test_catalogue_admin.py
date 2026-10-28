@@ -46,6 +46,12 @@ class CatalogueAdminTests(TestCase):
         self.assertEqual({e.excluded_by for e in exclusions}, {self.staff})
         self.assertEqual(self.run_import([raw('s1', 'Sample', price='0')]).items.get().outcome, 'excluded')
 
+    def test_mark_not_sold_online_ignores_items_that_need_no_attention(self):
+        run = self.run_import([raw('s1', 'Sample', price='0'), raw('n1', 'Brand new')])
+        self.web.post(reverse('admin:sync_catalogueimportitem_changelist'),
+                      {'action': 'mark_not_sold_online', '_selected_action': [item.pk for item in run.items.all()]})
+        self.assertEqual(list(StorefrontExclusion.objects.values_list('m18_product_id', flat=True)), ['s1'])
+
     def test_link_manually_sets_the_external_id(self):
         one, two = ProductFactory(company=self.company, name='Tea'), ProductFactory(company=self.company, name='Tea')
         item = self.item(self.run_import([raw('t1', 'Tea')]), 't1')
@@ -84,9 +90,12 @@ class CatalogueAdminTests(TestCase):
         ProductFactory(company=self.company, name='Tea')
         ProductFactory(company=self.company, name='Tea')
         theirs = self.item(self.run_import([raw('x1', 'Rice', price='0')], company=self.other), 'x1')
+        self.run_import([raw('o1', 'Oil', price='0')])  # the run filter only shows with two runs
         self.assertNotEqual(self.web.get(self.change_url(theirs), follow=True).status_code, 500)
         self.assertFalse(CatalogueImportItem.objects.filter(pk=theirs.pk, run__company=self.company).exists())
-        self.assertNotContains(self.web.get(reverse('admin:sync_catalogueimportitem_changelist')), 'Rice')
+        changelist = self.web.get(reverse('admin:sync_catalogueimportitem_changelist'))
+        self.assertNotContains(changelist, 'Rice')
+        self.assertNotContains(changelist, f'run__id__exact={theirs.run.pk}')
         outsider = ProductFactory(company=self.other, name='Their tea')
         mine = self.item(self.run_import([raw('t1', 'Tea')]), 't1')
         page = self.web.get(self.change_url(mine))

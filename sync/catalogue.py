@@ -60,8 +60,12 @@ class _Unlinked:
     def for_barcodes(self, codes):
         return self.matching(p for code in codes for p in self.by_barcode.get(code, []))
 
-    def for_name(self, name):
-        return self.matching(self.by_name.get(_normal(name), []))
+    def for_name(self, name, codes):
+        """Same name, leaving out products whose own barcode differs from m18's (another pack or brand)."""
+        products = self.by_name.get(_normal(name), [])
+        if codes:
+            products = [p for p in products if not p.barcode.strip() or p.barcode.strip() in codes]
+        return self.matching(products)
 
 
 @transaction.atomic
@@ -92,7 +96,7 @@ def import_catalogue(company, catalog, *, barcodes, expiry, dry_run=False, run_b
 
         if product is not None:
             item.outcome, item.product, item.iq_price = Item.UPDATED, product, product.price
-            if keep_prices:
+            if keep_prices or price <= 0:  # IQ owns the price, or m18 has none: never write 0
                 fields.pop('price')
             if not dry_run:
                 for key, value in fields.items():
@@ -106,7 +110,7 @@ def import_catalogue(company, catalog, *, barcodes, expiry, dry_run=False, run_b
             item.outcome, item.detail = Item.SKIPPED, 'no price' if price <= 0 else 'inactive'
             continue
 
-        for outcome, candidates in ((Item.LINKED_BARCODE, unlinked.for_barcodes(codes)), (Item.LINKED_NAME, unlinked.for_name(name))):
+        for outcome, candidates in ((Item.LINKED_BARCODE, unlinked.for_barcodes(codes)), (Item.LINKED_NAME, unlinked.for_name(name, codes))):
             if len(candidates) > 1:
                 item.outcome, item.candidates = Item.AMBIGUOUS, [p.pk for p in candidates]
                 item.detail = f"{len(candidates)} IQ products have this {'barcode' if outcome == Item.LINKED_BARCODE else 'name'}"

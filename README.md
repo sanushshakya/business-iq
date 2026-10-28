@@ -143,6 +143,8 @@ m18 product to an IQ product: by the shop's id, then barcode (from the signed `i
 anything unmatched is created with an opening batch. Several matches are left for review. Each run is saved as a *Catalogue import*
 in the admin, where staff link the leftovers by hand or mark them *not sold online*; the run ends with
 `m18 products: N — linked L, excluded E, needs attention A`. Safe to repeat: nothing is duplicated and existing stock is never changed.
+Once linked, later runs copy m18's name, description, category and price onto the IQ product (price only while the connection's
+`push_prices` is off, and never a missing m18 price).
 
 ### Scheduled jobs (Celery beat, `config/celery.py`)
 

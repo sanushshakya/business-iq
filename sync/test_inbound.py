@@ -122,3 +122,31 @@ class OrderPaidInboundTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertFalse(InboundEvent.objects.exists())
         self.assertEqual(Decimal(self.product.stock_quantity), Decimal(10))
+
+
+class OrderPaidLocationTests(TestCase):
+    """G09: web orders take stock from online-sellable locations only, and send it to CUSTOMER."""
+
+    setUp = OrderPaidInboundTests.setUp
+    envelope = OrderPaidInboundTests.envelope
+    post = OrderPaidInboundTests.post
+    item = OrderPaidInboundTests.item
+
+    def test_order_takes_from_online_sellable_locations_only(self):
+        from inventory.models import Location, StockBatch, StockMovement
+
+        StockBatch.objects.filter(pk=self.batch.pk).update(quantity=0)
+        store = Location.objects.create(company=self.company, code='WH-1', name='Fake warehouse', type='warehouse')
+        hidden = StockBatchFactory(product=self.product, quantity=10, location=store, batch_number='WH-LOT')
+        self.post(self.envelope([self.item(2)]))
+        hidden.refresh_from_db()
+        self.assertEqual(hidden.quantity, 10)  # the warehouse is not online-sellable
+        self.assertFalse(StockMovement.objects.filter(batch=hidden).exists())
+
+    def test_order_movement_goes_to_customer(self):
+        from inventory.models import StockMovement
+
+        self.post(self.envelope([self.item(2)]))
+        movement = StockMovement.objects.get()
+        self.assertEqual((movement.source_location, movement.destination_location.type),
+                         (self.batch.location, 'customer'))

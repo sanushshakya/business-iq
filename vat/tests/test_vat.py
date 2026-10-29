@@ -115,19 +115,49 @@ class RateAdminTests(TestCase):
         self.assertTrue(model_admin.has_add_permission(request))
         self.assertTrue(model_admin.has_change_permission(request))
 
+    def test_rates_in_force_cannot_be_edited_or_deleted(self):
+        from vat.models import VatRate
+
+        model_admin = admin.site._registry[VatRate]
+        request = RequestFactory().get('/admin/')
+        request.user = User.objects.create_superuser(email='root@example.com', password='pw-12345678')
+        in_force = VatRate.objects.get(code='standard', valid_from=date(2011, 1, 4))
+        future = VatRate.objects.create(code='standard', rate=Decimal('22.50'), valid_from=date(2099, 1, 1))
+        self.assertEqual(set(model_admin.get_readonly_fields(request, in_force)), {'code', 'rate', 'valid_from'})
+        self.assertFalse(model_admin.has_delete_permission(request, in_force))
+        self.assertEqual(list(model_admin.get_readonly_fields(request, future)), [])
+        self.assertTrue(model_admin.has_delete_permission(request, future))
+
 
 class SeedMigrationTests(TransactionTestCase):
+    # Put the seeded rates back afterwards: every sale test needs them.
+    serialized_rollback = True
+
     def test_seed_migration_reverses(self):
         executor = MigrationExecutor(connection)
         executor.migrate([('vat', '0001_initial')])
         executor.loader.build_graph()
         old_apps = executor.loader.project_state([('vat', '0001_initial')]).apps
         self.assertEqual(old_apps.get_model('vat', 'VatRate').objects.count(), 0)
+        # A rate added by hand is not one of the seeded rows, so undoing the seed again must keep it.
+        old_apps.get_model('vat', 'VatRate').objects.create(code='standard', rate='22.00', valid_from=date(2030, 1, 1))
         executor = MigrationExecutor(connection)
         executor.migrate([('vat', '0002_seed_uk_rates')])
         executor.loader.build_graph()
         new_apps = executor.loader.project_state([('vat', '0002_seed_uk_rates')]).apps
-        self.assertEqual(new_apps.get_model('vat', 'VatRate').objects.count(), 4)
+        self.assertEqual(new_apps.get_model('vat', 'VatRate').objects.count(), 5)
+        executor = MigrationExecutor(connection)
+        executor.migrate([('vat', '0001_initial')])
+        self.assertEqual(
+            list(old_apps.get_model('vat', 'VatRate').objects.values_list('rate', flat=True)), [Decimal('22.00')]
+        )
+        executor = MigrationExecutor(connection)
+        executor.migrate([('vat', '0002_seed_uk_rates')])
+
+    def test_seeded_rates_are_present_after_the_migration_test(self):
+        from vat.models import VatRate
+
+        self.assertGreaterEqual(VatRate.objects.count(), 4)
 
 
 class SchemaTests(TestCase):

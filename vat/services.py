@@ -3,8 +3,13 @@
 """VAT arithmetic. Till prices include VAT; a line's VAT is taken out of its rounded gross and rounded once."""
 
 from decimal import ROUND_HALF_UP, Decimal
+from zoneinfo import ZoneInfo
+
+from django.utils import timezone
 
 from .models import VatRate
+
+UK = ZoneInfo('Europe/London')
 
 PENNY = Decimal('0.01')
 HUNDRED = Decimal('100')
@@ -12,6 +17,11 @@ HUNDRED = Decimal('100')
 
 class NoVatRate(Exception):
     """No rate is in force for this code on this date (the rate table needs a row)."""
+
+
+def uk_date():
+    """Today in the UK. Rates change at UK midnight, which is 23:00 UTC in summer (the server runs on UTC)."""
+    return timezone.localtime(timezone.now(), UK).date()
 
 
 def rate_for(code, on):

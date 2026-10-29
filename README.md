@@ -123,6 +123,8 @@ token lifetimes, login/refresh throttles, field-encryption keys, and the externa
 | Alerts | `/common/api/alerts/stock/`, `/common/api/alerts/demand/create/`, `.../demand/dismiss/{id}/` |
 | Logistics | `/logistics/freight-alerts/`, `providers/`, `deliveries/`, `suppliers/`, `alternative-suppliers/` (read-only), `freight-rates/` (read-only) |
 | Pricing | `/pricing/price-changes/` (request, `approve`, `reject`), `recommendation/`, `invoices/` (with file upload and `.../{id}/file/` download), `invoice-items/`, `plans/`, `subscriptions/` |
+| Till | `/sales/sessions/` (open, `close`; summary with VAT by rate), `/sales/sales/` (ring up, `void`; each line stores net, VAT, gross and the rate used; `vat_summary` for the receipt) |
+| VAT | `/vat/rates/` (read-only UK rates by code and start date; superusers change them in the admin) |
 | Settings | `/common/api/settings/` (per-company key/value; staff write) |
 | Shopify / sync | `/sync/shopify-connections/`, `/sync/tasks/` |
 

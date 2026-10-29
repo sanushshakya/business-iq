@@ -154,3 +154,20 @@ class VatSummaryTests(SalesTestCase):
         schemas = SchemaGenerator().get_schema(request=None, public=True)['components']['schemas']
         self.assertIn('vat_summary', schemas['Sale']['properties'])
         self.assertIn('vat_by_rate', schemas['SessionSummary']['properties'])
+
+
+class VatDateTests(SalesTestCase):
+    def test_rate_follows_the_uk_date_not_utc(self):
+        """23:30 UTC on 30 June 2030 is 00:30 on 1 July in London (BST): a rate starting 1 July applies."""
+        from datetime import date, datetime
+        from datetime import timezone as dt_timezone
+        from unittest import mock
+
+        cola = self.stocked(price='1.25', name='Fake Cola', vat_code='standard', batches=((10, 3650),))
+        VatRate.objects.create(code='standard', rate=Decimal('15.00'), valid_from=date(2030, 7, 1))
+        session = self.open()
+        moment = datetime(2030, 6, 30, 23, 30, tzinfo=dt_timezone.utc)
+        with mock.patch('django.utils.timezone.now', return_value=moment):
+            response = self.sell(session['id'], [(cola, 1)], method='card')
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(SaleItem.objects.get(sale_id=response.json()['id']).vat_rate, Decimal('15.00'))

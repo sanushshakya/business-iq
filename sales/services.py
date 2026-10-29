@@ -20,7 +20,7 @@ from rest_framework import serializers
 from inventory.ledger import move, take_fefo
 from inventory.models import Product, StockBatch
 from sync.outbox import active_connection, emit
-from vat.services import NoVatRate, rate_for, split_inclusive
+from vat.services import NoVatRate, rate_for, split_inclusive, uk_date
 
 from .models import Sale, SaleAllocation, SaleItem, TillSession
 
@@ -128,6 +128,7 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
     products = {p.pk: p for p in Product.objects.select_for_update().filter(pk__in=wanted).order_by('pk')}
 
     today = timezone.localdate()
+    vat_day = uk_date()  # the VAT rate follows the UK calendar day
     plan, total, problems = [], Decimal('0.00'), []
     for pk in sorted(wanted):
         product, quantity = wanted[pk]
@@ -143,7 +144,7 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
             continue
         line_total = (product.price * quantity).quantize(CENTS, rounding=ROUND_HALF_UP)
         try:
-            rate = rate_for(product.vat_code, today)
+            rate = rate_for(product.vat_code, vat_day)
         except NoVatRate:
             problems.append(f'{product.name}: no VAT rate is set up for "{product.vat_code}". Ask an admin.')
             continue

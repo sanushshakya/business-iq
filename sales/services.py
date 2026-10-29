@@ -10,7 +10,7 @@ affected rows locked, so two tills cannot sell the same last unit.
 """
 
 from collections import OrderedDict
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import transaction
 from django.db.models import Sum
@@ -20,6 +20,7 @@ from rest_framework import serializers
 from inventory.ledger import move, take_fefo
 from inventory.models import Product, StockBatch
 from sync.outbox import active_connection, emit
+from vat.services import NoVatRate, rate_for, split_inclusive
 
 from .models import Sale, SaleAllocation, SaleItem, TillSession
 
@@ -117,9 +118,15 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
         if quantity > available:
             problems.append(f'{product.name}: only {available} in date, {quantity} requested.')
             continue
-        line_total = (product.price * quantity).quantize(CENTS)
+        line_total = (product.price * quantity).quantize(CENTS, rounding=ROUND_HALF_UP)
+        try:
+            rate = rate_for(product.vat_code, today)
+        except NoVatRate:
+            problems.append(f'{product.name}: no VAT rate is set up for "{product.vat_code}". Ask an admin.')
+            continue
+        net, vat = split_inclusive(line_total, rate)
         total += line_total
-        plan.append((product, quantity, line_total))
+        plan.append((product, quantity, line_total, rate, net, vat))
     if problems:
         raise serializers.ValidationError({'items': problems})
 
@@ -135,10 +142,11 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
         total=total, amount_tendered=amount_tendered, change_due=change, client_ref=client_ref,
         loyalty_barcode=loyalty_barcode,
     )
-    for product, quantity, line_total in plan:
+    for product, quantity, line_total, rate, net, vat in plan:
         item = SaleItem.objects.create(
             sale=sale, product=product, product_name=product.name, quantity=quantity,
             unit_price=product.price, line_total=line_total,
+            vat_code=product.vat_code, vat_rate=rate, net_amount=net, vat_amount=vat,
         )
         allocations, shortfall = take_fefo(product, quantity, today=today)
         if shortfall:  # cannot happen after the check above (rows are locked); never oversell

@@ -64,7 +64,10 @@ class CloseSessionSerializer(serializers.Serializer):
 class SaleItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = SaleItem
-        fields = ['id', 'product', 'product_name', 'quantity', 'unit_price', 'line_total']
+        fields = [
+            'id', 'product', 'product_name', 'quantity', 'unit_price', 'line_total',
+            'vat_code', 'vat_rate', 'net_amount', 'vat_amount',
+        ]
         read_only_fields = fields
 
 

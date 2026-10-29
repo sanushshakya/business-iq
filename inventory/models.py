@@ -7,6 +7,8 @@ for representing and managing inventory-related data within the application.
 
 from django.db import models
 
+from vat.models import VAT_CODES, ZERO
+
 class ProductCategory(models.Model):
     """
     A category used to group products (e.g. for demand-calendar events).
@@ -33,6 +35,8 @@ class Product(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField()
     price = models.DecimalField(max_digits=10, decimal_places=2)
+    # Which UK VAT rate applies (vat.VatRate); the code decides, not the category. Till prices include VAT.
+    vat_code = models.CharField(max_length=10, choices=VAT_CODES, default=ZERO)
     stock_quantity = models.IntegerField(default=0)
     reorder_threshold = models.PositiveIntegerField(default=5)
     commodity_code = models.CharField(max_length=20, blank=True)

@@ -82,6 +82,9 @@ class TwoFactorServiceTests(TestCase):
         self.assertEqual(len(data['secret']), 32)
         self.assertTrue(data['otpauth_uri'].startswith('otpauth://totp/Business%20IQ:staff%40example.com?'))
         self.assertIn('<svg', data['qr_svg'])
+        # Shown through <img src="data:image/svg+xml,...">, which only renders a namespaced, standalone SVG.
+        self.assertIn('xmlns="http://www.w3.org/2000/svg"', data['qr_svg'])
+        self.assertNotIn('<?xml', data['qr_svg'])
         self.assertFalse(two_factor.is_enabled(self.user))
 
     def test_confirm_gives_ten_recovery_codes_and_audit(self):

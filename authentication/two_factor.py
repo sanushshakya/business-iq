@@ -10,6 +10,7 @@ views in ``two_factor_views.py`` trade it for tokens. Codes and secrets are neve
 
 import hashlib
 import hmac
+import io
 import secrets
 import time
 from datetime import timedelta
@@ -190,7 +191,14 @@ def start_enrolment(user):
     secret = pyotp.random_base32()
     TwoFactorDevice.objects.create(user=user, secret=secret)
     uri = pyotp.TOTP(secret).provisioning_uri(name=user.email, issuer_name=ISSUER)
-    return {'secret': secret, 'otpauth_uri': uri, 'qr_svg': segno.make(uri, error='m').svg_inline(scale=5)}
+    return {'secret': secret, 'otpauth_uri': uri, 'qr_svg': _qr_svg(uri)}
+
+
+def _qr_svg(uri):
+    """A standalone SVG (with its namespace, no XML declaration), so it also renders as an <img> data URI."""
+    out = io.BytesIO()
+    segno.make(uri, error='m').save(out, kind='svg', scale=5, xmldecl=False, svgns=True, border=2)
+    return out.getvalue().decode()
 
 
 def confirm_enrolment(user, code):

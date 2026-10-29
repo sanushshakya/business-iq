@@ -77,6 +77,7 @@ INSTALLED_APPS = [
     "authentication",
     "demand_calendar",
     "sales",
+    "vat",
 ]
 
 MIDDLEWARE = [

@@ -16,7 +16,7 @@ from django.utils import timezone
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 from django.utils.translation import gettext as _
-from drf_spectacular.utils import extend_schema, inline_serializer
+from drf_spectacular.utils import PolymorphicProxySerializer, extend_schema, inline_serializer
 from rest_framework import serializers as drf_serializers
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.throttling import ScopedRateThrottle
@@ -36,21 +36,12 @@ from authentication.serializers import (
     PasswordResetRequestSerializer,
     RefreshTokenSerializer,
     CodeLoginSerializer,
+    TokenPairResponse,
 )
+from authentication import two_factor
+from authentication.two_factor_views import TwoFactorChallengeResponse, login_response
 
 User = get_user_model()
-
-TokenPairResponse = inline_serializer(
-    'TokenPairResponse',
-    {
-        'access_token': drf_serializers.CharField(),
-        'refresh_token': drf_serializers.CharField(),
-        'token_type': drf_serializers.CharField(),
-        'expires_in': drf_serializers.IntegerField(),
-        'refresh_expires_in': drf_serializers.IntegerField(),
-    },
-)
-
 
 class LoginView(APIView):
     """
@@ -59,6 +50,9 @@ class LoginView(APIView):
     POST ``{"username": <email>, "password": ...}``. Send ``access_token`` as
     ``Authorization: Bearer <access_token>``; when it expires, trade ``refresh_token`` for a new
     pair at ``/auth/token/refresh/``.
+
+    With two-factor sign-in on (always, for admins) the answer is ``{"two_factor": "verify" | "enrol",
+    "challenge", "expires_in"}`` instead of tokens: finish at ``/auth/2fa/verify/`` or ``/auth/2fa/enrol/``.
     """
 
     permission_classes = [AllowAny]
@@ -66,12 +60,19 @@ class LoginView(APIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = 'login'
 
-    @extend_schema(request=LoginUserSerializer, responses=TokenPairResponse)
+    @extend_schema(
+        request=LoginUserSerializer,
+        responses=PolymorphicProxySerializer(
+            component_name='LoginResponse',
+            serializers=[TokenPairResponse, TwoFactorChallengeResponse],
+            resource_type_field_name=None,
+        ),
+    )
     def post(self, request):
         serializer = LoginUserSerializer(data=request.data)
         if not serializer.is_valid():
             return Response({'detail': _('Invalid credentials')}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(refresh_tokens.issue_token_pair(serializer.validated_data['user']))
+        return Response(login_response(serializer.validated_data['user']))
 
 
 class CodeLoginView(APIView):
@@ -109,6 +110,7 @@ MeResponse = inline_serializer(
         'role': drf_serializers.CharField(allow_blank=True),
         'role_label': drf_serializers.CharField(allow_blank=True),
         'company': drf_serializers.CharField(allow_null=True),
+        'two_factor_enabled': drf_serializers.BooleanField(),
     },
 )
 
@@ -127,6 +129,7 @@ class MeView(APIView):
             'role': user.role,
             'role_label': ROLE_LABELS.get(user.role, ''),
             'company': user.company.name if user.company_id else None,
+            'two_factor_enabled': two_factor.is_enabled(user),
         })
 
 
@@ -148,12 +151,22 @@ class RefreshView(APIView):
         serializer = RefreshTokenSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            _user, pair = refresh_tokens.rotate(serializer.validated_data['refresh_token'])
+            user, pair = refresh_tokens.rotate(serializer.validated_data['refresh_token'])
         except refresh_tokens.InvalidRefreshToken:
             response = Response({'detail': _('Invalid or expired refresh token')}, status=status.HTTP_401_UNAUTHORIZED)
             response['WWW-Authenticate'] = 'Bearer error="invalid_token"'
             return response
+        if two_factor.is_required(user) and not two_factor.is_enabled(user):
+            # An admin session from before two-factor was set up: end it, so they sign in and enrol.
+            refresh_tokens.logout(pair['refresh_token'])
+            return self.refused()
         return Response(pair)
+
+    @staticmethod
+    def refused():
+        response = Response({'detail': _('Invalid or expired refresh token')}, status=status.HTTP_401_UNAUTHORIZED)
+        response['WWW-Authenticate'] = 'Bearer error="invalid_token"'
+        return response
 
 
 class LogoutView(APIView):

@@ -1,5 +1,6 @@
 from django.contrib.auth import authenticate, get_user_model
 from django.utils import timezone
+from drf_spectacular.utils import inline_serializer
 from rest_framework import serializers
 
 from .models import UserInvitation
@@ -106,3 +107,42 @@ class InvitationCreateSerializer(serializers.Serializer):
 
 class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()
+
+
+TokenPairResponse = inline_serializer(
+    'TokenPairResponse',
+    {
+        'access_token': serializers.CharField(),
+        'refresh_token': serializers.CharField(),
+        'token_type': serializers.CharField(),
+        'expires_in': serializers.IntegerField(),
+        'refresh_expires_in': serializers.IntegerField(),
+    },
+)
+
+
+class TwoFactorCodeSerializer(serializers.Serializer):
+    code = serializers.CharField(max_length=20, help_text='The 6-digit code from the authenticator app.')
+
+
+class TwoFactorVerifySerializer(serializers.Serializer):
+    """The sign-in challenge plus either a 6-digit code or a recovery code."""
+
+    challenge = serializers.CharField(max_length=100)
+    code = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    recovery_code = serializers.CharField(max_length=30, required=False, allow_blank=True)
+
+    def validate(self, data):
+        if bool(data.get('code')) == bool(data.get('recovery_code')):
+            raise serializers.ValidationError('Send either a code or a recovery code.')
+        return data
+
+
+class TwoFactorEnrolSerializer(serializers.Serializer):
+    challenge = serializers.CharField(
+        max_length=100, required=False, help_text='The enrol challenge from /auth/login/; leave out when signed in.'
+    )
+
+
+class TwoFactorEnrolConfirmSerializer(TwoFactorEnrolSerializer):
+    code = serializers.CharField(max_length=20)

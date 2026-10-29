@@ -7,6 +7,8 @@ from unittest import mock
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.test import RequestFactory, TestCase
+from django.urls import reverse
+from rest_framework.test import APIClient
 
 from common.tenancy import TENANT_LOOKUPS
 from tenants.models import Company
@@ -273,3 +275,227 @@ class TwoFactorServiceTests(TestCase):
         with self.assertRaises(two_factor.TwoFactorError):
             two_factor.disable(self.user, _code(secret, T0 + 30))
         self.assertTrue(two_factor.is_enabled(self.user))
+
+
+class TwoFactorApiTests(TestCase):
+    """Sign-in step-up, enrolment, status and disabling over HTTP."""
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()  # these routes are rate limited per client
+        self.company = Company.objects.create(name='Fake Foods Ltd')
+        self.user = User.objects.create_user(email='staff@example.com', password='pw-12345678', company=self.company)
+        self.client = APIClient()
+        self.clock = mock.patch('authentication.two_factor._now', return_value=T0)
+        self.clock.start()
+        self.addCleanup(self.clock.stop)
+
+    def at(self, moment):
+        self.clock.stop()
+        self.clock = mock.patch('authentication.two_factor._now', return_value=moment)
+        self.clock.start()
+
+    def login(self, email='staff@example.com'):
+        return self.client.post(reverse('login'), {'username': email, 'password': 'pw-12345678'})
+
+    def enrol(self, user=None):
+        from authentication import two_factor
+
+        user = user or self.user
+        secret = two_factor.start_enrolment(user)['secret']
+        two_factor.confirm_enrolment(user, _code(secret, T0))
+        self.at(T0 + 30)
+        return secret
+
+    def bearer(self, access_token):
+        api = APIClient()
+        api.credentials(HTTP_AUTHORIZATION=f'Bearer {access_token}')
+        return api
+
+    def test_non_admin_without_2fa_gets_tokens(self):
+        body = self.login().json()
+        self.assertIn('access_token', body)
+
+    def test_enrolled_user_gets_no_tokens_without_valid_code(self):
+        self.enrol()
+        response = self.login()
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['two_factor'], 'verify')
+        self.assertNotIn('access_token', body)
+        self.assertNotIn('refresh_token', body)
+
+        wrong = self.client.post(reverse('two-factor-verify'), {'challenge': body['challenge'], 'code': '000000'})
+        self.assertEqual(wrong.status_code, 400)
+        self.assertNotIn('access_token', wrong.json())
+        missing = self.client.post(reverse('two-factor-verify'), {'challenge': body['challenge']})
+        self.assertEqual(missing.status_code, 400)
+        self.assertNotIn('access_token', missing.json())
+
+    def test_verify_with_valid_code_returns_tokens(self):
+        secret = self.enrol()
+        challenge = self.login().json()['challenge']
+        response = self.client.post(
+            reverse('two-factor-verify'), {'challenge': challenge, 'code': _code(secret, T0 + 30)}
+        )
+        self.assertEqual(response.status_code, 200)
+        api = self.bearer(response.json()['access_token'])
+        self.assertTrue(api.get(reverse('me')).json()['two_factor_enabled'])
+
+    def test_verify_with_recovery_code_returns_tokens(self):
+        from authentication import two_factor
+
+        two_factor.start_enrolment(self.user)
+        secret = self.user.two_factor.secret
+        codes = two_factor.confirm_enrolment(self.user, _code(secret, T0))
+        challenge = self.login().json()['challenge']
+        response = self.client.post(reverse('two-factor-verify'), {'challenge': challenge, 'recovery_code': codes[3]})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('access_token', response.json())
+
+    def test_challenge_cannot_be_reused(self):
+        secret = self.enrol()
+        challenge = self.login().json()['challenge']
+        url = reverse('two-factor-verify')
+        self.assertEqual(self.client.post(url, {'challenge': challenge, 'code': _code(secret, T0 + 30)}).status_code, 200)
+        self.at(T0 + 60)
+        again = self.client.post(url, {'challenge': challenge, 'code': _code(secret, T0 + 60)})
+        self.assertEqual(again.status_code, 401)
+
+    def test_challenge_dies_after_five_wrong_codes(self):
+        secret = self.enrol()
+        challenge = self.login().json()['challenge']
+        url = reverse('two-factor-verify')
+        for _ in range(5):
+            self.assertEqual(self.client.post(url, {'challenge': challenge, 'code': '000000'}).status_code, 400)
+        self.assertEqual(
+            self.client.post(url, {'challenge': challenge, 'code': _code(secret, T0 + 30)}).status_code, 401
+        )
+
+    def test_admin_without_2fa_must_enrol_before_tokens(self):
+        User.objects.create_user(email='admin@example.com', password='pw-12345678', company=self.company, is_staff=True)
+        body = self.login('admin@example.com').json()
+        self.assertEqual(body['two_factor'], 'enrol')
+        self.assertNotIn('access_token', body)
+        # An enrol challenge is not a verify challenge.
+        verify = self.client.post(reverse('two-factor-verify'), {'challenge': body['challenge'], 'code': '000000'})
+        self.assertEqual(verify.status_code, 401)
+
+    def test_forced_enrolment_confirm_returns_tokens_and_codes(self):
+        admin_user = User.objects.create_user(
+            email='admin@example.com', password='pw-12345678', company=self.company, is_staff=True
+        )
+        challenge = self.login('admin@example.com').json()['challenge']
+        start = self.client.post(reverse('two-factor-enrol'), {'challenge': challenge})
+        self.assertEqual(start.status_code, 200)
+        data = start.json()
+        self.assertIn('<svg', data['qr_svg'])
+        confirm = self.client.post(
+            reverse('two-factor-enrol-confirm'), {'challenge': challenge, 'code': _code(data['secret'], T0)}
+        )
+        self.assertEqual(confirm.status_code, 200)
+        body = confirm.json()
+        self.assertEqual(len(body['recovery_codes']), 10)
+        self.assertIn('access_token', body)
+        admin_user.refresh_from_db()
+        self.assertIsNotNone(admin_user.two_factor.confirmed_at)
+        # The challenge is used up.
+        again = self.client.post(reverse('two-factor-enrol'), {'challenge': challenge})
+        self.assertEqual(again.status_code, 401)
+
+    def test_signed_in_staff_can_enrol_optionally(self):
+        api = self.bearer(self.login().json()['access_token'])
+        self.assertEqual(api.get(reverse('two-factor-status')).json(),
+                         {'enabled': False, 'required': False, 'recovery_codes_left': 0})
+        secret = api.post(reverse('two-factor-enrol'), {}).json()['secret']
+        confirm = api.post(reverse('two-factor-enrol-confirm'), {'code': _code(secret, T0)})
+        self.assertEqual(confirm.status_code, 200)
+        self.assertNotIn('access_token', confirm.json())
+        self.assertEqual(api.get(reverse('two-factor-status')).json()['recovery_codes_left'], 10)
+
+    def test_enrol_without_sign_in_or_challenge_is_401(self):
+        self.assertEqual(self.client.post(reverse('two-factor-enrol'), {}).status_code, 401)
+
+    def test_enrol_while_enabled_is_refused(self):
+        secret = self.enrol()
+        challenge = self.login().json()['challenge']
+        tokens = self.client.post(
+            reverse('two-factor-verify'), {'challenge': challenge, 'code': _code(secret, T0 + 30)}
+        ).json()
+        response = self.bearer(tokens['access_token']).post(reverse('two-factor-enrol'), {})
+        self.assertEqual(response.status_code, 400)
+        self.user.two_factor.refresh_from_db()
+        self.assertEqual(self.user.two_factor.secret, secret)
+
+    def test_staff_can_disable_with_code(self):
+        from authentication import two_factor
+
+        api = self.bearer(self.login().json()['access_token'])
+        secret = self.enrol()
+        self.assertEqual(api.post(reverse('two-factor-disable'), {'code': '000000'}).status_code, 400)
+        response = api.post(reverse('two-factor-disable'), {'code': _code(secret, T0 + 30)})
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(two_factor.is_enabled(self.user))
+
+    def test_admin_cannot_disable(self):
+        from authentication import refresh_tokens
+
+        admin_user = User.objects.create_user(
+            email='admin@example.com', password='pw-12345678', company=self.company, is_staff=True
+        )
+        secret = self.enrol(admin_user)
+        api = self.bearer(refresh_tokens.issue_token_pair(admin_user)['access_token'])
+        response = api.post(reverse('two-factor-disable'), {'code': _code(secret, T0 + 30)})
+        self.assertEqual(response.status_code, 400)
+
+    def test_refresh_refused_for_admin_without_2fa(self):
+        from authentication import refresh_tokens
+
+        admin_user = User.objects.create_user(
+            email='admin@example.com', password='pw-12345678', company=self.company, is_staff=True
+        )
+        pair = refresh_tokens.issue_token_pair(admin_user)  # a session from before 2FA was required
+        response = self.client.post(reverse('token-refresh'), {'refresh_token': pair['refresh_token']})
+        self.assertEqual(response.status_code, 401)
+        self.assertNotIn('access_token', response.json())
+
+    def test_refresh_still_works_for_enrolled_admin(self):
+        from authentication import refresh_tokens
+
+        admin_user = User.objects.create_user(
+            email='admin@example.com', password='pw-12345678', company=self.company, is_staff=True
+        )
+        self.enrol(admin_user)
+        pair = refresh_tokens.issue_token_pair(admin_user)
+        response = self.client.post(reverse('token-refresh'), {'refresh_token': pair['refresh_token']})
+        self.assertEqual(response.status_code, 200)
+
+    def test_verify_is_rate_limited(self):
+        self.enrol()
+        challenge = self.login().json()['challenge']
+        statuses = [
+            self.client.post(reverse('two-factor-verify'), {'challenge': challenge, 'code': '000000'}).status_code
+            for _ in range(11)
+        ]
+        self.assertEqual(statuses[-1], 429)
+
+    def test_operator_is_forbidden_from_two_factor_routes(self):
+        from authentication import refresh_tokens
+
+        operator, _code_ = User.objects.create_operator(self.company, 'Fake Till', 'till')
+        api = self.bearer(refresh_tokens.issue_token_pair(operator)['access_token'])
+        self.assertEqual(api.get(reverse('two-factor-status')).status_code, 403)
+        self.assertEqual(api.post(reverse('two-factor-enrol'), {}).status_code, 403)
+
+    def test_schema_documents_two_factor_routes(self):
+        from drf_spectacular.generators import SchemaGenerator
+
+        schema = SchemaGenerator().get_schema(request=None, public=True)
+        paths = schema['paths']
+        for path in ('/auth/2fa/', '/auth/2fa/verify/', '/auth/2fa/enrol/', '/auth/2fa/enrol/confirm/',
+                     '/auth/2fa/disable/'):
+            self.assertIn(path, paths)
+        login = paths['/auth/login/']['post']['responses']['200']['content']['application/json']['schema']
+        self.assertEqual(login['$ref'], '#/components/schemas/LoginResponse')
+        self.assertIn('oneOf', schema['components']['schemas']['LoginResponse'])

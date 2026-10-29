@@ -2,8 +2,8 @@
 
 from django.urls import path
 
-from .consumers import SyncConsumer
+from sync.consumers import SyncStatusConsumer
 
 websocket_urlpatterns = [
-    path('ws/sync/', SyncConsumer.as_asgi()),
+    path('ws/sync/', SyncStatusConsumer.as_asgi()),
 ]

@@ -198,7 +198,9 @@ if config('USE_REDIS_CHANNELS', default=False, cast=bool):
     CHANNEL_LAYERS = {
         "default": {
             "BACKEND": "channels_redis.core.RedisChannelLayer",
-            "CONFIG": {"hosts": [(REDIS_HOST, REDIS_PORT)]},
+            # redis-py 8 times out a read after 5 s by default, the same as channels-redis's blocking read
+            # (brpop_timeout), so idle websocket consumers died with TimeoutError; give the reads room.
+            "CONFIG": {"hosts": [{"address": f"redis://{REDIS_HOST}:{REDIS_PORT}", "socket_timeout": 30}]},
         },
     }
 else:

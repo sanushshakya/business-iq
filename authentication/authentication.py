@@ -45,6 +45,21 @@ class JWTAuthentication(authentication.BaseAuthentication):
         return self.keyword
 
 
+class PasswordOnlyBasicAuthentication(authentication.BasicAuthentication):
+    """
+    HTTP Basic (handy for scripts and the browsable API), but never for accounts that need a second factor:
+    admins and anyone with two-factor sign-in on must sign in through ``/auth/login/``.
+    """
+
+    def authenticate_credentials(self, userid, password, request=None):
+        from . import two_factor
+
+        user, auth = super().authenticate_credentials(userid, password, request)
+        if two_factor.is_required(user) or two_factor.is_enabled(user):
+            raise exceptions.AuthenticationFailed('Two-factor sign-in applies to this account; use /auth/login/.')
+        return user, auth
+
+
 class JWTAuthenticationScheme(OpenApiAuthenticationExtension):
     """Documents the Bearer scheme in the OpenAPI schema."""
 
@@ -53,3 +68,13 @@ class JWTAuthenticationScheme(OpenApiAuthenticationExtension):
 
     def get_security_definition(self, auto_schema):
         return {'type': 'http', 'scheme': 'bearer', 'bearerFormat': 'JWT'}
+
+
+class PasswordOnlyBasicAuthenticationScheme(OpenApiAuthenticationExtension):
+    """Documents the restricted HTTP Basic scheme like DRF's own Basic."""
+
+    target_class = 'authentication.authentication.PasswordOnlyBasicAuthentication'
+    name = 'basicAuth'
+
+    def get_security_definition(self, auto_schema):
+        return {'type': 'http', 'scheme': 'basic'}

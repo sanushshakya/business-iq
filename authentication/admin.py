@@ -3,7 +3,12 @@ from django.utils import timezone
 
 from common.tenancy import TenantAdminMixin
 
+from .admin_login import TwoFactorAdminAuthenticationForm
 from .models import RefreshToken, TwoFactorEvent
+
+# The admin asks for the second factor too, so it is not a password-only way in for admins.
+admin.site.login_form = TwoFactorAdminAuthenticationForm
+admin.site.login_template = 'authentication/admin_login.html'
 
 
 @admin.register(RefreshToken)

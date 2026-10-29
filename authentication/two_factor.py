@@ -16,6 +16,7 @@ from datetime import timedelta
 
 import pyotp
 import segno
+from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
 from django.db.models import F
@@ -54,6 +55,11 @@ def _now():
 
 def _sha256(value):
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _recovery_hash(code):
+    """HMAC of a normalised recovery code (keyed like operator codes), so a database dump alone cannot be brute-forced."""
+    return hmac.new(settings.SECRET_KEY.encode(), f'2fa-recovery:{code}'.encode(), hashlib.sha256).hexdigest()
 
 
 def is_required(user):
@@ -131,6 +137,15 @@ def _accept_code(device, code):
     return ok
 
 
+def check_second_factor(user, value):
+    """A 6-digit code or, failing that, a recovery code (for forms with one field, like the admin login)."""
+    value = (value or '').strip()
+    compact = ''.join(value.split())
+    if len(compact) == 6 and compact.isdigit():
+        return check_code(user, compact)
+    return use_recovery_code(user, value)
+
+
 def check_code(user, code):
     """True if ``code`` is a current, unused code from the user's confirmed authenticator."""
     device = _device(user)
@@ -145,7 +160,7 @@ def use_recovery_code(user, raw):
     """True (and the code is used up) if ``raw`` is one of the user's unused recovery codes."""
     if is_locked(user):
         return False
-    code_hash = _sha256(_normalise_recovery_code(raw))
+    code_hash = _recovery_hash(_normalise_recovery_code(raw))
     used = RecoveryCode.objects.filter(
         device__user=user, device__confirmed_at__isnull=False, code_hash=code_hash, used_at__isnull=True,
     ).update(used_at=timezone.now())
@@ -190,7 +205,7 @@ def confirm_enrolment(user, code):
         device.confirmed_at = timezone.now()
         device.save(update_fields=['confirmed_at'])
         RecoveryCode.objects.bulk_create(
-            RecoveryCode(device=device, code_hash=_sha256(_normalise_recovery_code(c))) for c in codes
+            RecoveryCode(device=device, code_hash=_recovery_hash(_normalise_recovery_code(c))) for c in codes
         )
         _audit(user, TwoFactorEvent.ENROLLED)
     return codes
@@ -207,12 +222,16 @@ def disable(user, code):
 
 
 def reset(target, actor):
-    """An admin removes ``target``'s authenticator (lost phone). Ends their sessions; they set it up again."""
-    TwoFactorDevice.objects.filter(user=target).delete()
-    TwoFactorChallenge.objects.filter(user=target, used_at__isnull=True).update(used_at=timezone.now())
+    """
+    An admin removes ``target``'s authenticator (lost phone). Ends their sessions; they set it up again. All or
+    nothing, so a reset is never left half done or unaudited.
+    """
+    with transaction.atomic():
+        TwoFactorDevice.objects.filter(user=target).delete()
+        TwoFactorChallenge.objects.filter(user=target, used_at__isnull=True).update(used_at=timezone.now())
+        _audit(target, TwoFactorEvent.RESET, actor=actor)
+        refresh_tokens.revoke_all_for_user(target)
     cache.delete(_fail_key(target))
-    _audit(target, TwoFactorEvent.RESET, actor=actor)
-    refresh_tokens.revoke_all_for_user(target)
 
 
 # --- challenges ----------------------------------------------------------------------------------------------------

@@ -594,3 +594,142 @@ class StaffTwoFactorResetTests(TestCase):
         paths = SchemaGenerator().get_schema(request=None, public=True)['paths']
         self.assertIn('/auth/2fa/users/', paths)
         self.assertIn('/auth/2fa/users/{id}/reset/', paths)
+
+
+class TwoFactorHardeningTests(TestCase):
+    """Fixes from the G06 review: no password-only way in, superusers protected, atomic reset, keyed hashes."""
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
+        self.company = Company.objects.create(name='Fake Foods Ltd', registration_number='FAKE1')
+        self.other_company = Company.objects.create(name='Other Fake Ltd', registration_number='FAKE2')
+        self.clock = mock.patch('authentication.two_factor._now', return_value=T0)
+        self.clock.start()
+        self.addCleanup(self.clock.stop)
+
+    def user(self, email, **extra):
+        return User.objects.create_user(email=email, password='pw-12345678', company=self.company, **extra)
+
+    def enrol(self, user):
+        from authentication import two_factor
+
+        secret = two_factor.start_enrolment(user)['secret']
+        codes = two_factor.confirm_enrolment(user, _code(secret, T0))
+        self.clock.stop()
+        self.clock = mock.patch('authentication.two_factor._now', return_value=T0 + 30)
+        self.clock.start()
+        return secret, codes
+
+    def basic(self, email):
+        import base64
+
+        api = APIClient()
+        api.credentials(HTTP_AUTHORIZATION='Basic ' + base64.b64encode(f'{email}:pw-12345678'.encode()).decode())
+        return api
+
+    def test_basic_auth_still_works_for_plain_users(self):
+        self.user('plain@example.com')
+        self.assertEqual(self.basic('plain@example.com').get(reverse('me')).status_code, 200)
+
+    def test_basic_auth_refused_for_admin(self):
+        self.user('admin@example.com', is_staff=True)
+        self.assertEqual(self.basic('admin@example.com').get(reverse('me')).status_code, 401)
+
+    def test_basic_auth_refused_once_2fa_is_on(self):
+        self.enrol(self.user('plain@example.com'))
+        self.assertEqual(self.basic('plain@example.com').get(reverse('me')).status_code, 401)
+
+    def admin_login(self, email, **extra):
+        from django.test import Client
+
+        client = Client()
+        response = client.post(
+            '/admin/login/?next=/admin/', {'username': email, 'password': 'pw-12345678', **extra}
+        )
+        return client, response
+
+    def test_admin_login_page_has_the_code_field(self):
+        from django.test import Client
+
+        self.assertContains(Client().get('/admin/login/'), 'name="code"')
+
+    def test_admin_site_needs_a_code_for_enrolled_staff(self):
+        secret, _codes = self.enrol(self.user('admin@example.com', is_staff=True))
+        client, response = self.admin_login('admin@example.com')
+        self.assertEqual(response.status_code, 200)  # the form again, with an error
+        self.assertNotIn('_auth_user_id', client.session)
+        client, response = self.admin_login('admin@example.com', code='000000')
+        self.assertNotIn('_auth_user_id', client.session)
+        client, response = self.admin_login('admin@example.com', code=_code(secret, T0 + 30))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('_auth_user_id', client.session)
+
+    def test_admin_site_accepts_a_recovery_code(self):
+        _secret, codes = self.enrol(self.user('admin@example.com', is_staff=True))
+        client, response = self.admin_login('admin@example.com', code=codes[0])
+        self.assertEqual(response.status_code, 302)
+
+    def test_admin_site_refuses_admin_without_2fa(self):
+        self.user('admin@example.com', is_staff=True)
+        client, response = self.admin_login('admin@example.com')
+        self.assertNotIn('_auth_user_id', client.session)
+        self.assertContains(response, 'Set up two-factor sign-in')
+
+    def test_staff_cannot_reset_a_superuser(self):
+        from authentication import refresh_tokens, two_factor
+
+        boss = self.user('boss@example.com', is_staff=True)
+        root = self.user('root@example.com', is_staff=True, is_superuser=True)
+        self.enrol(root)
+        api = APIClient()
+        api.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh_tokens.issue_token_pair(boss)['access_token']}")
+        response = api.post(reverse('two-factor-user-reset', args=[root.pk]))
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(two_factor.is_enabled(root))
+
+    def test_reset_is_all_or_nothing(self):
+        from authentication import two_factor
+        from authentication.models import TwoFactorEvent
+
+        target = self.user('clerk@example.com')
+        boss = self.user('boss@example.com', is_staff=True)
+        self.enrol(target)
+        with mock.patch('authentication.refresh_tokens.revoke_all_for_user', side_effect=RuntimeError('db down')):
+            with self.assertRaises(RuntimeError):
+                two_factor.reset(target, actor=boss)
+        self.assertTrue(two_factor.is_enabled(target))
+        self.assertFalse(TwoFactorEvent.objects.filter(kind='reset').exists())
+
+    def test_recovery_code_hash_is_keyed(self):
+        import hashlib
+
+        from authentication.models import RecoveryCode
+
+        _secret, codes = self.enrol(self.user('plain@example.com'))
+        plain = hashlib.sha256(codes[0].replace('-', '').encode()).hexdigest()
+        self.assertFalse(RecoveryCode.objects.filter(code_hash=plain).exists())
+
+    def test_audit_admin_hides_other_companies_events(self):
+        from authentication.models import TwoFactorEvent
+
+        mine = self.user('mine@example.com')
+        theirs = User.objects.create_user(email='theirs@example.com', password='pw-12345678',
+                                          company=self.other_company)
+        TwoFactorEvent.objects.create(company=self.company, user=mine, kind='enrolled')
+        TwoFactorEvent.objects.create(company=self.other_company, user=theirs, kind='enrolled')
+        request = RequestFactory().get('/admin/')
+        request.user = self.user('boss@example.com', is_staff=True)
+        queryset = admin.site._registry[TwoFactorEvent].get_queryset(request)
+        self.assertEqual([e.user.email for e in queryset], ['mine@example.com'])
+
+
+class SchemaWarningTests(TestCase):
+    def test_schema_generates_without_warnings(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        err = StringIO()
+        call_command('spectacular', '--file', '/dev/null', '--fail-on-warn', stderr=err)

@@ -268,6 +268,11 @@ class StaffTwoFactorViewSet(TenantScopedMixin, mixins.ListModelMixin, viewsets.G
     @action(detail=True, methods=['post'])
     def reset(self, request, pk=None):
         target = self.get_object()
+        if target.is_superuser and not request.user.is_superuser:
+            return Response(
+                {'detail': _("Only a superuser can reset a superuser's two-factor sign-in."), 'code': 'superuser'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         if target.pk == request.user.pk:
             return Response(
                 {'detail': _('You cannot reset your own two-factor sign-in.'), 'code': 'self'},

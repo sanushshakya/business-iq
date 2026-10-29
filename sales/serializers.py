@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from common.tenancy import scope_queryset
@@ -9,9 +10,19 @@ from inventory.models import Product
 from tenants.models import Till
 
 from .models import Sale, SaleItem, TillSession
-from .services import session_summary
+from .services import session_summary, vat_by_rate
 
 MONEY = {'max_digits': 12, 'decimal_places': 2, 'min_value': Decimal('0.00')}
+
+
+class VatRateTotalSerializer(serializers.Serializer):
+    """One VAT rate's totals on a receipt or cash-up (money as strings)."""
+
+    vat_code = serializers.CharField()
+    rate = serializers.DecimalField(max_digits=5, decimal_places=2)
+    net = serializers.DecimalField(max_digits=12, decimal_places=2)
+    vat = serializers.DecimalField(max_digits=12, decimal_places=2)
+    gross = serializers.DecimalField(max_digits=12, decimal_places=2)
 
 
 class SessionSummarySerializer(serializers.Serializer):
@@ -23,6 +34,10 @@ class SessionSummarySerializer(serializers.Serializer):
     voided_total = serializers.DecimalField(max_digits=12, decimal_places=2)
     expected_cash = serializers.DecimalField(max_digits=12, decimal_places=2)
     variance = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
+    vat_by_rate = VatRateTotalSerializer(many=True, help_text='Completed sales only.')
+    vat_not_recorded_total = serializers.DecimalField(
+        max_digits=12, decimal_places=2, help_text='Gross of lines sold before VAT was recorded.'
+    )
 
 
 class TillSessionSerializer(serializers.ModelSerializer):
@@ -42,7 +57,8 @@ class TillSessionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
-    def get_summary(self, obj) -> dict:
+    @extend_schema_field(SessionSummarySerializer)
+    def get_summary(self, obj):
         return SessionSummarySerializer(session_summary(obj)).data
 
 
@@ -79,15 +95,24 @@ class SaleSerializer(serializers.ModelSerializer):
     cashier_email = serializers.EmailField(source='cashier.email', read_only=True)
     cashier_name = serializers.CharField(source='cashier.display_name', read_only=True)
     items = SaleItemSerializer(many=True, read_only=True)
+    vat_summary = serializers.SerializerMethodField(help_text='VAT by rate, for the receipt.')
+    vat_recorded = serializers.SerializerMethodField(help_text='False for sales made before VAT was recorded.')
 
     class Meta:
         model = Sale
         fields = [
             'id', 'receipt_number', 'session', 'till', 'till_number', 'branch_name', 'cashier_email', 'cashier_name',
             'payment_method', 'total', 'amount_tendered', 'change_due', 'status', 'created_at',
-            'voided_at', 'void_reason', 'client_ref', 'items',
+            'voided_at', 'void_reason', 'client_ref', 'items', 'vat_summary', 'vat_recorded',
         ]
         read_only_fields = fields
+
+    @extend_schema_field(VatRateTotalSerializer(many=True))
+    def get_vat_summary(self, sale):
+        return VatRateTotalSerializer(vat_by_rate(sale.items.all()), many=True).data
+
+    def get_vat_recorded(self, sale) -> bool:
+        return all(item.vat_rate is not None for item in sale.items.all())
 
 
 class SaleLineSerializer(serializers.Serializer):

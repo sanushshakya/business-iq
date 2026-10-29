@@ -128,3 +128,12 @@ class SeedMigrationTests(TransactionTestCase):
         executor.loader.build_graph()
         new_apps = executor.loader.project_state([('vat', '0002_seed_uk_rates')]).apps
         self.assertEqual(new_apps.get_model('vat', 'VatRate').objects.count(), 4)
+
+
+class SchemaTests(TestCase):
+    def test_schema_generates_without_warnings(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        call_command('spectacular', '--file', '/dev/null', '--fail-on-warn', stderr=StringIO())

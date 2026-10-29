@@ -135,6 +135,8 @@ REST_FRAMEWORK = {
 SPECTACULAR_SETTINGS = {
     "TITLE": "Business IQ API",
     "VERSION": "1.0.0",
+    # The VAT code choices appear on products, sale lines and the rate table: one enum name for all of them.
+    "ENUM_NAME_OVERRIDES": {"VatCodeEnum": "vat.models.VAT_CODES"},
 }
 
 # Token lifetimes for authentication.jwt_handler / refresh_tokens

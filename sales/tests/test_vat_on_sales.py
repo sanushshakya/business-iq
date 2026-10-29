@@ -85,3 +85,72 @@ class SaleLineVatTests(SalesTestCase):
             {'vat_code': 'standard', 'vat_rate': '20.00', 'net_amount': '1.04', 'vat_amount': '0.21',
              'line_total': '1.25'},
         )
+
+
+class VatSummaryTests(SalesTestCase):
+    def setUp(self):
+        super().setUp()
+        self.bread = self.stocked(price='1.10', name='Fake Bread')
+        self.cola = self.stocked(price='1.25', name='Fake Cola', vat_code='standard')
+        self.juice = self.stocked(price='2.10', name='Fake Juice', vat_code='reduced')
+
+    def test_sale_vat_summary_groups_by_rate(self):
+        sale = self.sell(self.open()['id'], [(self.bread, 2), (self.cola, 3), (self.juice, 1)], method='card').json()
+        self.assertTrue(sale['vat_recorded'])
+        self.assertEqual(sale['vat_summary'], [
+            {'vat_code': 'zero', 'rate': '0.00', 'net': '2.20', 'vat': '0.00', 'gross': '2.20'},
+            {'vat_code': 'reduced', 'rate': '5.00', 'net': '2.00', 'vat': '0.10', 'gross': '2.10'},
+            {'vat_code': 'standard', 'rate': '20.00', 'net': '3.12', 'vat': '0.63', 'gross': '3.75'},
+        ])
+
+    def test_summary_is_the_sum_of_rounded_lines(self):
+        # Two separate products at 20%: 0.21 -> VAT 0.04 each (half-penny edge), so the group is 0.08, not 0.07.
+        a = self.stocked(price='0.21', name='Fake Sweet A', vat_code='standard')
+        b = self.stocked(price='0.21', name='Fake Sweet B', vat_code='standard')
+        sale = self.sell(self.open()['id'], [(a, 1), (b, 1)], method='card').json()
+        self.assertEqual(sale['vat_summary'], [
+            {'vat_code': 'standard', 'rate': '20.00', 'net': '0.34', 'vat': '0.08', 'gross': '0.42'},
+        ])
+
+    def test_old_sale_without_vat_is_not_recorded(self):
+        sale = self.sell(self.open()['id'], [(self.bread, 1), (self.cola, 1)], method='card').json()
+        SaleItem.objects.filter(sale_id=sale['id'], product=self.cola).update(
+            vat_code='', vat_rate=None, net_amount=None, vat_amount=None
+        )  # as a line sold before VAT was recorded
+        body = self.client.get(reverse('sale-detail', args=[sale['id']])).json()
+        self.assertFalse(body['vat_recorded'])
+        self.assertEqual([row['vat_code'] for row in body['vat_summary']], ['zero'])
+
+    def session_summary(self, session_id):
+        return self.client.get(reverse('tillsession-detail', args=[session_id])).json()['summary']
+
+    def test_session_vat_by_rate_excludes_voided(self):
+        session = self.open()
+        self.sell(session['id'], [(self.cola, 3)], method='card')
+        self.sell(session['id'], [(self.bread, 2), (self.cola, 1)], method='card')
+        voided = self.sell(session['id'], [(self.cola, 2)], method='card').json()
+        self.assertEqual(
+            self.as_user(self.manager).post(reverse('sale-void', args=[voided['id']]), {}).status_code, 200
+        )
+        summary = self.session_summary(session['id'])
+        self.assertEqual(summary['vat_by_rate'], [
+            {'vat_code': 'zero', 'rate': '0.00', 'net': '2.20', 'vat': '0.00', 'gross': '2.20'},
+            # 3.12 + 1.04 net, 0.63 + 0.21 VAT
+            {'vat_code': 'standard', 'rate': '20.00', 'net': '4.16', 'vat': '0.84', 'gross': '5.00'},
+        ])
+        self.assertEqual(summary['vat_not_recorded_total'], '0.00')
+
+    def test_session_reports_gross_without_vat(self):
+        session = self.open()
+        sale = self.sell(session['id'], [(self.cola, 2)], method='card').json()
+        SaleItem.objects.filter(sale_id=sale['id']).update(vat_code='', vat_rate=None, net_amount=None, vat_amount=None)
+        summary = self.session_summary(session['id'])
+        self.assertEqual(summary['vat_by_rate'], [])
+        self.assertEqual(summary['vat_not_recorded_total'], '2.50')
+
+    def test_schema_documents_vat_fields(self):
+        from drf_spectacular.generators import SchemaGenerator
+
+        schemas = SchemaGenerator().get_schema(request=None, public=True)['components']['schemas']
+        self.assertIn('vat_summary', schemas['Sale']['properties'])
+        self.assertIn('vat_by_rate', schemas['SessionSummary']['properties'])

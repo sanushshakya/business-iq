@@ -27,6 +27,26 @@ from .models import Sale, SaleAllocation, SaleItem, TillSession
 CENTS = Decimal('0.01')
 
 
+def vat_by_rate(items):
+    """
+    VAT totals by (code, rate) for sale lines, as sums of the rounded lines: ``[{vat_code, rate, net, vat, gross}]``,
+    lowest rate first. Lines sold before VAT was recorded are left out. Works on prefetched lines (no queries).
+    """
+    groups = {}
+    for item in items:
+        if item.vat_rate is None:
+            continue
+        group = groups.setdefault(
+            (item.vat_rate, item.vat_code),
+            {'vat_code': item.vat_code, 'rate': item.vat_rate, 'net': Decimal('0.00'), 'vat': Decimal('0.00'),
+             'gross': Decimal('0.00')},
+        )
+        group['net'] += item.net_amount
+        group['vat'] += item.vat_amount
+        group['gross'] += item.line_total
+    return [groups[key] for key in sorted(groups)]
+
+
 def session_summary(session):
     """Takings for a session. Voided sales are listed separately and excluded from every total."""
     completed = session.sales.filter(status=Sale.COMPLETED)
@@ -50,6 +70,9 @@ def session_summary(session):
         'voided_total': total(voided),
         'expected_cash': expected,
         'variance': variance,
+        'vat_by_rate': vat_by_rate(SaleItem.objects.filter(sale__in=completed)),
+        'vat_not_recorded_total': SaleItem.objects.filter(sale__in=completed, vat_rate__isnull=True)
+        .aggregate(t=Sum('line_total'))['t'] or Decimal('0.00'),
     }
 
 

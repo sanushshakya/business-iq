@@ -298,3 +298,52 @@ class PriceReconcileTests(StockPushTestCase):
         self.assertEqual(StockReconciliation.objects.get().mismatches, [
             {'product_id': drifted.external_id, 'kind': 'price_different', 'iq': '3.00', 'm18': '3.49'},
         ])
+
+
+class OnlineLocationTests(StockPushTestCase):
+    """G10: online stock counts only in-date stock at active, online-sellable locations."""
+
+    def location(self, code, **flags):
+        from inventory.models import Location
+
+        return Location.objects.create(company=self.company, code=code, name=f'Fake {code}', type='warehouse', **flags)
+
+    def test_only_online_sellable_locations_count(self):
+        product = self.linked(online_buffer=1)
+        self.batch(product, 5)  # MAIN: sellable and online-sellable
+        StockBatchFactory(product=product, quantity=40, location=self.location('WH-1'), batch_number='WH')
+        StockBatchFactory(product=product, quantity=7, location=self.location('SHOP-ONLY', sellable=True),
+                          batch_number='TILL')
+        self.assertEqual(online_available([product]), {product.pk: 4})  # 5 - buffer 1
+
+    def test_inactive_online_location_does_not_count(self):
+        product = self.linked()
+        retired = self.location('OLD', sellable=True, online_sellable=True, is_active=False)
+        StockBatchFactory(product=product, quantity=9, location=retired, batch_number='OLD')
+        self.assertEqual(online_available([product]), {product.pk: 0})
+
+    def test_turning_a_location_off_marks_its_products(self):
+        from inventory.models import Location
+
+        product = self.linked()
+        other = self.linked()
+        batch = self.batch(product, 5)
+        StockSyncState.objects.update(pending=False)
+        location = Location.objects.get(pk=batch.location_id)
+        location.online_sellable = False
+        location.save()
+        self.assertEqual(self.pending(), {product.pk})  # not `other`, which has no stock there
+        self.assertNotIn(other.pk, self.pending())
+
+    def test_push_sends_the_lower_figure_after_the_location_is_turned_off(self):
+        from inventory.models import Location
+
+        product = self.linked()
+        batch = self.batch(product, 5)
+        push_storefront_stock()
+        Location.objects.filter(pk=batch.location_id).update(online_sellable=False)
+        Location.objects.get(pk=batch.location_id).save()
+        push_storefront_stock()
+        last = OutboundEvent.objects.filter(event_type='stock.changed').order_by('-pk').first()
+        item = next(i for i in last.payload['data']['items'] if i['product_id'] == product.external_id)
+        self.assertEqual(item['online_available'], 0)

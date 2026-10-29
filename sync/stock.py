@@ -4,7 +4,8 @@
 Online stock for the m18 storefront.
 
 A product linked to the storefront (``external_id`` set, company connected) is offered online with its in-date
-batch stock minus ``online_buffer`` ("keep for shop"), never below zero. Any stock change marks the product's
+batch stock at active, online-sellable locations (the same ones web orders take from) minus ``online_buffer``
+("keep for shop"), never below zero. Any stock change marks the product's
 ``StockSyncState`` pending; ``sync.tasks.push_storefront_stock`` sends the pending ones every 15 s.
 """
 
@@ -25,7 +26,10 @@ def online_available(products):
     """``{product pk: units offered online}`` for ``products``."""
     today = timezone.localdate()
     totals = dict(
-        StockBatch.objects.filter(product__in=[p.pk for p in products], quantity__gt=0, expiration_date__gte=today)
+        StockBatch.objects.filter(
+            product__in=[p.pk for p in products], quantity__gt=0, expiration_date__gte=today,
+            location__online_sellable=True, location__is_active=True,
+        )
         .values('product')
         .annotate(total=Sum('quantity'))
         .values_list('product', 'total')
@@ -45,6 +49,19 @@ def _upsert_pending(product_ids):
         [StockSyncState(product_id=pk, pending=True, changed_at=now) for pk in product_ids],
         update_conflicts=True, unique_fields=['product'], update_fields=['pending', 'changed_at'],
     )
+
+
+def mark_location_changed(location_id):
+    """A location's flags may have changed: queue every linked product with stock there (same rules as below)."""
+    try:
+        with transaction.atomic():
+            ids = list(
+                linked_products().filter(stockbatch__location_id=location_id).values_list('pk', flat=True).distinct()
+            )
+            if ids:
+                _upsert_pending(ids)
+    except DatabaseError:
+        logger.exception('Could not mark products at location %s for a storefront stock update', location_id)
 
 
 def mark_changed(product_id):

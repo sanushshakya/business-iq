@@ -146,6 +146,11 @@ in the admin, where staff link the leftovers by hand or mark them *not sold onli
 Once linked, later runs copy m18's name, description, category and price onto the IQ product (price only while the connection's
 `push_prices` is off, and never a missing m18 price).
 
+**Switching on price push.** Before ticking *Push prices* on the storefront connection, run
+`python manage.py price_push_readiness --company <reg>`: it lists the price differences from the nightly report (largest first),
+linked products m18 would refuse, and ends with `Ready: yes` or the reasons it is not. Every switch on or off is recorded under
+*Price push changes* in the admin. The full checklist, and how to switch off, is in the workspace `docs/runbooks/price-push.md`.
+
 ### Scheduled jobs (Celery beat, `config/celery.py`)
 
 | Job | When (UTC) | What it does |

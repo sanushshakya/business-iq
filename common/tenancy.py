@@ -47,6 +47,7 @@ TENANT_LOOKUPS = {
     'sync.OutboundEvent': 'connection__company',
     'sync.StockSyncState': 'product__company',
     'sync.StockReconciliation': 'connection__company',
+    'sync.PricePushChange': 'connection__company',
     'sync.StorefrontExclusion': 'company',
     'sync.CatalogueImport': 'company',
     'sync.CatalogueImportItem': 'run__company',

@@ -7,8 +7,8 @@ from inventory.models import Product
 
 from .catalogue import exclude_item, link_item, summary
 from .models import (
-    CatalogueImport, CatalogueImportItem, InboundEvent, OutboundEvent, ShopifyConnection, StockReconciliation,
-    StockSyncState, StorefrontConnection, StorefrontExclusion, SyncTask,
+    CatalogueImport, CatalogueImportItem, InboundEvent, OutboundEvent, PricePushChange, ShopifyConnection,
+    StockReconciliation, StockSyncState, StorefrontConnection, StorefrontExclusion, SyncTask,
 )
 
 
@@ -41,6 +41,7 @@ class StorefrontConnectionAdmin(TenantAdminMixin, admin.ModelAdmin):
         return ('webhook_secret',) if obj else ()
 
     def save_model(self, request, obj, form, change):
+        obj.changed_by = request.user  # recorded in PricePushChange if push_prices is switched
         super().save_model(request, obj, form, change)
         if obj.push_prices and 'push_prices' in form.changed_data:
             # Prices only travel with a product's snapshot: queue them all so every price goes out on the next sweep.
@@ -101,6 +102,15 @@ class ReadOnlyAdmin(TenantAdminMixin, admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.register(PricePushChange)
+class PricePushChangeAdmin(ReadOnlyAdmin):
+    """Who switched price pushing on or off, and when (see docs/runbooks/price-push.md)."""
+
+    list_display = ('connection', 'turned_on', 'changed_by', 'changed_at')
+    list_filter = ('turned_on',)
+    list_select_related = ('connection', 'changed_by')
 
 
 @admin.register(StockSyncState)

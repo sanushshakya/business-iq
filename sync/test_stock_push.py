@@ -10,7 +10,7 @@ from django.db import transaction
 from django.test import TestCase
 from django.utils import timezone
 
-from common.tests.factories import CompanyFactory, ProductFactory, StockBatchFactory
+from common.tests.factories import CompanyFactory, ProductFactory, StockBatchFactory, UserFactory
 from inventory.ledger import move, take_fefo
 from inventory.models import StockBatch
 from sync.models import OutboundEvent, StockSyncState, StorefrontConnection
@@ -275,7 +275,7 @@ class PricePushTests(StockPushTestCase):
         form = mock.Mock(changed_data=['push_prices'])
         self.connection.push_prices = True
         with self.captureOnCommitCallbacks(execute=True):
-            admin.save_model(mock.Mock(), self.connection, form, True)
+            admin.save_model(mock.Mock(user=UserFactory(company=self.company, is_staff=True)), self.connection, form, True)
         self.assertEqual(self.pending(), {a.pk, b.pk})
 
 

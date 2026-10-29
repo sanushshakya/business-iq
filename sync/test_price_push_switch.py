@@ -33,6 +33,12 @@ class PricePushAuditTests(TestCase):
         self.assertEqual(list(PricePushChange.objects.order_by('pk').values_list('turned_on', 'changed_by')),
                          [(True, None), (False, None)])
 
+    def test_a_save_that_leaves_the_flag_out_records_nothing(self):
+        self.connection.push_prices = True
+        self.connection.name = 'Renamed'
+        self.connection.save(update_fields=['name'])
+        self.assertFalse(PricePushChange.objects.exists())
+
     def test_created_switched_on_is_recorded(self):
         connection = StorefrontConnection.objects.create(company=CompanyFactory(), webhook_secret='s', push_prices=True)
         self.assertEqual(list(connection.price_push_changes.values_list('turned_on', flat=True)), [True])
@@ -84,6 +90,19 @@ class PricePushReadinessTests(TestCase):
         self.assertLess(out.index('b: IQ 3.00, m18 9.00 (+6.00)'), out.index('c: IQ 5.00, m18 4.00 (-1.00)'))
         self.assertNotIn('a: IQ', out)
         self.assertIn('Ready: yes', out)
+
+    def test_odd_report_values_count_as_no_gap(self):
+        self.report([self.gap('n', '2.00', None), self.gap('x', '2.00', 'abc'), self.gap('q', '2.00', 'NaN'),
+                     self.gap('b', '3.00', '9.00')])
+        out = self.run_command()
+        self.assertIn('Price differences: 4', out)
+        self.assertIn('b: IQ 3.00, m18 9.00 (+6.00)', out)
+        self.assertIn('Ready: yes', out)
+
+    def test_an_inactive_connection_is_not_ready(self):
+        self.report([])
+        StorefrontConnection.objects.filter(pk=self.connection.pk).update(is_active=False)
+        self.assertIn('the connection is inactive', self.run_command())
 
     def test_out_of_range_prices_block(self):
         self.report([])

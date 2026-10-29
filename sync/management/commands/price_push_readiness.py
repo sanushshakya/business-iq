@@ -14,10 +14,12 @@ REPORT_MAX_AGE = timedelta(hours=48)
 
 
 def _gap(row):
+    """m18 minus IQ; a value that is not a finite number counts as no gap."""
     try:
-        return Decimal(str(row['m18'])) - Decimal(str(row['iq']))
-    except (InvalidOperation, KeyError):
+        gap = Decimal(str(row['m18'])) - Decimal(str(row['iq']))
+    except (InvalidOperation, KeyError, TypeError):
         return Decimal(0)
+    return gap if gap.is_finite() else Decimal(0)
 
 
 class Command(BaseCommand):
@@ -37,6 +39,8 @@ class Command(BaseCommand):
             raise CommandError(f'{company} has no storefront connection.')
 
         out, blockers = self.stdout.write, []
+        if not connection.is_active or not connection.base_url:
+            blockers.append('the connection is inactive or has no base URL')
         out(f"{connection} — push_prices: {'on' if connection.push_prices else 'off'}"
             f"{'' if connection.is_active else ' (connection inactive)'}")
         for change in connection.price_push_changes.select_related('changed_by')[:5]:

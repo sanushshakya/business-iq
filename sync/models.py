@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 
 from common.fields import EncryptedTextField
@@ -120,12 +120,16 @@ class StorefrontConnection(models.Model):
 
     def save(self, *args, **kwargs):
         """Record every switch of ``push_prices`` (``PricePushChange``); set ``changed_by`` first to say who."""
-        was_on = (StorefrontConnection.objects.filter(pk=self.pk).values_list('push_prices', flat=True).first()
-                  if self.pk else False)
-        super().save(*args, **kwargs)
-        if bool(was_on) != self.push_prices:
-            PricePushChange.objects.create(connection=self, turned_on=self.push_prices,
-                                           changed_by=getattr(self, 'changed_by', None))
+        update_fields = kwargs.get('update_fields')
+        if update_fields is not None and 'push_prices' not in update_fields:
+            return super().save(*args, **kwargs)
+        with transaction.atomic():
+            stored = StorefrontConnection.objects.select_for_update().filter(pk=self.pk) if self.pk else None
+            was_on = bool(stored and stored.values_list('push_prices', flat=True).first())
+            super().save(*args, **kwargs)
+            if was_on != self.push_prices:
+                PricePushChange.objects.create(connection=self, turned_on=self.push_prices,
+                                               changed_by=getattr(self, 'changed_by', None))
 
 
 class PricePushChange(models.Model):

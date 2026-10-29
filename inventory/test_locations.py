@@ -256,3 +256,56 @@ class DefaultLocationsMigrationTests(TestCase):
         Location.objects.create(company=self.company, code='WH-MAIN', name='Fake warehouse', type='warehouse')
         self.migration.backwards(self.apps, None)
         self.assertEqual(codes(self.company), {'WH-MAIN'})
+
+
+class LocationReviewFixTests(TestCase):
+    def setUp(self):
+        self.company = CompanyFactory()
+        self.branch = Branch.objects.create(company=self.company, name='Fake Branch', address='x')
+
+    def test_company_with_branches_can_be_deleted(self):
+        from inventory.models import Location
+
+        self.company.delete()
+        self.assertFalse(Location.objects.filter(company_id=self.company.pk).exists())
+
+    def test_branch_with_a_location_cannot_be_deleted_alone(self):
+        from django.db.models import RestrictedError
+
+        with self.assertRaises(RestrictedError):
+            self.branch.delete()
+
+    def test_new_branch_survives_a_taken_shop_code(self):
+        from inventory.models import Location
+
+        # A default shop floor turned into a back store keeps its SHOP-<n> code ...
+        Location.objects.filter(branch=self.branch).update(type='back_store')
+        # ... and staff made a location with the next branch's code.
+        Location.objects.create(company=self.company, code=f'SHOP-{self.branch.pk + 1}', name='x', type='warehouse')
+        second = Branch.objects.create(company=self.company, name='Second Branch', address='x')
+        shop = Location.objects.get(branch=second, type='shop_floor')
+        self.assertEqual(shop.code, f'SHOP-{second.pk}-2')
+
+    def test_new_branch_does_not_bring_back_another_branchs_deleted_shop_floor(self):
+        from inventory.models import Location
+
+        Location.objects.filter(branch=self.branch).delete()  # a warehouse-only branch, on purpose
+        Branch.objects.create(company=self.company, name='Second Branch', address='x')
+        self.assertFalse(Location.objects.filter(branch=self.branch).exists())
+
+    def test_admin_is_scoped_and_virtual_locations_are_read_only(self):
+        from django.contrib import admin
+        from django.test import RequestFactory
+
+        from common.tests.factories import UserFactory
+        from inventory.models import Location
+
+        model_admin = admin.site._registry[Location]
+        request = RequestFactory().get('/admin/')
+        request.user = UserFactory(company=self.company, is_staff=True)
+        other = CompanyFactory()
+        self.assertEqual(set(model_admin.get_queryset(request).values_list('company_id', flat=True)), {self.company.pk})
+        waste = Location.objects.get(company=self.company, code='WASTE')
+        self.assertFalse(model_admin.has_delete_permission(request, waste))
+        self.assertIn('type', model_admin.get_readonly_fields(request, waste))
+        self.assertNotIn(other.pk, model_admin.get_queryset(request).values_list('company_id', flat=True))

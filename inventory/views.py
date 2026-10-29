@@ -1,6 +1,6 @@
 # inventory/views.py
 
-from drf_spectacular.utils import OpenApiParameter, extend_schema
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -73,11 +73,11 @@ class StockMovementViewSet(
     serializer_class = StockMovementSerializer
 
 
-@extend_schema(parameters=[
+@extend_schema_view(list=extend_schema(parameters=[
     OpenApiParameter('type', str, description='Only this type, e.g. warehouse.'),
     OpenApiParameter('branch', int, description='Only locations in this branch.'),
     OpenApiParameter('sellable', bool, description='true: only sellable locations; false: only the others.'),
-])
+]))
 class LocationViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     """
     Stock locations (company staff only): shop floors, butchery, warehouses, back stores, vans, plus the virtual

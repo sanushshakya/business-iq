@@ -177,8 +177,9 @@ class Location(models.Model):
     BRANCH_TYPES = (SHOP_FLOOR, BUTCHERY, BACK_STORE)  # always inside a branch
 
     company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='locations')
+    # RESTRICT: a branch with locations can't be deleted on its own, but deleting the company removes both.
     branch = models.ForeignKey(
-        'tenants.Branch', null=True, blank=True, on_delete=models.PROTECT, related_name='locations'
+        'tenants.Branch', null=True, blank=True, on_delete=models.RESTRICT, related_name='locations'
     )
     code = models.CharField(
         max_length=20,

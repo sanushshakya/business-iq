@@ -21,4 +21,5 @@ def branch_default_locations(sender, instance, created, raw=False, **kwargs):
     if created and not raw:
         from .locations import ensure_default_locations
 
-        ensure_default_locations(instance.company)
+        # Only this branch's shop floor: one deleted on purpose elsewhere must not come back.
+        ensure_default_locations(instance.company, branches=[instance])

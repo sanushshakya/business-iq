@@ -5,6 +5,8 @@ This module contains Django models for the inventory app. These models are respo
 for representing and managing inventory-related data within the application.
 """
 
+from django.core.exceptions import ValidationError
+from django.core.validators import RegexValidator
 from django.db import models
 
 from vat.models import VAT_CODES, ZERO
@@ -142,3 +144,83 @@ class StockMovement(models.Model):
 
     def __str__(self):
         return f"{self.batch.product.name} - {self.movement_type.capitalize()} - {self.quantity}"
+
+# Places outside the business, so every movement balances; one of each per company.
+VIRTUAL_LOCATION_TYPES = ('in_transit', 'supplier', 'customer', 'waste', 'adjustment')
+
+
+class Location(models.Model):
+    """
+    A place stock can be: a shop floor, a butchery counter, a warehouse, a van... or a virtual location for what
+    is outside the business (supplier, customer, waste, adjustment, in transit), so every movement can balance.
+
+    Virtual locations are created by the system (one of each per company) and never sellable. ``sellable`` means
+    tills may sell from here; ``online_sellable`` (which needs ``sellable``) counts towards online stock.
+    Retire a location with ``is_active`` once stock has moved through it.
+    """
+
+    SHOP_FLOOR, BUTCHERY, WAREHOUSE, BACK_STORE, VAN = 'shop_floor', 'butchery', 'warehouse', 'back_store', 'van'
+    IN_TRANSIT, SUPPLIER, CUSTOMER, WASTE, ADJUSTMENT = 'in_transit', 'supplier', 'customer', 'waste', 'adjustment'
+    TYPES = [
+        (SHOP_FLOOR, 'Shop floor'),
+        (BUTCHERY, 'Butchery'),
+        (WAREHOUSE, 'Warehouse'),
+        (BACK_STORE, 'Back store'),
+        (VAN, 'Van'),
+        (IN_TRANSIT, 'In transit'),
+        (SUPPLIER, 'Supplier (virtual)'),
+        (CUSTOMER, 'Customer (virtual)'),
+        (WASTE, 'Waste (virtual)'),
+        (ADJUSTMENT, 'Adjustment (virtual)'),
+    ]
+    VIRTUAL_TYPES = VIRTUAL_LOCATION_TYPES
+    BRANCH_TYPES = (SHOP_FLOOR, BUTCHERY, BACK_STORE)  # always inside a branch
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='locations')
+    branch = models.ForeignKey(
+        'tenants.Branch', null=True, blank=True, on_delete=models.PROTECT, related_name='locations'
+    )
+    code = models.CharField(
+        max_length=20,
+        validators=[RegexValidator(r'^[A-Z0-9][A-Z0-9-]*$', 'Use capital letters, digits and dashes.')],
+        help_text='Short code, unique within the company (e.g. SHOP-1, WH-MAIN).',
+    )
+    name = models.CharField(max_length=100)
+    type = models.CharField(max_length=20, choices=TYPES)
+    sellable = models.BooleanField(default=False)
+    online_sellable = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['code', 'id']
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'code'], name='location_code_unique_per_company'),
+            models.UniqueConstraint(
+                fields=['company', 'type'], condition=models.Q(type__in=VIRTUAL_LOCATION_TYPES),
+                name='one_virtual_location_per_type_per_company',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.code} · {self.name}'
+
+    @property
+    def is_virtual(self):
+        return self.type in self.VIRTUAL_TYPES
+
+    def clean(self):
+        errors = {}
+        if self.online_sellable and not self.sellable:
+            errors['online_sellable'] = 'Only a sellable location can count towards online stock.'
+        if self.is_virtual:
+            if self.sellable or self.online_sellable:
+                errors['sellable'] = 'A virtual location is never sellable.'
+            if self.branch_id:
+                errors['branch'] = 'A virtual location has no branch.'
+        elif self.type in self.BRANCH_TYPES and not self.branch_id:
+            errors['branch'] = 'This type of location is inside a branch.'
+        if self.branch_id and self.company_id and self.branch.company_id != self.company_id:
+            errors['branch'] = 'The branch belongs to another company.'
+        if errors:
+            raise ValidationError(errors)

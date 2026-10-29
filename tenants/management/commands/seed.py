@@ -58,6 +58,11 @@ class Command(BaseCommand):
         elif fixture:
             with transaction.atomic(), model_signals_muted():
                 call_command('loaddata', fixture, stdout=self.stdout)
+            # Default locations come from post_save receivers, which were muted for the load.
+            from inventory.locations import ensure_default_locations
+
+            for company in Company.objects.all():
+                ensure_default_locations(company)
 
         email = os.environ.get('DJANGO_SUPERUSER_EMAIL')
         password = os.environ.get('DJANGO_SUPERUSER_PASSWORD')

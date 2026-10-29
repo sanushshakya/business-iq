@@ -55,6 +55,7 @@ TENANT_LOOKUPS = {
     'common.FreightRateCache': 'company',
     'common.Setting': 'company',
     'authentication.UserInvitation': 'company',
+    'authentication.TwoFactorEvent': 'company',
 }
 
 

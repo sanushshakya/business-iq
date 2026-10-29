@@ -1,7 +1,9 @@
 from django.contrib import admin
 from django.utils import timezone
 
-from .models import RefreshToken
+from common.tenancy import TenantAdminMixin
+
+from .models import RefreshToken, TwoFactorEvent
 
 
 @admin.register(RefreshToken)
@@ -41,3 +43,22 @@ class RefreshTokenAdmin(admin.ModelAdmin):
         count = RefreshToken.objects.filter(family__in=families, revoked_at__isnull=True).update(
             revoked_at=timezone.now())
         self.message_user(request, f"Revoked {count} active token(s) in {len(families)} session(s).")
+
+
+@admin.register(TwoFactorEvent)
+class TwoFactorEventAdmin(TenantAdminMixin, admin.ModelAdmin):
+    """The two-factor audit trail. Read-only: nobody can add, edit or remove entries."""
+
+    list_display = ('created_at', 'user', 'kind', 'actor')
+    list_filter = ('kind',)
+    search_fields = ('user__email',)
+    list_select_related = ('user', 'actor')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

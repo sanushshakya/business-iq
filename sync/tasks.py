@@ -13,6 +13,7 @@ from django.utils import timezone
 
 from .models import OutboundEvent, StockReconciliation, StockSyncState, StorefrontConnection, SyncTask
 from .signing import sign
+from .status import broadcast
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,14 @@ def deliver_outbound_event(event_pk):
     signed event it understands (even a business "no"), so a retry only happens when it genuinely did not get it.
     Never logs the secret or the signature.
     """
+    delivered, company_id = _deliver(event_pk)
+    if company_id is not None:
+        broadcast(company_id)
+    return delivered
+
+
+def _deliver(event_pk):
+    """``deliver_outbound_event`` without the status broadcast: ``(delivered, company_id or None if not attempted)``."""
     with transaction.atomic():
         event = (
             OutboundEvent.objects.select_for_update(skip_locked=True, of=('self',))
@@ -84,7 +93,7 @@ def deliver_outbound_event(event_pk):
             .first()
         )
         if event is None:
-            return False
+            return False, None
 
         connection = event.connection
         body = json.dumps(event.payload, separators=(',', ':'), sort_keys=True).encode()  # these bytes are signed
@@ -99,17 +108,17 @@ def deliver_outbound_event(event_pk):
         except requests.RequestException as exc:
             logger.warning('Storefront delivery of event %s failed: %s', event.event_id, type(exc).__name__)
             _record_failure(event, type(exc).__name__)
-            return False
+            return False, connection.company_id
 
         if 200 <= response.status_code < 300:
             event.status = 'delivered'
             event.last_error = ''
             event.save(update_fields=['status', 'last_error'])
-            return True
+            return True, connection.company_id
 
         logger.warning('Storefront delivery of event %s failed: HTTP %s', event.event_id, response.status_code)
         _record_failure(event, f'HTTP {response.status_code}: {(response.text or "")[:200]}')
-        return False
+        return False, connection.company_id
 
 
 @shared_task
@@ -172,10 +181,13 @@ def push_storefront_stock():
     """
     sent = 0
     for connection in StorefrontConnection.objects.filter(is_active=True).exclude(base_url=''):
-        more = True
+        more, sent_here = True, 0
         while more:
             count, more = _push_stock_batch(connection)
-            sent += count
+            sent_here += count
+        if sent_here:
+            broadcast(connection.company_id)  # the backlog just grew; deliveries update it again
+        sent += sent_here
     return sent
 
 

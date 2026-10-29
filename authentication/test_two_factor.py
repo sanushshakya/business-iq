@@ -21,7 +21,7 @@ class TwoFactorEventAdminTests(TestCase):
         from authentication.models import TwoFactorEvent
 
         self.model_admin = admin.site._registry[TwoFactorEvent]
-        company = Company.objects.create(name='Fake Foods Ltd')
+        company = Company.objects.create(name='Fake Foods Ltd', registration_number='FAKE1')
         self.request = RequestFactory().get('/admin/')
         self.request.user = User.objects.create_user(
             email='boss@example.com', password='pw-12345678', company=company, is_staff=True
@@ -56,7 +56,7 @@ class TwoFactorServiceTests(TestCase):
         from django.core.cache import cache
 
         cache.clear()
-        self.company = Company.objects.create(name='Fake Foods Ltd')
+        self.company = Company.objects.create(name='Fake Foods Ltd', registration_number='FAKE1')
         self.user = User.objects.create_user(email='staff@example.com', password='pw-12345678', company=self.company)
         self.clock = mock.patch('authentication.two_factor._now', return_value=T0)
         self.clock.start()
@@ -284,7 +284,7 @@ class TwoFactorApiTests(TestCase):
         from django.core.cache import cache
 
         cache.clear()  # these routes are rate limited per client
-        self.company = Company.objects.create(name='Fake Foods Ltd')
+        self.company = Company.objects.create(name='Fake Foods Ltd', registration_number='FAKE1')
         self.user = User.objects.create_user(email='staff@example.com', password='pw-12345678', company=self.company)
         self.client = APIClient()
         self.clock = mock.patch('authentication.two_factor._now', return_value=T0)
@@ -499,3 +499,98 @@ class TwoFactorApiTests(TestCase):
         login = paths['/auth/login/']['post']['responses']['200']['content']['application/json']['schema']
         self.assertEqual(login['$ref'], '#/components/schemas/LoginResponse')
         self.assertIn('oneOf', schema['components']['schemas']['LoginResponse'])
+
+
+class StaffTwoFactorResetTests(TestCase):
+    """An admin lists the company's password users and resets someone's 2FA (lost phone)."""
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        from authentication import refresh_tokens, two_factor
+
+        cache.clear()
+        self.company = Company.objects.create(name='Fake Foods Ltd', registration_number='FAKE1')
+        self.other_company = Company.objects.create(name='Other Fake Ltd', registration_number='FAKE2')
+        self.boss = User.objects.create_user(email='boss@example.com', password='pw-12345678', company=self.company,
+                                             is_staff=True)
+        self.clerk = User.objects.create_user(email='clerk@example.com', password='pw-12345678', company=self.company)
+        self.stranger = User.objects.create_user(email='stranger@example.com', password='pw-12345678',
+                                                 company=self.other_company)
+        User.objects.create_operator(self.company, 'Fake Till', 'till')
+        with mock.patch('authentication.two_factor._now', return_value=T0):
+            for user in (self.clerk, self.stranger):
+                secret = two_factor.start_enrolment(user)['secret']
+                two_factor.confirm_enrolment(user, _code(secret, T0))
+        self.api = APIClient()
+        self.api.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh_tokens.issue_token_pair(self.boss)['access_token']}")
+
+    def reset_url(self, user):
+        return reverse('two-factor-user-reset', args=[user.pk])
+
+    def test_lists_company_password_users_with_status(self):
+        response = self.api.get(reverse('two-factor-user-list'))
+        self.assertEqual(response.status_code, 200)
+        rows = {row['email']: row for row in response.json()['results']}
+        self.assertEqual(set(rows), {'boss@example.com', 'clerk@example.com'})
+        self.assertTrue(rows['clerk@example.com']['two_factor_enabled'])
+        self.assertFalse(rows['boss@example.com']['two_factor_enabled'])
+        self.assertTrue(rows['boss@example.com']['is_staff'])
+
+    def test_admin_resets_other_users_2fa_and_event_is_written(self):
+        from authentication import two_factor
+        from authentication.models import TwoFactorEvent
+
+        response = self.api.post(self.reset_url(self.clerk))
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(two_factor.is_enabled(self.clerk))
+        event = TwoFactorEvent.objects.get(kind='reset')
+        self.assertEqual((event.user, event.actor, event.company), (self.clerk, self.boss, self.company))
+
+    def test_reset_revokes_target_sessions(self):
+        from authentication import refresh_tokens
+
+        pair = refresh_tokens.issue_token_pair(self.clerk)
+        self.api.post(self.reset_url(self.clerk))
+        response = APIClient().post(reverse('token-refresh'), {'refresh_token': pair['refresh_token']})
+        self.assertEqual(response.status_code, 401)
+
+    def test_reset_other_company_user_is_404(self):
+        from authentication import two_factor
+
+        self.assertEqual(self.api.post(self.reset_url(self.stranger)).status_code, 404)
+        self.assertTrue(two_factor.is_enabled(self.stranger))
+
+    def test_other_company_users_not_listed(self):
+        emails = [row['email'] for row in self.api.get(reverse('two-factor-user-list')).json()['results']]
+        self.assertNotIn('stranger@example.com', emails)
+
+    def test_non_staff_gets_403(self):
+        from authentication import refresh_tokens
+
+        api = APIClient()
+        api.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh_tokens.issue_token_pair(self.clerk)['access_token']}")
+        self.assertEqual(api.get(reverse('two-factor-user-list')).status_code, 403)
+        self.assertEqual(api.post(self.reset_url(self.boss)).status_code, 403)
+
+    def test_operator_gets_403(self):
+        from authentication import refresh_tokens
+
+        operator = User.objects.get(role='till')
+        api = APIClient()
+        api.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh_tokens.issue_token_pair(operator)['access_token']}")
+        self.assertEqual(api.get(reverse('two-factor-user-list')).status_code, 403)
+
+    def test_cannot_reset_self(self):
+        self.assertEqual(self.api.post(self.reset_url(self.boss)).status_code, 400)
+
+    def test_operator_cannot_be_reset(self):
+        operator = User.objects.get(role='till')
+        self.assertEqual(self.api.post(self.reset_url(operator)).status_code, 404)
+
+    def test_schema_documents_reset_routes(self):
+        from drf_spectacular.generators import SchemaGenerator
+
+        paths = SchemaGenerator().get_schema(request=None, public=True)['paths']
+        self.assertIn('/auth/2fa/users/', paths)
+        self.assertIn('/auth/2fa/users/{id}/reset/', paths)

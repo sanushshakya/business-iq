@@ -2,18 +2,25 @@
 
 """HTTP side of two-factor sign-in. The rules live in ``two_factor.py``; these views only translate."""
 
+from django.contrib.auth import get_user_model
+from django.db.models import Exists, OuterRef
 from django.utils.translation import gettext as _
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers as drf_serializers
-from rest_framework import status
+from rest_framework import mixins, status, viewsets
+from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from . import refresh_tokens, two_factor
-from .models import TwoFactorChallenge
+from common.tenancy import TenantScopedMixin
+from tenants.views import IsCompanyStaff
+
+from .models import TwoFactorChallenge, TwoFactorDevice
 from .serializers import (
+    StaffTwoFactorSerializer,
     TwoFactorCodeSerializer,
     TwoFactorEnrolConfirmSerializer,
     TwoFactorEnrolSerializer,
@@ -238,4 +245,33 @@ class TwoFactorDisableView(TwoFactorThrottled, APIView):
             two_factor.disable(request.user, serializer.validated_data['code'])
         except two_factor.TwoFactorError as error:
             return _wrong_code(request.user) if error.code == 'invalid_code' else _error(error.code)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class StaffTwoFactorViewSet(TenantScopedMixin, mixins.ListModelMixin, viewsets.GenericViewSet):
+    """
+    Company staff: the company's password users with their two-factor status, and a reset for someone who lost
+    their phone. A reset removes the authenticator and recovery codes, ends their sessions and is recorded
+    (``TwoFactorEvent``); they set it up again at their next sign-in (admins must). Operators are not listed.
+    """
+
+    queryset = get_user_model().objects.filter(role='').order_by('email', 'id')
+    serializer_class = StaffTwoFactorSerializer
+    permission_classes = [IsCompanyStaff]
+
+    def get_queryset(self):
+        # super() applies the company scoping; only annotate on top of it.
+        confirmed = TwoFactorDevice.objects.filter(user=OuterRef('pk'), confirmed_at__isnull=False)
+        return super().get_queryset().annotate(two_factor_enabled=Exists(confirmed))
+
+    @extend_schema(request=None, responses={204: None})
+    @action(detail=True, methods=['post'])
+    def reset(self, request, pk=None):
+        target = self.get_object()
+        if target.pk == request.user.pk:
+            return Response(
+                {'detail': _('You cannot reset your own two-factor sign-in.'), 'code': 'self'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        two_factor.reset(target, actor=request.user)
         return Response(status=status.HTTP_204_NO_CONTENT)

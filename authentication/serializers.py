@@ -3,6 +3,8 @@ from django.utils import timezone
 from drf_spectacular.utils import inline_serializer
 from rest_framework import serializers
 
+from common.tenancy import TenantModelSerializer
+
 from .models import UserInvitation
 
 
@@ -146,3 +148,14 @@ class TwoFactorEnrolSerializer(serializers.Serializer):
 
 class TwoFactorEnrolConfirmSerializer(TwoFactorEnrolSerializer):
     code = serializers.CharField(max_length=20)
+
+
+class StaffTwoFactorSerializer(TenantModelSerializer):
+    """A password user of the company and whether they have two-factor sign-in on (for the admin's reset list)."""
+
+    two_factor_enabled = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = get_user_model()
+        fields = ['id', 'email', 'name', 'is_staff', 'is_active', 'two_factor_enabled']
+        read_only_fields = fields

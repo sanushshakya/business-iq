@@ -1,6 +1,7 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from .two_factor_views import (
+    StaffTwoFactorViewSet,
     TwoFactorDisableView,
     TwoFactorEnrolConfirmView,
     TwoFactorEnrolView,
@@ -21,6 +22,7 @@ from .views import (
 
 router = DefaultRouter()
 router.register(r'invitations', InvitationViewSet, basename='invitation')
+router.register(r'2fa/users', StaffTwoFactorViewSet, basename='two-factor-user')
 
 urlpatterns = [
     # Exchange credentials for a Bearer token

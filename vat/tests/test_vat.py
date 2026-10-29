@@ -5,9 +5,7 @@ from decimal import Decimal
 
 from django.contrib import admin
 from django.contrib.auth import get_user_model
-from django.db import connection
-from django.db.migrations.executor import MigrationExecutor
-from django.test import RequestFactory, TestCase, TransactionTestCase
+from django.test import RequestFactory, TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
 
@@ -129,35 +127,36 @@ class RateAdminTests(TestCase):
         self.assertTrue(model_admin.has_delete_permission(request, future))
 
 
-class SeedMigrationTests(TransactionTestCase):
-    # Put the seeded rates back afterwards: every sale test needs them.
-    serialized_rollback = True
+class SeedMigrationTests(TestCase):
+    """
+    The seed migration's forward and reverse functions, run against the real registry inside a transaction.
 
-    def test_seed_migration_reverses(self):
-        executor = MigrationExecutor(connection)
-        executor.migrate([('vat', '0001_initial')])
-        executor.loader.build_graph()
-        old_apps = executor.loader.project_state([('vat', '0001_initial')]).apps
-        self.assertEqual(old_apps.get_model('vat', 'VatRate').objects.count(), 0)
-        # A rate added by hand is not one of the seeded rows, so undoing the seed again must keep it.
-        old_apps.get_model('vat', 'VatRate').objects.create(code='standard', rate='22.00', valid_from=date(2030, 1, 1))
-        executor = MigrationExecutor(connection)
-        executor.migrate([('vat', '0002_seed_uk_rates')])
-        executor.loader.build_graph()
-        new_apps = executor.loader.project_state([('vat', '0002_seed_uk_rates')]).apps
-        self.assertEqual(new_apps.get_model('vat', 'VatRate').objects.count(), 5)
-        executor = MigrationExecutor(connection)
-        executor.migrate([('vat', '0001_initial')])
-        self.assertEqual(
-            list(old_apps.get_model('vat', 'VatRate').objects.values_list('rate', flat=True)), [Decimal('22.00')]
-        )
-        executor = MigrationExecutor(connection)
-        executor.migrate([('vat', '0002_seed_uk_rates')])
+    (Not a TransactionTestCase: its flush would delete the seeded rates every other test relies on.)
+    """
 
-    def test_seeded_rates_are_present_after_the_migration_test(self):
+    def setUp(self):
+        import importlib
+
+        from django.apps import apps
+
+        self.migration = importlib.import_module('vat.migrations.0002_seed_uk_rates')
+        self.apps = apps
+
+    def test_seed_migration_reverses_and_keeps_rows_added_by_hand(self):
         from vat.models import VatRate
 
-        self.assertGreaterEqual(VatRate.objects.count(), 4)
+        self.assertEqual(VatRate.objects.count(), 4)
+        VatRate.objects.create(code='standard', rate=Decimal('22.00'), valid_from=date(2030, 1, 1))
+        self.migration.unseed(self.apps, None)
+        self.assertEqual(list(VatRate.objects.values_list('rate', flat=True)), [Decimal('22.00')])
+        self.migration.seed(self.apps, None)
+        self.assertEqual(VatRate.objects.count(), 5)
+
+    def test_seed_is_idempotent(self):
+        from vat.models import VatRate
+
+        self.migration.seed(self.apps, None)
+        self.assertEqual(VatRate.objects.count(), 4)
 
 
 class SchemaTests(TestCase):

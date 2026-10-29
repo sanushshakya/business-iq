@@ -12,6 +12,7 @@ router.register(r'orders', views.OrderViewSet, basename='order')
 router.register(r'suppliers', views.SupplierViewSet, basename='supplier')
 router.register(r'batches', views.StockBatchViewSet, basename='stockbatch')
 router.register(r'movements', views.StockMovementViewSet, basename='stockmovement')
+router.register(r'locations', views.LocationViewSet, basename='location')
 
 urlpatterns = [
     path('', include(router.urls)),

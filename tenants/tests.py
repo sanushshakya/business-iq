@@ -293,6 +293,16 @@ class SeedCommandTests(TestCase):
         self.assertTrue(root.is_superuser and root.is_staff and root.check_password('pw-123456'))
         self.assertEqual(root.company_id, 7)
 
+    def test_snapshot_companies_get_default_locations(self):
+        """Signals are muted while loading, so the seed adds each company's default locations afterwards."""
+        from inventory.models import Location
+
+        self.seed(self.snapshot())
+        self.assertEqual(
+            set(Location.objects.filter(company_id=7).values_list('code', flat=True)),
+            {'IN-TRANSIT', 'SUPPLIER', 'CUSTOMER', 'WASTE', 'ADJUSTMENT'},
+        )
+
     def test_rerun_skips_the_snapshot_and_keeps_the_password(self):
         snapshot = self.snapshot()
         env = {'DJANGO_SUPERUSER_EMAIL': 'root@example.com', 'DJANGO_SUPERUSER_PASSWORD': 'pw-123456'}

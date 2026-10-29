@@ -57,6 +57,7 @@ TENANT_LOOKUPS = {
     'common.Setting': 'company',
     'authentication.UserInvitation': 'company',
     'authentication.TwoFactorEvent': 'company',
+    'inventory.Location': 'company',
 }
 
 

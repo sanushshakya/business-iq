@@ -226,3 +226,33 @@ class LocationApiTests(TestCase):
         paths = SchemaGenerator().get_schema(request=None, public=True)['paths']
         self.assertIn('/inventory/locations/', paths)
         self.assertIn('/inventory/locations/{id}/', paths)
+
+
+class DefaultLocationsMigrationTests(TestCase):
+    def setUp(self):
+        import importlib
+
+        from django.apps import apps
+
+        self.migration = importlib.import_module('inventory.migrations.0010_default_locations')
+        self.apps = apps
+        self.company = CompanyFactory()
+        self.branch = Branch.objects.create(company=self.company, name='Fake Branch', address='x')
+
+    def test_forwards_creates_defaults_for_existing_companies_and_branches(self):
+        from inventory.models import Location
+
+        Location.objects.all().delete()  # as before G08: companies and branches without locations
+        self.migration.forwards(self.apps, None)
+        self.assertEqual(codes(self.company), VIRTUAL_CODES | {f'SHOP-{self.branch.pk}'})
+        shop = Location.objects.get(code=f'SHOP-{self.branch.pk}')
+        self.assertTrue(shop.sellable and shop.online_sellable)
+        self.migration.forwards(self.apps, None)  # running again adds nothing
+        self.assertEqual(Location.objects.filter(company=self.company).count(), 6)
+
+    def test_backwards_removes_only_the_defaults(self):
+        from inventory.models import Location
+
+        Location.objects.create(company=self.company, code='WH-MAIN', name='Fake warehouse', type='warehouse')
+        self.migration.backwards(self.apps, None)
+        self.assertEqual(codes(self.company), {'WH-MAIN'})

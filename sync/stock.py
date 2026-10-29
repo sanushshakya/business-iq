@@ -15,6 +15,7 @@ from django.db import DatabaseError, transaction
 from django.db.models import Sum
 from django.utils import timezone
 
+from inventory.ledger import ONLINE_LOCATION
 from inventory.models import Product, StockBatch
 
 from .models import StockSyncState, StorefrontConnection
@@ -28,7 +29,7 @@ def online_available(products):
     totals = dict(
         StockBatch.objects.filter(
             product__in=[p.pk for p in products], quantity__gt=0, expiration_date__gte=today,
-            location__online_sellable=True, location__is_active=True,
+            **{f'location__{field}': value for field, value in ONLINE_LOCATION.items()},
         )
         .values('product')
         .annotate(total=Sum('quantity'))

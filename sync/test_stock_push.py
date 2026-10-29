@@ -347,3 +347,26 @@ class OnlineLocationTests(StockPushTestCase):
         last = OutboundEvent.objects.filter(event_type='stock.changed').order_by('-pk').first()
         item = next(i for i in last.payload['data']['items'] if i['product_id'] == product.external_id)
         self.assertEqual(item['online_available'], 0)
+
+    def test_retiring_a_location_marks_its_products(self):
+        from inventory.models import Location
+
+        product = self.linked()
+        batch = self.batch(product, 5)
+        StockSyncState.objects.update(pending=False)
+        location = Location.objects.get(pk=batch.location_id)
+        location.is_active = False
+        location.save()
+        self.assertEqual(self.pending(), {product.pk})
+        self.assertEqual(online_available([product]), {product.pk: 0})
+
+    def test_online_stock_and_web_orders_use_the_same_locations(self):
+        from inventory.ledger import ONLINE_LOCATION
+        from inventory.models import Location
+
+        self.location('WH-2')
+        self.location('TILL-2', sellable=True)
+        self.location('WEB-2', sellable=True, online_sellable=True)
+        self.location('OFF-2', sellable=True, online_sellable=True, is_active=False)
+        counted = set(Location.objects.filter(company=self.company, **ONLINE_LOCATION))
+        self.assertEqual(counted, set(online_locations(self.company)))

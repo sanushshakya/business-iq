@@ -76,7 +76,33 @@ however often it is refreshed. Changing or resetting a password invalidates all 
 the refresh tokens immediately, but an access token already issued stays valid until it expires (at most
 `JWT_ACCESS_TOKEN_TTL_SECONDS`).
 
-Session and HTTP Basic authentication also work (handy for the browsable API and the admin).
+**Two-factor sign-in (TOTP).** Admins (`is_staff` / superusers) must use an authenticator app; other password users
+can turn it on in Settings; operators (8-digit code) are not affected. When it applies, `/auth/login/` answers
+`{"two_factor": "verify" | "enrol", "challenge", "expires_in": 300}` instead of tokens:
+
+```bash
+# verify: a 6-digit code from the app (or {"challenge", "recovery_code"}) returns the token pair
+curl -X POST localhost:8000/auth/2fa/verify/ -d challenge=<challenge> -d code=123456
+# enrol (an admin without an authenticator yet): get the QR/secret, then confirm with a code from the app;
+# the confirm returns 10 single-use recovery codes (shown once) and the token pair
+curl -X POST localhost:8000/auth/2fa/enrol/ -d challenge=<challenge>
+curl -X POST localhost:8000/auth/2fa/enrol/confirm/ -d challenge=<challenge> -d code=123456
+```
+
+A challenge lives 5 minutes and dies after 5 wrong codes; a code works once; 10 wrong codes for one user lock every
+code for 15 minutes; the routes are throttled (`TWO_FACTOR_THROTTLE_RATE`, 10/min). Signed in, `GET /auth/2fa/` shows
+the status and `/auth/2fa/enrol/` + `/enrol/confirm/` (no challenge) set it up; `POST /auth/2fa/disable/ {code}` turns
+it off (not for admins). Company staff list everyone's status at `GET /auth/2fa/users/` and reset a lost phone with
+`POST /auth/2fa/users/<id>/reset/` (ends that user's sessions; recorded as a `TwoFactorEvent`, read-only in the admin).
+An admin's refresh token is refused while they have no authenticator, so older sessions must sign in and enrol.
+A reset ends the user's refresh tokens at once, but an access token already issued keeps working until it expires
+(`JWT_ACCESS_TOKEN_TTL_SECONDS`, 1 h): after a suspected takeover, also deactivate the account or change its password.
+The lockout and throttles live in the Django cache: run production with `USE_REDIS_CACHE=True`, otherwise each worker
+process counts separately.
+
+Session and HTTP Basic authentication also work (handy for the browsable API and the admin), with two-factor applied:
+HTTP Basic is refused for admins and for anyone with two-factor on, and the Django admin's sign-in page asks for the
+code (or a recovery code); an admin without an authenticator sets it up in the web app first.
 Password reset confirmation (`/auth/password_reset/confirm/`), invitation acceptance
 (`/auth/invitations/accept/`) and email-token verification (`/common/api/auth/verify-email-token/`) are public.
 
@@ -94,7 +120,7 @@ reference data: readable by everyone, editable by staff. Superusers are not scop
 | --- | --- |
 | `config/` | Project package: settings, URLs, ASGI/WSGI, Celery app and beat schedule |
 | `tenants/` | `Company`, `Branch`, `Till` (with an API) and the custom email-login `CustomUser` |
-| `authentication/` | Login with access + refresh tokens, password reset, invitations |
+| `authentication/` | Login with access + refresh tokens, two-factor sign-in (TOTP), password reset, invitations |
 | `inventory/` | Products, categories, suppliers, orders, stock batches and movements |
 | `demand/`, `demand_calendar/` | Demand requests, cultural events, event/product keywords, upcoming-events feed |
 | `logistics/` | Freight alerts, providers, deliveries, the company's suppliers and suggested alternatives |
@@ -114,7 +140,7 @@ token lifetimes, login/refresh throttles, field-encryption keys, and the externa
 
 | Area | Endpoints |
 | --- | --- |
-| Sign-in | `POST /auth/login/`, `/auth/token/refresh/`, `/auth/logout/` |
+| Sign-in | `POST /auth/login/`, `/auth/token/refresh/`, `/auth/logout/`; two-factor `/auth/2fa/` (`verify/`, `enrol/`, `enrol/confirm/`, `disable/`, `users/`) |
 | Passwords | `POST /auth/password_reset/` (emails a link), `/auth/password_reset/confirm/` |
 | Invitations | `/auth/invitations/` (staff invite by email, list, revoke), `POST /auth/invitations/accept/` (public) |
 | Company | `/tenants/company/` (yours; staff can edit), `/tenants/branches/`, `/tenants/tills/` |

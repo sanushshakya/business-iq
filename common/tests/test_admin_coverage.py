@@ -8,6 +8,9 @@ from common.tests.factories import UserFactory
 # Registered through another model's admin (an inline on EventAdmin).
 INLINE_ONLY = {'demand_calendar.DemandAlert'}
 DJANGO_APPS = {'admin', 'auth', 'contenttypes', 'sessions'}
+# Two-factor secrets, recovery-code hashes and sign-in challenges stay out of the admin on purpose;
+# who has 2FA and every change to it are visible through TwoFactorEvent and /auth/2fa/users/.
+SECRETS = {'authentication.TwoFactorDevice', 'authentication.RecoveryCode', 'authentication.TwoFactorChallenge'}
 
 
 class AdminCoverageTests(TestCase):
@@ -16,6 +19,7 @@ class AdminCoverageTests(TestCase):
             m._meta.label for m in apps.get_models()
             if m._meta.app_label not in DJANGO_APPS
             and m._meta.label not in INLINE_ONLY
+            and m._meta.label not in SECRETS
             and m not in admin.site._registry
         ]
         self.assertEqual(missing, [])

@@ -116,7 +116,8 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "authentication.authentication.JWTAuthentication",
         "rest_framework.authentication.SessionAuthentication",
-        "rest_framework.authentication.BasicAuthentication",
+        # Basic is refused for admins and anyone with two-factor sign-in on (they use /auth/login/).
+        "authentication.authentication.PasswordOnlyBasicAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_THROTTLE_RATES": {
@@ -125,6 +126,8 @@ REST_FRAMEWORK = {
         "code_login": config("CODE_LOGIN_THROTTLE_RATE", default="5/min"),
         "refresh": config("REFRESH_THROTTLE_RATE", default="30/min"),
         "password_reset": config("PASSWORD_RESET_THROTTLE_RATE", default="5/hour"),
+        # Second sign-in step and 2FA set-up (6-digit codes); a per-user lockout in authentication/two_factor.py too.
+        "two_factor": config("TWO_FACTOR_THROTTLE_RATE", default="10/min"),
     },
     "DEFAULT_PAGINATION_CLASS": "common.pagination.StandardResultsSetPagination",
     "EXCEPTION_HANDLER": "common.exceptions.custom_exception_handler",

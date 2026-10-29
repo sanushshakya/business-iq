@@ -4,6 +4,8 @@ from django.conf import settings
 from django.db import models
 from django.db.models import Q
 
+from vat.models import VAT_CODES
+
 
 class TillSession(models.Model):
     """
@@ -87,7 +89,12 @@ class Sale(models.Model):
 
 
 class SaleItem(models.Model):
-    """One product line on a sale. Name and price are copied so the receipt never changes afterwards."""
+    """
+    One product line on a sale. Name, price and VAT are copied so the receipt never changes afterwards.
+
+    ``line_total`` is the gross (till prices include VAT); ``net_amount + vat_amount == line_total``. The VAT fields
+    are empty on lines sold before VAT was recorded.
+    """
 
     sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey('inventory.Product', on_delete=models.PROTECT, related_name='+')
@@ -95,6 +102,10 @@ class SaleItem(models.Model):
     quantity = models.PositiveIntegerField()
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     line_total = models.DecimalField(max_digits=12, decimal_places=2)
+    vat_code = models.CharField(max_length=10, choices=VAT_CODES, blank=True)
+    vat_rate = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    net_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    vat_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
 
     class Meta:
         ordering = ['id']

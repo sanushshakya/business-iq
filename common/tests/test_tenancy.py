@@ -211,7 +211,7 @@ class AdminScopingTests(TenancyTestCase):
         url = reverse('admin:inventory_product_add')
         self.assertNotIn('name="company"', self.web.get(url).content.decode())
         response = self.web.post(url, {'name': 'New', 'description': 'd', 'price': '1.00', 'stock_quantity': 1, 'reorder_threshold': 5,
-                                     'online_buffer': 0})
+                                     'online_buffer': 0, 'vat_code': 'zero'})
         self.assertEqual(response.status_code, 302, getattr(response, 'content', b'')[:300])
         self.assertEqual(Product.objects.get(name='New').company, self.company_a)
 

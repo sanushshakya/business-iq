@@ -175,7 +175,8 @@ class SaleTests(SalesTestCase):
         self.assertEqual(
             sale['items'],
             [{'id': sale['items'][0]['id'], 'product': product.pk, 'product_name': product.name,
-              'quantity': 3, 'unit_price': '2.50', 'line_total': '7.50'}],
+              'quantity': 3, 'unit_price': '2.50', 'line_total': '7.50',
+              'vat_code': 'zero', 'vat_rate': '0.00', 'net_amount': '7.50', 'vat_amount': '0.00'}],
         )
         product.refresh_from_db()
         self.assertEqual(product.stock_quantity, 7)

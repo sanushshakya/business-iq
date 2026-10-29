@@ -18,6 +18,10 @@ from django.utils import timezone
 from .models import Location, Product, StockBatch, StockMovement
 
 
+# What makes a location count online: web orders take from it and online stock counts it (one definition for both).
+ONLINE_LOCATION = {'online_sellable': True, 'is_active': True}
+
+
 class LedgerError(Exception):
     """A movement that would break the ledger's rules (e.g. a location from another company)."""
 
@@ -34,8 +38,8 @@ def sellable_locations(branch):
 
 
 def online_locations(company):
-    """Where online orders are taken from (and, from G10, what online stock counts)."""
-    return Location.objects.filter(company=company, online_sellable=True, is_active=True).order_by('pk')
+    """Where online orders are taken from; online stock (``sync.stock.online_available``) counts the same places."""
+    return Location.objects.filter(company=company, **ONLINE_LOCATION).order_by('pk')
 
 
 def primary_location(company, create=False):

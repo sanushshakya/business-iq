@@ -7,7 +7,7 @@ import factory
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
-from inventory.models import Product, StockBatch
+from inventory.models import Location, Product, StockBatch
 from sync.models import ShopifyConnection
 from tenants.models import Company
 
@@ -47,6 +47,20 @@ class ProductFactory(factory.django.DjangoModelFactory):
     stock_quantity = 50
 
 
+def default_stock_location(company):
+    """Where a test batch goes unless told: the first branch's shop floor, else a sellable MAIN (as the G09
+    migration places existing stock)."""
+    from inventory.ledger import primary_location
+
+    location = primary_location(company)
+    if location is None:
+        location, _ = Location.objects.get_or_create(
+            company=company, code='MAIN',
+            defaults={'name': 'Main stock', 'type': Location.WAREHOUSE, 'sellable': True, 'online_sellable': True},
+        )
+    return location
+
+
 class StockBatchFactory(factory.django.DjangoModelFactory):
     class Meta:
         model = StockBatch
@@ -55,6 +69,7 @@ class StockBatchFactory(factory.django.DjangoModelFactory):
     batch_number = factory.Sequence(lambda n: f'B{n:05d}')
     quantity = 10
     expiration_date = factory.LazyFunction(lambda: timezone.localdate() + timedelta(days=30))
+    location = factory.LazyAttribute(lambda o: default_stock_location(o.product.company))
 
 
 class ShopifyConnectionFactory(factory.django.DjangoModelFactory):

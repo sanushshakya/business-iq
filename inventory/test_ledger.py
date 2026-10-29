@@ -6,9 +6,16 @@ from django.db import transaction
 from django.test import TestCase
 from django.utils import timezone
 
-from common.tests.factories import ProductFactory, StockBatchFactory
-from inventory.ledger import take_fefo
+from common.tests.factories import ProductFactory, StockBatchFactory, default_stock_location
+from inventory.ledger import take_fefo as _take_fefo
+from inventory.ledger import virtual_location
 from inventory.models import StockMovement
+
+
+def take_fefo(product, quantity, **kwargs):
+    """FEFO over the product's default test location, selling to the customer (the pre-G09 behaviour)."""
+    return _take_fefo(product, quantity, locations=[default_stock_location(product.company)],
+                      destination=virtual_location(product.company, 'customer'), **kwargs)
 
 
 class TakeFefoTests(TestCase):

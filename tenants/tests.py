@@ -303,6 +303,37 @@ class SeedCommandTests(TestCase):
             {'IN-TRANSIT', 'SUPPLIER', 'CUSTOMER', 'WASTE', 'ADJUSTMENT'},
         )
 
+    def test_pre_g09_stock_rows_are_placed_like_the_migration(self):
+        """A snapshot exported before G09 has batches and movements without locations; seeding places them."""
+        from inventory.models import Location, StockBatch, StockMovement
+
+        snapshot = self.fixture([
+            {'model': 'tenants.company', 'pk': 8, 'fields': {
+                'name': 'Snap Two Ltd', 'registration_number': 'SNAP2', 'address': 'x',
+                'created_at': '2026-01-01T00:00:00Z'}},
+            {'model': 'tenants.branch', 'pk': 4, 'fields': {
+                'company': 8, 'name': 'Snap Street', 'address': 'x', 'is_active': True,
+                'created_at': '2026-01-01T00:00:00Z'}},
+            {'model': 'inventory.product', 'pk': 6, 'fields': {
+                'name': 'Fake Rice', 'description': '', 'price': '1.00', 'stock_quantity': 3, 'reorder_threshold': 5,
+                'commodity_code': '', 'category': None, 'company': 8, 'shopify_product_id': None,
+                'external_id': '', 'online_buffer': 0}},
+            {'model': 'inventory.stockbatch', 'pk': 11, 'fields': {
+                'product': 6, 'batch_number': 'B1', 'quantity': 3, 'receive_date': '2026-01-01T00:00:00Z',
+                'expiration_date': '2030-01-01'}},
+            {'model': 'inventory.stockmovement', 'pk': 21, 'fields': {
+                'batch': 11, 'quantity': 4, 'movement_type': 'inbound', 'date_time': '2026-01-01T00:00:00Z'}},
+            {'model': 'inventory.stockmovement', 'pk': 22, 'fields': {
+                'batch': 11, 'quantity': 1, 'movement_type': 'outbound', 'date_time': '2026-01-02T00:00:00Z'}},
+        ])
+        self.seed(snapshot)
+        shop = Location.objects.get(branch_id=4, type='shop_floor')
+        batch = StockBatch.objects.get(pk=11)
+        self.assertEqual((batch.location, batch.quantity), (shop, 3))
+        inbound, outbound = StockMovement.objects.get(pk=21), StockMovement.objects.get(pk=22)
+        self.assertEqual((inbound.source_location.type, inbound.destination_location), ('supplier', shop))
+        self.assertEqual((outbound.source_location, outbound.destination_location.type), (shop, 'customer'))
+
     def test_rerun_skips_the_snapshot_and_keeps_the_password(self):
         snapshot = self.snapshot()
         env = {'DJANGO_SUPERUSER_EMAIL': 'root@example.com', 'DJANGO_SUPERUSER_PASSWORD': 'pw-123456'}

@@ -1,6 +1,8 @@
 # inventory/serializers.py
 
 
+from collections.abc import Mapping
+
 from django.db import transaction
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
@@ -55,12 +57,22 @@ class StockBatchSerializer(TenantModelSerializer):
             'location': {'error_messages': {'required': 'Choose where this stock is received.'}},
         }
 
+    def get_fields(self):
+        fields = super().get_fields()
+        if self.instance is not None:
+            fields['location'].read_only = True  # moving stock between locations is a transfer, not an edit
+        return fields
+
     def validate_location(self, location):
         if location.is_virtual:
             raise serializers.ValidationError('Stock is received at a real location, not a virtual one.')
+        if not location.is_active:
+            raise serializers.ValidationError('This location is no longer in use.')
         return location
 
     def to_internal_value(self, data):
+        if not isinstance(data, Mapping):
+            raise serializers.ValidationError({'non_field_errors': ['Send a JSON object.']})
         # Fill the default before validation, so the (product, batch number, location) uniqueness check sees it.
         if self.instance is None and not data.get('location'):
             floors = list(Location.objects.filter(
@@ -72,9 +84,12 @@ class StockBatchSerializer(TenantModelSerializer):
         return super().to_internal_value(data)
 
     def validate(self, attrs):
-        if self.instance is not None:
-            attrs.pop('location', None)  # moving stock between locations is a transfer, not an edit
-        return super().validate(attrs)
+        attrs = super().validate(attrs)
+        product = attrs.get('product') or getattr(self.instance, 'product', None)
+        location = attrs.get('location') or getattr(self.instance, 'location', None)
+        if product is not None and location is not None and product.company_id != location.company_id:
+            raise serializers.ValidationError({'location': 'This location belongs to another company.'})
+        return attrs
 
 
 class StockMovementSerializer(TenantModelSerializer):
@@ -93,7 +108,8 @@ class StockMovementSerializer(TenantModelSerializer):
     def create(self, validated_data):
         """Inbound comes from SUPPLIER into the batch's location; outbound goes from it to ADJUSTMENT."""
         # Lock the batch so two concurrent outbound movements cannot both take the last units.
-        batch = StockBatch.objects.select_for_update().select_related('location').get(pk=validated_data['batch'].pk)
+        batch = (StockBatch.objects.select_for_update(of=('self',)).select_related('location')
+                 .get(pk=validated_data['batch'].pk))
         quantity, movement_type = validated_data['quantity'], validated_data['movement_type']
         if movement_type == 'outbound' and quantity > batch.quantity:
             raise serializers.ValidationError(

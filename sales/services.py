@@ -206,7 +206,8 @@ def void_sale(*, sale, user, reason=''):
     )
     customer = virtual_location(sale.session.till.branch.company_id, Location.CUSTOMER)
     for allocation in allocations:  # back into the batch (and so the location) each unit came from
-        batch = StockBatch.objects.select_for_update().select_related('location').get(pk=allocation.batch_id)
+        batch = (StockBatch.objects.select_for_update(of=('self',)).select_related('location')
+                 .get(pk=allocation.batch_id))
         move(batch, allocation.quantity, 'inbound', counterpart=customer)
     sale.status = Sale.VOIDED
     sale.voided_at = timezone.now()

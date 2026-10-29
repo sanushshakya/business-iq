@@ -58,6 +58,9 @@ def primary_location(company, create=False):
 def move(batch, quantity, movement_type, *, counterpart):
     """Append a ledger entry, apply it to the batch and the product, and return it (the batch row must be locked)."""
     location = batch.location
+    company_id = Product.objects.filter(pk=batch.product_id).values_list('company_id', flat=True).first()
+    if location.company_id != company_id:
+        raise LedgerError("A batch's location must belong to its product's company.")
     if counterpart.company_id != location.company_id:
         raise LedgerError('Stock can only move between locations of the same company.')
     if movement_type == 'inbound':
@@ -83,7 +86,7 @@ def take_fefo(product, quantity, *, locations, destination, today=None):
     """
     today = today or timezone.localdate()
     batches = (
-        StockBatch.objects.select_for_update()
+        StockBatch.objects.select_for_update(of=('self',))  # lock the batches, not the joined locations
         .select_related('location')
         .filter(product=product, location__in=locations, quantity__gt=0, expiration_date__gte=today)
         .order_by('expiration_date', 'receive_date', 'pk')

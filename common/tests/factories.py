@@ -47,6 +47,14 @@ class ProductFactory(factory.django.DjangoModelFactory):
     stock_quantity = 50
 
 
+def default_stock_location(company):
+    """Where a test batch goes unless told: the first branch's shop floor, else a sellable MAIN (as the G09
+    migration places existing stock)."""
+    from inventory.ledger import primary_location
+
+    return primary_location(company, create=True)
+
+
 class StockBatchFactory(factory.django.DjangoModelFactory):
     class Meta:
         model = StockBatch
@@ -55,6 +63,7 @@ class StockBatchFactory(factory.django.DjangoModelFactory):
     batch_number = factory.Sequence(lambda n: f'B{n:05d}')
     quantity = 10
     expiration_date = factory.LazyFunction(lambda: timezone.localdate() + timedelta(days=30))
+    location = factory.LazyAttribute(lambda o: default_stock_location(o.product.company))
 
 
 class ShopifyConnectionFactory(factory.django.DjangoModelFactory):
@@ -64,3 +73,17 @@ class ShopifyConnectionFactory(factory.django.DjangoModelFactory):
     company = factory.SubFactory(CompanyFactory)
     shop_domain = factory.Sequence(lambda n: f'shop{n}.myshopify.com')
     access_token = 'test-token'
+
+
+def history_movement(batch, quantity, movement_type='outbound'):
+    """A past ledger row for tests (demand history): to CUSTOMER, or from SUPPLIER; does not change stock."""
+    from inventory.ledger import virtual_location
+    from inventory.models import Location, StockMovement
+
+    company_id = batch.location.company_id
+    if movement_type == 'outbound':
+        source, destination = batch.location, virtual_location(company_id, Location.CUSTOMER)
+    else:
+        source, destination = virtual_location(company_id, Location.SUPPLIER), batch.location
+    return StockMovement.objects.create(batch=batch, quantity=quantity, movement_type=movement_type,
+                                        source_location=source, destination_location=destination)

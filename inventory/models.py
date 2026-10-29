@@ -117,11 +117,15 @@ class StockBatch(models.Model):
     quantity = models.IntegerField(default=0)
     receive_date = models.DateTimeField(auto_now_add=True)
     expiration_date = models.DateField()
+    # Where this lot is. A lot split across places is one row per place (same number and expiry).
+    location = models.ForeignKey('inventory.Location', on_delete=models.PROTECT, related_name='batches')
 
     class Meta:
         constraints = [
             # Per product (which belongs to one company), so companies never collide on batch numbers.
-            models.UniqueConstraint(fields=['product', 'batch_number'], name='unique_batch_number_per_product'),
+            models.UniqueConstraint(
+                fields=['product', 'batch_number', 'location'], name='unique_batch_number_per_product_location'
+            ),
         ]
 
     def __str__(self):
@@ -141,6 +145,12 @@ class StockMovement(models.Model):
     quantity = models.IntegerField(default=0)
     movement_type = models.CharField(max_length=10, choices=[('inbound', 'Inbound'), ('outbound', 'Outbound')])
     date_time = models.DateTimeField(auto_now_add=True)
+    # Inbound: the batch's location is the destination; outbound: it is the source. The other side is where the
+    # units came from or went to (a virtual location such as SUPPLIER or CUSTOMER, or another real one).
+    source_location = models.ForeignKey('inventory.Location', on_delete=models.PROTECT, related_name='movements_out')
+    destination_location = models.ForeignKey(
+        'inventory.Location', on_delete=models.PROTECT, related_name='movements_in'
+    )
 
     def __str__(self):
         return f"{self.batch.product.name} - {self.movement_type.capitalize()} - {self.quantity}"

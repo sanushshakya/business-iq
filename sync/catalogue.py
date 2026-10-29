@@ -12,6 +12,7 @@ from decimal import Decimal, InvalidOperation
 from django.db import transaction
 from django.utils import timezone
 
+from inventory.ledger import primary_location
 from inventory.models import Product, ProductCategory, StockBatch
 
 from .models import CatalogueImport, CatalogueImportItem, StorefrontExclusion
@@ -84,6 +85,12 @@ def import_catalogue(company, catalog, *, barcodes, expiry, dry_run=False, run_b
     linked = {p.external_id: p for p in Product.objects.filter(company=company).exclude(external_id='')}
     excluded = set(StorefrontExclusion.objects.filter(company=company).values_list('m18_product_id', flat=True))
     unlinked, categories, items = _Unlinked(company), _Categories(catalog.get('categories', {}), dry_run), []
+    home = []  # where opening stock goes, looked up once (the first branch's shop floor, or MAIN)
+
+    def opening_location():
+        if not home:
+            home.append(primary_location(company, create=True))
+        return home[0]
 
     for raw in catalog['products']:
         m18_id, name, price = str(raw['product_id']), product_name(raw), _price(raw)
@@ -131,7 +138,7 @@ def import_catalogue(company, catalog, *, barcodes, expiry, dry_run=False, run_b
                 item.iq_price = item.product.price
                 if quantity:
                     StockBatch.objects.create(product=item.product, batch_number=OPENING_BATCH, quantity=quantity,
-                                              expiration_date=expiry)
+                                              expiration_date=expiry, location=opening_location())
 
     Item.objects.bulk_create(items)
     for item in items:

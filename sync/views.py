@@ -12,8 +12,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.tenancy import HasCompany, IsCompanyStaffOrReadOnly, TenantScopedMixin
-from inventory.ledger import take_fefo
-from inventory.models import Product
+from inventory.ledger import online_locations, take_fefo, virtual_location
+from inventory.models import Location, Product
 
 from . import loyalty
 from .models import InboundEvent, ShopifyConnection, StorefrontConnection, SyncTask
@@ -75,13 +75,16 @@ def _apply_order_paid(company, data):
     }
     unmatched = bool(detail)
     partial = False
+    # Web orders take what the shop offers online: the online-sellable locations.
+    selling_from = list(online_locations(company))
+    customer = virtual_location(company, Location.CUSTOMER)
     for product_id, quantity in sorted(items, key=lambda i: products[i[0]].pk if i[0] in products else 0):
         product = products.get(product_id)
         if product is None:
             unmatched = True
             detail.append({'product_id': product_id, 'requested': quantity, 'taken': 0, 'reason': 'unknown_product'})
             continue
-        allocations, shortfall = take_fefo(product, quantity)
+        allocations, shortfall = take_fefo(product, quantity, locations=selling_from, destination=customer)
         if shortfall:
             partial = True
             detail.append({'product_id': product_id, 'requested': quantity,

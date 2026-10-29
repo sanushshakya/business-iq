@@ -17,8 +17,8 @@ from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import serializers
 
-from inventory.ledger import move, take_fefo
-from inventory.models import Product, StockBatch
+from inventory.ledger import move, sellable_locations, take_fefo, virtual_location
+from inventory.models import Location, Product, StockBatch
 from sync.outbox import active_connection, emit
 from vat.services import NoVatRate, rate_for, split_inclusive, uk_date
 
@@ -128,6 +128,9 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
     products = {p.pk: p for p in Product.objects.select_for_update().filter(pk__in=wanted).order_by('pk')}
 
     today = timezone.localdate()
+    # A till sells only what is on its branch's sellable locations (shop floor, butchery counter...).
+    selling_from = list(sellable_locations(session.till.branch))
+    customer = virtual_location(session.till.branch.company_id, Location.CUSTOMER)
     vat_day = uk_date()  # the VAT rate follows the UK calendar day
     plan, total, problems = [], Decimal('0.00'), []
     for pk in sorted(wanted):
@@ -135,8 +138,8 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
         product = products[pk]
         batches = list(
             StockBatch.objects.select_for_update()
-            .filter(product=product, quantity__gt=0, expiration_date__gte=today)
-            .order_by('expiration_date', 'pk')
+            .filter(product=product, location__in=selling_from, quantity__gt=0, expiration_date__gte=today)
+            .order_by('expiration_date', 'receive_date', 'pk')
         )
         available = sum(b.quantity for b in batches)
         if quantity > available:
@@ -172,7 +175,8 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
             unit_price=product.price, line_total=line_total,
             vat_code=product.vat_code, vat_rate=rate, net_amount=net, vat_amount=vat,
         )
-        allocations, shortfall = take_fefo(product, quantity, today=today)
+        allocations, shortfall = take_fefo(product, quantity, locations=selling_from, destination=customer,
+                                           today=today)
         if shortfall:  # cannot happen after the check above (rows are locked); never oversell
             raise serializers.ValidationError({'items': [f'{product.name}: stock changed, try again.']})
         for batch, taken in allocations:
@@ -200,9 +204,11 @@ def void_sale(*, sale, user, reason=''):
     allocations = list(
         SaleAllocation.objects.filter(item__sale=sale).select_related('batch').order_by('batch_id')
     )
-    for allocation in allocations:
-        batch = StockBatch.objects.select_for_update().get(pk=allocation.batch_id)
-        move(batch, allocation.quantity, 'inbound')
+    customer = virtual_location(sale.session.till.branch.company_id, Location.CUSTOMER)
+    for allocation in allocations:  # back into the batch (and so the location) each unit came from
+        batch = (StockBatch.objects.select_for_update(of=('self',)).select_related('location')
+                 .get(pk=allocation.batch_id))
+        move(batch, allocation.quantity, 'inbound', counterpart=customer)
     sale.status = Sale.VOIDED
     sale.voided_at = timezone.now()
     sale.voided_by = user

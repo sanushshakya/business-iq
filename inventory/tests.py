@@ -4,7 +4,7 @@ from django.test import TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
 
-from common.tests.factories import CompanyFactory, ProductFactory, StockBatchFactory, UserFactory
+from common.tests.factories import CompanyFactory, ProductFactory, StockBatchFactory, UserFactory, history_movement
 from inventory.models import Product, ProductCategory
 
 
@@ -45,9 +45,17 @@ class InventoryApiTests(TestCase):
         self.assertEqual(str(ProductFactory(name='Pear')), 'Pear')
 
 
+def with_shop_floor(user):
+    """G09: a receipt without a location goes to the company's only shop floor, so give the company one."""
+    from tenants.models import Branch
+
+    Branch.objects.create(company=user.company, name='Fake Branch', address='x')
+    return user
+
+
 class BatchNumberUniquenessTests(TestCase):
     def setUp(self):
-        self.user = UserFactory()
+        self.user = with_shop_floor(UserFactory())
         self.client = APIClient()
         self.client.force_authenticate(self.user)
         self.product = ProductFactory(company=self.user.company)
@@ -58,7 +66,7 @@ class BatchNumberUniquenessTests(TestCase):
     def test_other_companies_can_use_the_same_batch_number(self):
         self.assertEqual(self.client.post(reverse('stockbatch-list'), self.payload(self.product)).status_code, 201)
 
-        other = UserFactory()
+        other = with_shop_floor(UserFactory())
         other_client = APIClient()
         other_client.force_authenticate(other)
         theirs = ProductFactory(company=other.company)
@@ -85,13 +93,13 @@ class StockProjectionTests(TestCase):
         from django.utils import timezone
 
         from demand_calendar.models import Event
-        from inventory.models import ProductCategory, StockMovement
+        from inventory.models import ProductCategory
 
         self.timedelta, self.Event, self.today = timedelta, Event, timezone.localdate()
         self.user = UserFactory()
         self.category = ProductCategory.objects.create(name='Dried fruit')
         self.product = ProductFactory(company=self.user.company, category=self.category, stock_quantity=30, reorder_threshold=5)
-        StockMovement.objects.create(batch=StockBatchFactory(product=self.product), quantity=60, movement_type='outbound')
+        history_movement(StockBatchFactory(product=self.product), 60)
         self.client = APIClient()
         self.client.force_authenticate(self.user)
 

@@ -21,10 +21,14 @@ class ProductAdmin(TenantAdminMixin, admin.ModelAdmin):
 
 @admin.register(StockBatch)
 class StockBatchAdmin(TenantAdminMixin, admin.ModelAdmin):
-    list_display = ('batch_number', 'product', 'quantity', 'expiration_date')
+    list_display = ('batch_number', 'product', 'location', 'quantity', 'expiration_date')
     search_fields = ['batch_number', 'product__name']
-    list_filter = ['expiration_date']
-    list_select_related = ('product',)
+    list_filter = ['location', 'expiration_date']
+    list_select_related = ('product', 'location')
+
+    def get_readonly_fields(self, request, obj=None):
+        # Changing a batch's location would move stock without a movement; that is a transfer (G11).
+        return ('location',) if obj is not None else ()
 
 
 @admin.register(StockMovement)

@@ -1,4 +1,7 @@
+import atexit
+import json
 import os
+import tempfile
 from contextlib import contextmanager
 
 from django.contrib.auth import get_user_model
@@ -31,6 +34,60 @@ def model_signals_muted():
             signal.sender_receivers_cache.update(cache)
 
 
+def split_legacy_stock(fixture):
+    """
+    Batches and movements exported before G09 have no locations, which the schema now requires. Returns
+    ``(fixture to load, legacy rows)``: a temporary fixture without those rows (or the original if none), and the
+    rows themselves, which ``place_legacy_stock`` adds once the default locations exist.
+    """
+    if not fixture.endswith('.json'):
+        return fixture, []
+    with open(fixture) as handle:
+        rows = json.load(handle)
+    legacy = [
+        row for row in rows
+        if (row.get('model') == 'inventory.stockbatch' and 'location' not in row.get('fields', {}))
+        or (row.get('model') == 'inventory.stockmovement' and 'source_location' not in row.get('fields', {}))
+    ]
+    if not legacy:
+        return fixture, []
+    rest = [row for row in rows if row not in legacy]
+    handle = tempfile.NamedTemporaryFile('w', suffix='.json', delete=False)
+    with handle:
+        json.dump(rest, handle)
+    atexit.register(os.unlink, handle.name)
+    return handle.name, legacy
+
+
+def place_legacy_stock(rows):
+    """Place pre-G09 stock as migration 0013 did: batches at the first branch's shop floor (else MAIN), inbound
+    movements SUPPLIER -> there, outbound there -> CUSTOMER. Quantities are loaded as exported."""
+    from django.core import serializers
+
+    from inventory.ledger import primary_location, virtual_location
+    from inventory.models import Location, StockBatch
+
+    homes = {}
+    batches = [row for row in rows if row['model'] == 'inventory.stockbatch']
+    movements = [row for row in rows if row['model'] == 'inventory.stockmovement']
+    for item in serializers.deserialize('json', json.dumps(batches)):
+        company_id = item.object.product.company_id
+        if company_id not in homes:
+            homes[company_id] = primary_location(Company.objects.get(pk=company_id), create=True)
+        item.object.location = homes[company_id]
+        item.save()
+    for item in serializers.deserialize('json', json.dumps(movements)):
+        movement = item.object
+        home = StockBatch.objects.select_related('location').get(pk=movement.batch_id).location
+        if movement.movement_type == 'inbound':
+            movement.source_location = virtual_location(home.company_id, Location.SUPPLIER)
+            movement.destination_location = home
+        else:
+            movement.source_location = home
+            movement.destination_location = virtual_location(home.company_id, Location.CUSTOMER)
+        item.save()
+
+
 class Command(BaseCommand):
     """
     Seed a fresh database (used by the workspace docker compose on every start; safe to rerun).
@@ -60,11 +117,14 @@ class Command(BaseCommand):
 
             with transaction.atomic():
                 with model_signals_muted():
+                    fixture, legacy = split_legacy_stock(fixture)
                     call_command('loaddata', fixture, stdout=self.stdout)
                 # Default locations come from post_save receivers, which were muted for the load. Same
                 # transaction: if this fails, the snapshot is not left loaded without them.
                 for company in Company.objects.all():
                     ensure_default_locations(company)
+                with model_signals_muted():
+                    place_legacy_stock(legacy)
 
         email = os.environ.get('DJANGO_SUPERUSER_EMAIL')
         password = os.environ.get('DJANGO_SUPERUSER_PASSWORD')

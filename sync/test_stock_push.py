@@ -11,7 +11,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from common.tests.factories import CompanyFactory, ProductFactory, StockBatchFactory, UserFactory
-from inventory.ledger import move, take_fefo
+from inventory.ledger import move, online_locations, take_fefo, virtual_location
 from inventory.models import StockBatch
 from sync.models import OutboundEvent, StockSyncState, StorefrontConnection
 from sync.stock import online_available
@@ -45,7 +45,8 @@ class MarkingTests(StockPushTestCase):
 
         StockSyncState.objects.update(pending=False)
         with transaction.atomic():
-            move(StockBatch.objects.select_for_update().get(pk=batch.pk), 2, 'outbound')
+            move(StockBatch.objects.select_for_update().get(pk=batch.pk), 2, 'outbound',
+                 counterpart=virtual_location(product.company, 'customer'))
         self.assertEqual(self.pending(), {product.pk})
 
         StockSyncState.objects.update(pending=False)
@@ -58,7 +59,8 @@ class MarkingTests(StockPushTestCase):
         self.batch(product, 5)
         StockSyncState.objects.update(pending=False)
         with transaction.atomic():
-            take_fefo(product, 1)
+            take_fefo(product, 1, locations=online_locations(product.company),
+                      destination=virtual_location(product.company, 'customer'))
         self.assertEqual(self.pending(), {product.pk})
 
     def test_deleting_a_batch_marks_on_commit(self):

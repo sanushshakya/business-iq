@@ -45,6 +45,12 @@ class CatalogueImportTests(TestCase):
         second = self.run_import(products)
         self.assertEqual(Product.objects.filter(company=self.company).count(), 3)
         self.assertEqual(StockBatch.objects.filter(product__company=self.company).count(), 2)  # only those with stock
+        # G09: opening stock is placed at the company's primary location (first shop floor, or MAIN without one).
+        from inventory.ledger import primary_location
+
+        home = primary_location(self.company, create=True)
+        self.assertEqual(set(StockBatch.objects.filter(product__company=self.company)
+                             .values_list('location_id', flat=True)), {home.pk})
         self.assertEqual(set(self.outcomes(second).values()), {'updated'})
 
     def test_links_an_existing_product_by_barcode(self):

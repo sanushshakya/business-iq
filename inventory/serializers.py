@@ -2,12 +2,13 @@
 
 
 from django.db import transaction
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import F
 from rest_framework import serializers
 
 from common.tenancy import TenantModelSerializer
 
-from .models import Order, Product, ProductCategory, StockBatch, StockMovement, Supplier
+from .models import Location, Order, Product, ProductCategory, StockBatch, StockMovement, Supplier
 
 
 class ProductCategorySerializer(TenantModelSerializer):
@@ -91,3 +92,42 @@ class StockProjectionSerializer(serializers.Serializer):
     stockout_date = serializers.DateField(allow_null=True)
     reorder_date = serializers.DateField(allow_null=True)
     projection = StockProjectionPointSerializer(many=True)
+
+
+class LocationSerializer(TenantModelSerializer):
+    """
+    A stock location. Codes are stored in capitals and are unique within the company. Virtual locations (supplier,
+    customer, waste, adjustment, in transit) are created by the system and cannot be added, changed or removed.
+    """
+
+    code = serializers.CharField(max_length=20, help_text='Short code, unique within the company (e.g. WH-MAIN).')
+    is_virtual = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = Location
+        fields = ['id', 'code', 'name', 'type', 'branch', 'sellable', 'online_sellable', 'is_active', 'is_virtual',
+                  'created_at']
+        read_only_fields = ['id', 'is_virtual', 'created_at']
+
+    def validate_code(self, value):
+        return value.strip().upper()
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if self.instance is not None and self.instance.is_virtual:
+            raise serializers.ValidationError('Virtual locations are managed by the system and cannot be changed.')
+        if attrs.get('type') in Location.VIRTUAL_TYPES:
+            raise serializers.ValidationError({'type': 'Virtual locations are created by the system.'})
+        # Check the model's rules on the location as it would be saved (the stored one plus the changes).
+        if self.instance is not None:
+            location = Location(**{f.attname: getattr(self.instance, f.attname) for f in Location._meta.concrete_fields})
+        else:
+            location = Location(company=self.context['request'].user.company)
+        for name, value in attrs.items():
+            setattr(location, name, value)
+        try:
+            location.clean_fields(exclude=['company', 'branch'])
+            location.clean()
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(error.message_dict)
+        return attrs

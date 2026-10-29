@@ -3,13 +3,16 @@
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from common.tenancy import SharedReferenceMixin, TenantScopedMixin
+from tenants.views import IsCompanyStaff
 
-from .models import ProductCategory, Product, Order, Supplier, StockBatch, StockMovement
+from .models import Location, ProductCategory, Product, Order, Supplier, StockBatch, StockMovement
 from .projections import project_stock
 from .serializers import (
+    LocationSerializer,
     OrderSerializer,
     ProductCategorySerializer,
     ProductSerializer,
@@ -68,3 +71,35 @@ class StockMovementViewSet(
 
     queryset = StockMovement.objects.all()
     serializer_class = StockMovementSerializer
+
+
+@extend_schema(parameters=[
+    OpenApiParameter('type', str, description='Only this type, e.g. warehouse.'),
+    OpenApiParameter('branch', int, description='Only locations in this branch.'),
+    OpenApiParameter('sellable', bool, description='true: only sellable locations; false: only the others.'),
+])
+class LocationViewSet(TenantScopedMixin, viewsets.ModelViewSet):
+    """
+    Stock locations (company staff only): shop floors, butchery, warehouses, back stores, vans, plus the virtual
+    supplier/customer/waste/adjustment/in-transit locations every company has. Retire one with ``is_active``.
+    """
+
+    queryset = Location.objects.select_related('branch')
+    serializer_class = LocationSerializer
+    permission_classes = [IsCompanyStaff]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        if params.get('type'):
+            queryset = queryset.filter(type=params['type'])
+        if params.get('branch', '').isdigit():
+            queryset = queryset.filter(branch_id=params['branch'])
+        if params.get('sellable') in ('true', 'false'):
+            queryset = queryset.filter(sellable=params['sellable'] == 'true')
+        return queryset
+
+    def perform_destroy(self, instance):
+        if instance.is_virtual:
+            raise ValidationError({'detail': 'Virtual locations are managed by the system and cannot be removed.'})
+        instance.delete()

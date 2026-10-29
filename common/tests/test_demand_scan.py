@@ -15,7 +15,7 @@ from demand.models import CulturalEvent, EventProductKeyword
 from demand_calendar.models import Event
 from inventory.models import ProductCategory, StockMovement
 
-from .factories import CompanyFactory, ProductFactory, StockBatchFactory
+from .factories import CompanyFactory, ProductFactory, StockBatchFactory, history_movement
 
 
 class DemandScanTests(TestCase):
@@ -30,7 +30,7 @@ class DemandScanTests(TestCase):
                                  stock_quantity=stock, reorder_threshold=5, **kwargs)
         if sold_last_30_days:
             batch = StockBatchFactory(product=product)
-            StockMovement.objects.create(batch=batch, quantity=sold_last_30_days, movement_type='outbound')
+            history_movement(batch, sold_last_30_days)
         return product
 
     def event(self, starts_in=10, length=4, multiplier='2.00', categories=None):
@@ -113,7 +113,7 @@ class DemandScanTests(TestCase):
     def test_old_sales_do_not_count(self):
         product = self.product(stock=10, sold_last_30_days=0)
         batch = StockBatchFactory(product=product)
-        movement = StockMovement.objects.create(batch=batch, quantity=600, movement_type='outbound')
+        movement = history_movement(batch, 600)
         StockMovement.objects.filter(pk=movement.pk).update(date_time=timezone.now() - timedelta(days=90))
         self.event()
         scan_demand_alerts()

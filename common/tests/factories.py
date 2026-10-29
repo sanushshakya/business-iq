@@ -7,7 +7,7 @@ import factory
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
-from inventory.models import Location, Product, StockBatch
+from inventory.models import Product, StockBatch
 from sync.models import ShopifyConnection
 from tenants.models import Company
 
@@ -52,13 +52,7 @@ def default_stock_location(company):
     migration places existing stock)."""
     from inventory.ledger import primary_location
 
-    location = primary_location(company)
-    if location is None:
-        location, _ = Location.objects.get_or_create(
-            company=company, code='MAIN',
-            defaults={'name': 'Main stock', 'type': Location.WAREHOUSE, 'sellable': True, 'online_sellable': True},
-        )
-    return location
+    return primary_location(company, create=True)
 
 
 class StockBatchFactory(factory.django.DjangoModelFactory):
@@ -79,3 +73,17 @@ class ShopifyConnectionFactory(factory.django.DjangoModelFactory):
     company = factory.SubFactory(CompanyFactory)
     shop_domain = factory.Sequence(lambda n: f'shop{n}.myshopify.com')
     access_token = 'test-token'
+
+
+def history_movement(batch, quantity, movement_type='outbound'):
+    """A past ledger row for tests (demand history): to CUSTOMER, or from SUPPLIER; does not change stock."""
+    from inventory.ledger import virtual_location
+    from inventory.models import Location, StockMovement
+
+    company_id = batch.location.company_id
+    if movement_type == 'outbound':
+        source, destination = batch.location, virtual_location(company_id, Location.CUSTOMER)
+    else:
+        source, destination = virtual_location(company_id, Location.SUPPLIER), batch.location
+    return StockMovement.objects.create(batch=batch, quantity=quantity, movement_type=movement_type,
+                                        source_location=source, destination_location=destination)

@@ -13,8 +13,7 @@ from rest_framework.views import APIView
 
 from common.tenancy import HasCompany, IsCompanyStaffOrReadOnly, TenantScopedMixin
 from inventory.ledger import online_locations, take_fefo, virtual_location
-from inventory.models import Location
-from inventory.models import Product
+from inventory.models import Location, Product
 
 from . import loyalty
 from .models import InboundEvent, ShopifyConnection, StorefrontConnection, SyncTask

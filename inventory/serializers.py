@@ -3,11 +3,11 @@
 
 from django.db import transaction
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db.models import F
 from rest_framework import serializers
 
 from common.tenancy import TenantModelSerializer
 
+from .ledger import move, virtual_location
 from .models import Location, Order, Product, ProductCategory, StockBatch, StockMovement, Supplier
 
 
@@ -41,10 +41,40 @@ class SupplierSerializer(TenantModelSerializer):
 
 
 class StockBatchSerializer(TenantModelSerializer):
+    """
+    A lot of a product at one location. ``location`` is set when the stock is received: leave it out and the
+    company's only shop floor is used (with several, say which). It cannot be changed afterwards (moving stock is a
+    transfer).
+    """
+
     class Meta:
         model = StockBatch
         fields = '__all__'
-        extra_kwargs = {'quantity': {'min_value': 0}}
+        extra_kwargs = {
+            'quantity': {'min_value': 0},
+            'location': {'error_messages': {'required': 'Choose where this stock is received.'}},
+        }
+
+    def validate_location(self, location):
+        if location.is_virtual:
+            raise serializers.ValidationError('Stock is received at a real location, not a virtual one.')
+        return location
+
+    def to_internal_value(self, data):
+        # Fill the default before validation, so the (product, batch number, location) uniqueness check sees it.
+        if self.instance is None and not data.get('location'):
+            floors = list(Location.objects.filter(
+                company=self.context['request'].user.company, type=Location.SHOP_FLOOR, is_active=True
+            ).values_list('pk', flat=True)[:2])
+            if len(floors) == 1:
+                data = data.copy()  # works for a dict and for a (form) QueryDict
+                data['location'] = floors[0]
+        return super().to_internal_value(data)
+
+    def validate(self, attrs):
+        if self.instance is not None:
+            attrs.pop('location', None)  # moving stock between locations is a transfer, not an edit
+        return super().validate(attrs)
 
 
 class StockMovementSerializer(TenantModelSerializer):
@@ -56,21 +86,22 @@ class StockMovementSerializer(TenantModelSerializer):
     class Meta:
         model = StockMovement
         fields = '__all__'
+        read_only_fields = ['source_location', 'destination_location']
         extra_kwargs = {'quantity': {'min_value': 1}}
 
     @transaction.atomic
     def create(self, validated_data):
+        """Inbound comes from SUPPLIER into the batch's location; outbound goes from it to ADJUSTMENT."""
         # Lock the batch so two concurrent outbound movements cannot both take the last units.
-        batch = StockBatch.objects.select_for_update().get(pk=validated_data['batch'].pk)
-        delta = validated_data['quantity']
-        if validated_data['movement_type'] == 'outbound':
-            if delta > batch.quantity:
-                raise serializers.ValidationError(
-                    {'quantity': f"Only {batch.quantity} unit(s) left in batch {batch.batch_number}."})
-            delta = -delta
-        StockBatch.objects.filter(pk=batch.pk).update(quantity=F('quantity') + delta)
-        Product.objects.filter(pk=batch.product_id).update(stock_quantity=F('stock_quantity') + delta)
-        return super().create(validated_data)
+        batch = StockBatch.objects.select_for_update().select_related('location').get(pk=validated_data['batch'].pk)
+        quantity, movement_type = validated_data['quantity'], validated_data['movement_type']
+        if movement_type == 'outbound' and quantity > batch.quantity:
+            raise serializers.ValidationError(
+                {'quantity': f"Only {batch.quantity} unit(s) left in batch {batch.batch_number}."})
+        counterpart = virtual_location(
+            batch.location.company_id, Location.SUPPLIER if movement_type == 'inbound' else Location.ADJUSTMENT
+        )
+        return move(batch, quantity, movement_type, counterpart=counterpart)
 
 
 class StockProjectionPointSerializer(serializers.Serializer):

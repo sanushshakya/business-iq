@@ -12,6 +12,7 @@ from decimal import Decimal, InvalidOperation
 from django.db import transaction
 from django.utils import timezone
 
+from inventory.ledger import primary_location
 from inventory.models import Product, ProductCategory, StockBatch
 
 from .models import CatalogueImport, CatalogueImportItem, StorefrontExclusion
@@ -131,7 +132,8 @@ def import_catalogue(company, catalog, *, barcodes, expiry, dry_run=False, run_b
                 item.iq_price = item.product.price
                 if quantity:
                     StockBatch.objects.create(product=item.product, batch_number=OPENING_BATCH, quantity=quantity,
-                                              expiration_date=expiry)
+                                              expiration_date=expiry,
+                                              location=primary_location(company, create=True))
 
     Item.objects.bulk_create(items)
     for item in items:

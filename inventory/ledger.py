@@ -38,16 +38,25 @@ def online_locations(company):
     return Location.objects.filter(company=company, online_sellable=True, is_active=True).order_by('pk')
 
 
-def primary_location(company):
-    """The oldest branch's active shop floor (where opening and legacy stock is placed), or None."""
-    return (
+def primary_location(company, create=False):
+    """
+    Where opening and legacy stock is placed: the oldest branch's active shop floor. A company without one gets
+    None, or with ``create`` a sellable ``MAIN`` location (as the G09 migration did).
+    """
+    location = (
         Location.objects.filter(company=company, type=Location.SHOP_FLOOR, branch__isnull=False, is_active=True)
         .order_by('branch_id', 'pk').first()
     )
+    if location is None and create:
+        location, _ = Location.objects.get_or_create(
+            company=company, code='MAIN',
+            defaults={'name': 'Main stock', 'type': Location.WAREHOUSE, 'sellable': True, 'online_sellable': True},
+        )
+    return location
 
 
 def move(batch, quantity, movement_type, *, counterpart):
-    """Append a ledger entry and apply it to the batch and the product (the batch row must be locked)."""
+    """Append a ledger entry, apply it to the batch and the product, and return it (the batch row must be locked)."""
     location = batch.location
     if counterpart.company_id != location.company_id:
         raise LedgerError('Stock can only move between locations of the same company.')
@@ -57,7 +66,7 @@ def move(batch, quantity, movement_type, *, counterpart):
         delta, source, destination = -quantity, location, counterpart
     StockBatch.objects.filter(pk=batch.pk).update(quantity=F('quantity') + delta)
     Product.objects.filter(pk=batch.product_id).update(stock_quantity=F('stock_quantity') + delta)
-    StockMovement.objects.create(
+    return StockMovement.objects.create(
         batch=batch, quantity=quantity, movement_type=movement_type,
         source_location=source, destination_location=destination,
     )

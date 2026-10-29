@@ -36,7 +36,17 @@ class StatusForTests(TestCase):
         self.assertEqual((status_for(self.company.pk)['state'], status_for(self.company.pk)['backlog']), ('amber', 1))
         event(self.connection, attempts=2, last_error='HTTP 502: bad gateway')
         status = status_for(self.company.pk)
-        self.assertEqual((status['state'], status['backlog'], status['last_error']), ('red', 2, 'HTTP 502: bad gateway'))
+        self.assertEqual((status['state'], status['backlog'], status['last_error']), ('red', 2, 'HTTP 502'))
+
+    def test_only_the_status_line_of_an_error_is_shown(self):
+        event(self.connection, attempts=1, last_error='HTTP 502: <html>upstream host-7 trace barcode 123</html>')
+        self.assertEqual(status_for(self.company.pk)['last_error'], 'HTTP 502')
+        event(self.connection, attempts=1, last_error='ConnectionError')
+        self.assertEqual(status_for(self.company.pk)['last_error'], 'ConnectionError')
+
+    def test_each_status_says_when_it_was_read(self):
+        first, second = status_for(self.company.pk)['as_of'], status_for(self.company.pk)['as_of']
+        self.assertLessEqual(first, second)
 
     def test_failed_events_are_red(self):
         event(self.connection, status='failed', attempts=20, last_error='ConnectionError')
@@ -66,6 +76,20 @@ class StatusChannelTests(TransactionTestCase):
         connected, subprotocol = await communicator.connect()
         return communicator, connected, subprotocol
 
+    async def assert_refused(self, communicator, connected):
+        """Refused sockets are accepted and closed at once with 4401, so the browser can tell "sign in again"."""
+        self.assertTrue(connected)
+        self.assertEqual(await communicator.receive_output(), {'type': 'websocket.close', 'code': 4401})
+
+    def token(self, **changes):
+        import jwt
+        from django.conf import settings
+
+        from authentication.jwt_handler import decode_token
+
+        payload = {**decode_token(encode_token(self.user)), **changes}
+        return jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
+
     def test_route_is_registered(self):
         self.assertEqual(str(websocket_urlpatterns[0].pattern), 'ws/sync/')
 
@@ -81,8 +105,7 @@ class StatusChannelTests(TransactionTestCase):
         for protocols in ([], ['bearer'], ['bearer', 'not-a-token'], ['other', 'x']):
             with self.subTest(protocols):
                 communicator, connected, _ = await self.connect(protocols=protocols)
-                self.assertFalse(connected)
-                await communicator.disconnect()
+                await self.assert_refused(communicator, connected)
 
     async def test_refuses_operators_inactive_users_and_users_without_a_company(self):
         from asgiref.sync import sync_to_async
@@ -93,8 +116,41 @@ class StatusChannelTests(TransactionTestCase):
         for user in (operator, inactive, homeless):
             with self.subTest(user.pk):
                 communicator, connected, _ = await self.connect(user=user)
-                self.assertFalse(connected)
-                await communicator.disconnect()
+                await self.assert_refused(communicator, connected)
+
+    async def test_refuses_expired_tokens_and_tokens_from_before_a_password_change(self):
+        import time
+
+        for token in (self.token(exp=int(time.time()) - 1), self.token(pw='stale')):
+            communicator, connected, _ = await self.connect(protocols=['bearer', token])
+            await self.assert_refused(communicator, connected)
+
+    async def test_an_open_socket_closes_once_the_user_loses_access(self):
+        """Checked again before every message: a leaver or a user moved to another company hears nothing more."""
+        from asgiref.sync import sync_to_async
+
+        from tenants.models import CustomUser
+
+        other_company = await sync_to_async(CompanyFactory)()
+        for change in ({'is_active': False}, {'company': other_company}):
+            with self.subTest(change):
+                user = await sync_to_async(UserFactory)(company=self.company)
+                communicator, connected, _ = await self.connect(user=user)
+                await communicator.receive_json_from()
+                await sync_to_async(CustomUser.objects.filter(pk=user.pk).update)(**change)
+                await sync_to_async(broadcast)(self.company.pk)
+                self.assertEqual(await communicator.receive_output(), {'type': 'websocket.close', 'code': 4401})
+
+    async def test_an_open_socket_closes_when_its_token_expires(self):
+        import time
+
+        communicator, connected, _ = await self.connect(protocols=['bearer', self.token(exp=int(time.time()) + 2)])
+        await communicator.receive_json_from()
+        await __import__('asyncio').sleep(2.1)
+        from asgiref.sync import sync_to_async
+
+        await sync_to_async(broadcast)(self.company.pk)
+        self.assertEqual(await communicator.receive_output(), {'type': 'websocket.close', 'code': 4401})
 
     async def test_one_company_never_receives_anothers_messages(self):
         from asgiref.sync import sync_to_async
@@ -102,8 +158,9 @@ class StatusChannelTests(TransactionTestCase):
         other_company = await sync_to_async(CompanyFactory)()
         await sync_to_async(StorefrontConnection.objects.create)(company=other_company, base_url=BASE, webhook_secret='s')
         outsider = await sync_to_async(UserFactory)(company=other_company)
-        mine, _, _ = await self.connect()
-        theirs, _, _ = await self.connect(user=outsider)
+        mine, mine_connected, _ = await self.connect()
+        theirs, theirs_connected, _ = await self.connect(user=outsider)
+        self.assertTrue(mine_connected and theirs_connected)
         await mine.receive_json_from()
         await theirs.receive_json_from()
 
@@ -139,6 +196,29 @@ class BroadcastHookTests(TestCase):
         with self.assertLogs('sync.tasks', 'WARNING'), self.captureOnCommitCallbacks(execute=True):
             deliver_outbound_event(event(self.connection).pk)
         self.broadcast.assert_called_with(self.company.pk)
+
+    @mock.patch('sync.tasks.requests.post', side_effect=__import__('requests').ConnectionError())
+    def test_a_network_error_broadcasts_and_an_unattempted_event_does_not(self, post):
+        from sync.tasks import deliver_outbound_event
+
+        pending = event(self.connection)
+        with self.assertLogs('sync.tasks', 'WARNING'):
+            deliver_outbound_event(pending.pk)
+        self.broadcast.assert_called_once_with(self.company.pk)
+        self.broadcast.reset_mock()
+        deliver_outbound_event(pending.pk)  # backing off: not due, not attempted
+        self.broadcast.assert_not_called()
+
+    @mock.patch('sync.tasks.requests.post')
+    def test_the_retry_sweep_broadcasts_once_per_company(self, post):
+        from sync.tasks import deliver_outbound_events
+
+        post.return_value = mock.Mock(status_code=502, text='down')
+        for _ in range(3):
+            event(self.connection)
+        with self.assertLogs('sync.tasks', 'WARNING'):
+            deliver_outbound_events()
+        self.broadcast.assert_called_once_with(self.company.pk)
 
     def test_a_push_that_sent_something_broadcasts(self):
         from sync.tasks import push_storefront_stock

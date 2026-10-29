@@ -130,7 +130,15 @@ def deliver_outbound_events(batch_size=50):
         .order_by('next_attempt_at')
         .values_list('pk', flat=True)[:batch_size]
     )
-    return sum(1 for pk in due if deliver_outbound_event(pk))
+    delivered, companies = 0, set()
+    for pk in due:  # not deliver_outbound_event: one status broadcast per company, not one per event
+        sent, company_id = _deliver(pk)
+        delivered += sent
+        if company_id is not None:
+            companies.add(company_id)
+    for company_id in companies:
+        broadcast(company_id)
+    return delivered
 
 
 def _price(value):

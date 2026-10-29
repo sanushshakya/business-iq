@@ -10,6 +10,7 @@ import logging
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+from django.utils import timezone
 
 from .models import OutboundEvent, StorefrontConnection
 
@@ -22,14 +23,17 @@ def group_name(company_id):
 
 def status_for(company_id):
     """
-    ``{type, state, last_push_at, backlog, failed, last_error}`` for the company's storefront connection.
+    ``{type, state, as_of, last_push_at, backlog, failed, last_error}`` for the company's storefront connection.
 
     ``state``: ``off`` without an active connection; ``red`` when an event failed or is being retried after an
-    error; ``amber`` while events wait to be sent; otherwise ``green``.
+    error; ``amber`` while events wait to be sent; otherwise ``green``. ``as_of`` (when this was read) lets the
+    web app drop a status that arrives after a newer one. ``last_error`` is only the status line (``HTTP 502``
+    or the exception name): the response body stays in the admin, as it can echo anything.
     """
     connection = (StorefrontConnection.objects.filter(company_id=company_id, is_active=True)
                   .exclude(base_url='').first())
-    status = {'type': 'sync.status', 'state': 'off', 'last_push_at': None, 'backlog': 0, 'failed': 0, 'last_error': ''}
+    status = {'type': 'sync.status', 'state': 'off', 'as_of': timezone.now().isoformat(), 'last_push_at': None,
+              'backlog': 0, 'failed': 0, 'last_error': ''}
     if connection is None:
         return status
     events = OutboundEvent.objects.filter(connection=connection)
@@ -39,7 +43,7 @@ def status_for(company_id):
         last_push_at=last_push.created_at.isoformat() if last_push else None,
         backlog=events.filter(status='pending').count(),
         failed=events.filter(status='failed').count(),
-        last_error=erroring.last_error[:200] if erroring else '',
+        last_error=erroring.last_error.split(':', 1)[0][:60] if erroring else '',
     )
     status['state'] = 'red' if status['failed'] or erroring else 'amber' if status['backlog'] else 'green'
     return status

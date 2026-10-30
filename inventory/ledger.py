@@ -9,7 +9,8 @@ the other side is the ``counterpart`` — a virtual location (SUPPLIER, CUSTOMER
 for transfers, another real one. So stock at a location is what came in minus what went out.
 
 ``move`` appends a movement and applies it; ``take_fefo`` takes units from batches at the given locations,
-earliest expiry first.
+earliest expiry first. ``transfer_batch`` and ``transfer_fefo`` move units between two locations into the same lot
+(transfers: source → IN-TRANSIT → destination).
 """
 
 from django.db.models import F
@@ -24,6 +25,10 @@ ONLINE_LOCATION = {'online_sellable': True, 'is_active': True}
 
 class LedgerError(Exception):
     """A movement that would break the ledger's rules (e.g. a location from another company)."""
+
+    def __init__(self, message, *, available=None):
+        super().__init__(message)
+        self.available = available  # for a shortfall: how many units there were
 
 
 def virtual_location(company, type_):
@@ -59,7 +64,7 @@ def primary_location(company, create=False):
     return location
 
 
-def move(batch, quantity, movement_type, *, counterpart):
+def move(batch, quantity, movement_type, *, counterpart, transfer=None):
     """Append a ledger entry, apply it to the batch and the product, and return it (the batch row must be locked)."""
     location = batch.location
     company_id = Product.objects.filter(pk=batch.product_id).values_list('company_id', flat=True).first()
@@ -75,7 +80,7 @@ def move(batch, quantity, movement_type, *, counterpart):
     Product.objects.filter(pk=batch.product_id).update(stock_quantity=F('stock_quantity') + delta)
     return StockMovement.objects.create(
         batch=batch, quantity=quantity, movement_type=movement_type,
-        source_location=source, destination_location=destination,
+        source_location=source, destination_location=destination, transfer=transfer,
     )
 
 
@@ -88,15 +93,8 @@ def take_fefo(product, quantity, *, locations, destination, today=None):
     batch used, to ``destination``, and returns ``(allocations, shortfall)``: ``allocations`` is a list of
     ``(batch, taken)`` and ``shortfall`` is how many units could not be covered.
     """
-    today = today or timezone.localdate()
-    batches = (
-        StockBatch.objects.select_for_update(of=('self',))  # lock the batches, not the joined locations
-        .select_related('location')
-        .filter(product=product, location__in=locations, quantity__gt=0, expiration_date__gte=today)
-        .order_by('expiration_date', 'receive_date', 'pk')
-    )
     allocations, remaining = [], quantity
-    for batch in batches:
+    for batch in _fefo_batches(product, locations, today):
         if remaining <= 0:
             break
         take = min(batch.quantity, remaining)
@@ -104,3 +102,55 @@ def take_fefo(product, quantity, *, locations, destination, today=None):
         allocations.append((batch, take))
         remaining -= take
     return allocations, max(remaining, 0)
+
+
+def _fefo_batches(product, locations, today=None):
+    """The product's in-date batches with stock at ``locations``, in FEFO order, locked (inside a transaction)."""
+    today = today or timezone.localdate()
+    return (
+        StockBatch.objects.select_for_update(of=('self',))  # lock the batches, not the joined locations
+        .select_related('location')
+        .filter(product=product, location__in=locations, quantity__gt=0, expiration_date__gte=today)
+        .order_by('expiration_date', 'receive_date', 'pk')
+    )
+
+
+def transfer_batch(batch, quantity, to, *, transfer=None):
+    """
+    Move ``quantity`` units of a (locked) batch to location ``to``, into the same lot there (same batch number and
+    expiry; created empty if missing): an outbound movement from the batch and an inbound one into the lot at ``to``.
+    A lot with that number but another expiry at ``to`` is a ``LedgerError`` (never merge two expiries). Returns the batch at ``to``. Must run inside ``transaction.atomic()``.
+    """
+    held, _ = StockBatch.objects.get_or_create(
+        product_id=batch.product_id, batch_number=batch.batch_number, location=to,
+        defaults={'quantity': 0, 'expiration_date': batch.expiration_date},
+    )
+    held = StockBatch.objects.select_for_update(of=('self',)).select_related('location').get(pk=held.pk)
+    if held.expiration_date != batch.expiration_date:
+        raise LedgerError(
+            f'Batch {batch.batch_number} at {to.code} has another expiry ({held.expiration_date:%d %b %Y}, not '
+            f'{batch.expiration_date:%d %b %Y}); correct the lot number first.'
+        )
+    move(batch, quantity, 'outbound', counterpart=to, transfer=transfer)
+    move(held, quantity, 'inbound', counterpart=batch.location, transfer=transfer)
+    return held
+
+
+def transfer_fefo(product, quantity, *, source, to, transfer=None, today=None):
+    """
+    Move ``quantity`` units of ``product`` from its in-date batches at ``source`` to ``to`` (earliest expiry first,
+    each into the same lot at ``to``). Returns ``[(source batch, batch at to, taken), ...]``. If ``source`` has fewer
+    in-date units, raises ``LedgerError`` (with ``available``) before moving anything. Inside ``transaction.atomic()``.
+    """
+    batches = list(_fefo_batches(product, [source], today))
+    available = sum(batch.quantity for batch in batches)
+    if available < quantity:
+        raise LedgerError(f'Only {available} unit(s) of {product} available at {source.code}.', available=available)
+    allocations, remaining = [], quantity
+    for batch in batches:
+        if remaining <= 0:
+            break
+        take = min(batch.quantity, remaining)
+        allocations.append((batch, transfer_batch(batch, take, to, transfer=transfer), take))
+        remaining -= take
+    return allocations

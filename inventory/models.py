@@ -5,6 +5,7 @@ This module contains Django models for the inventory app. These models are respo
 for representing and managing inventory-related data within the application.
 """
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models
@@ -151,6 +152,10 @@ class StockMovement(models.Model):
     destination_location = models.ForeignKey(
         'inventory.Location', on_delete=models.PROTECT, related_name='movements_in'
     )
+    # Set on every movement a transfer writes (dispatch, receipt, shortfall).
+    transfer = models.ForeignKey(
+        'inventory.Transfer', null=True, blank=True, on_delete=models.PROTECT, related_name='movements'
+    )
 
     def __str__(self):
         return f"{self.batch.product.name} - {self.movement_type.capitalize()} - {self.quantity}"
@@ -235,3 +240,83 @@ class Location(models.Model):
             errors['branch'] = 'The branch belongs to another company.'
         if errors:
             raise ValidationError(errors)
+
+
+class Transfer(models.Model):
+    """
+    Stock moving between two of the company's own locations. A draft moves nothing; dispatching takes the lines'
+    units (earliest expiry first) to the company's IN-TRANSIT location; receiving books what arrived at the
+    destination and sends any shortfall to ADJUSTMENT with a reason. Only a draft can be cancelled.
+    """
+
+    DRAFT, DISPATCHED, RECEIVED, CANCELLED = 'draft', 'dispatched', 'received', 'cancelled'
+    STATUSES = [(DRAFT, 'Draft'), (DISPATCHED, 'Dispatched'), (RECEIVED, 'Received'), (CANCELLED, 'Cancelled')]
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='transfers')
+    number = models.PositiveIntegerField()  # per company: 1, 2, 3...
+    source_location = models.ForeignKey(Location, on_delete=models.PROTECT, related_name='transfers_out')
+    destination_location = models.ForeignKey(Location, on_delete=models.PROTECT, related_name='transfers_in')
+    status = models.CharField(max_length=10, choices=STATUSES, default=DRAFT)
+    note = models.CharField(max_length=255, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name='+'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    dispatched_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name='+'
+    )
+    dispatched_at = models.DateTimeField(null=True, blank=True)
+    received_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name='+'
+    )
+    received_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name='+'
+    )
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-number', '-id']
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'number'], name='transfer_number_unique_per_company'),
+        ]
+
+    def __str__(self):
+        return self.reference
+
+    @property
+    def reference(self):
+        return f'T-{self.number:06d}' if self.number else 'T-new'
+
+
+class TransferLine(models.Model):
+    """A product and how many units to send; after receipt, how many arrived and why any differ."""
+
+    transfer = models.ForeignKey(Transfer, on_delete=models.CASCADE, related_name='lines')
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='+')
+    quantity = models.PositiveIntegerField()
+    received_quantity = models.PositiveIntegerField(null=True, blank=True)
+    difference_reason = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ['pk']
+        constraints = [
+            models.UniqueConstraint(fields=['transfer', 'product'], name='one_transfer_line_per_product'),
+        ]
+
+    def __str__(self):
+        return f'{self.transfer} · {self.product} × {self.quantity}'
+
+
+class TransferPick(models.Model):
+    """
+    Units dispatch put in an IN-TRANSIT batch for a line. Two transfers of the same lot share that batch row, so
+    receiving uses the picks, not the row's whole quantity.
+    """
+
+    line = models.ForeignKey(TransferLine, on_delete=models.CASCADE, related_name='picks')
+    transit_batch = models.ForeignKey(StockBatch, on_delete=models.PROTECT, related_name='+')
+    quantity = models.PositiveIntegerField()
+
+    class Meta:
+        ordering = ['pk']

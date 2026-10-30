@@ -9,8 +9,11 @@ from rest_framework import serializers
 
 from common.tenancy import TenantModelSerializer
 
+from . import transfers
 from .ledger import move, virtual_location
-from .models import Location, Order, Product, ProductCategory, StockBatch, StockMovement, Supplier
+from .models import (
+    Location, Order, Product, ProductCategory, StockBatch, StockMovement, Supplier, Transfer, TransferLine,
+)
 
 
 class ProductCategorySerializer(TenantModelSerializer):
@@ -89,6 +92,8 @@ class StockBatchSerializer(TenantModelSerializer):
         location = attrs.get('location') or getattr(self.instance, 'location', None)
         if product is not None and location is not None and product.company_id != location.company_id:
             raise serializers.ValidationError({'location': 'This location belongs to another company.'})
+        if self.instance is not None and self.instance.location.is_virtual:
+            raise serializers.ValidationError('Stock at a virtual location (e.g. in transit) is moved only by its transfer.')
         return attrs
 
 
@@ -103,6 +108,11 @@ class StockMovementSerializer(TenantModelSerializer):
         fields = '__all__'
         read_only_fields = ['source_location', 'destination_location']
         extra_kwargs = {'quantity': {'min_value': 1}}
+
+    def validate_batch(self, batch):
+        if batch.location.is_virtual:
+            raise serializers.ValidationError('Stock at a virtual location (e.g. in transit) is moved only by its transfer.')
+        return batch
 
     @transaction.atomic
     def create(self, validated_data):
@@ -178,3 +188,70 @@ class LocationSerializer(TenantModelSerializer):
         except DjangoValidationError as error:
             raise serializers.ValidationError(error.message_dict)
         return attrs
+
+
+class TransferLineSerializer(TenantModelSerializer):
+    class Meta:
+        model = TransferLine
+        fields = ['id', 'product', 'quantity', 'received_quantity', 'difference_reason']
+        read_only_fields = ['id', 'received_quantity', 'difference_reason']
+        extra_kwargs = {'quantity': {'min_value': 1}}
+
+
+class TransferSerializer(TenantModelSerializer):
+    """
+    Stock moving between two of the company's own locations. Only a draft can be edited (sending ``lines`` replaces
+    them); ``dispatch``, ``receive`` and ``cancel`` move it on. Numbers are per company (``reference`` T-000001).
+    """
+
+    reference = serializers.CharField(read_only=True)
+    lines = TransferLineSerializer(many=True)
+
+    class Meta:
+        model = Transfer
+        fields = ['id', 'number', 'reference', 'source_location', 'destination_location', 'status', 'note', 'lines',
+                  'created_by', 'created_at', 'dispatched_by', 'dispatched_at', 'received_by', 'received_at',
+                  'cancelled_by', 'cancelled_at']
+        read_only_fields = ['id', 'number', 'status', 'created_by', 'created_at', 'dispatched_by', 'dispatched_at',
+                            'received_by', 'received_at', 'cancelled_by', 'cancelled_at']
+
+    @staticmethod
+    def _lines(lines):
+        return [(line['product'], line['quantity']) for line in lines]
+
+    def create(self, validated_data):
+        if 'company' not in validated_data:
+            raise serializers.ValidationError({'detail': ['Your account is not linked to a company.']})
+        try:
+            return transfers.create_transfer(
+                company=validated_data['company'], user=self.context['request'].user,
+                source=validated_data['source_location'], destination=validated_data['destination_location'],
+                lines=self._lines(validated_data['lines']), note=validated_data.get('note', ''),
+            )
+        except transfers.TransferError as error:
+            raise serializers.ValidationError(error.detail)
+
+    def update(self, instance, validated_data):
+        lines = (self._lines(validated_data['lines']) if 'lines' in validated_data
+                 else [(line.product, line.quantity) for line in instance.lines.select_related('product')])
+        try:
+            return transfers.replace_draft(
+                instance, source=validated_data.get('source_location', instance.source_location),
+                destination=validated_data.get('destination_location', instance.destination_location),
+                lines=lines, note=validated_data.get('note', instance.note),
+            )
+        except transfers.TransferError as error:
+            raise serializers.ValidationError(error.detail)
+
+
+class TransferReceiveLineSerializer(serializers.Serializer):
+    line = serializers.IntegerField(help_text='A line id of this transfer.')
+    received_quantity = serializers.IntegerField(min_value=0)
+    reason = serializers.CharField(max_length=255, required=False, allow_blank=True, default='',
+                                   help_text='Required when received differs from what was sent.')
+
+
+class TransferReceiveSerializer(serializers.Serializer):
+    """What arrived: every line of the transfer once."""
+
+    lines = TransferReceiveLineSerializer(many=True)

@@ -91,7 +91,7 @@ class ViewOnlyAdmin(admin.ModelAdmin):
 
 @admin.register(TransferLine, TransferPick, RequisitionLine)
 class TransferPartAdmin(TenantAdminMixin, ViewOnlyAdmin):
-    """A line or pick changed by hand would no longer match the stock its transfer moved."""
+    """A transfer line or pick (or a requisition line) changed by hand would no longer match its document."""
 
 
 @admin.register(Transfer)

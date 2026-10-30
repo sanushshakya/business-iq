@@ -194,8 +194,8 @@ class LocationSerializer(TenantModelSerializer):
 class TransferLineSerializer(TenantModelSerializer):
     class Meta:
         model = TransferLine
-        fields = ['id', 'product', 'quantity', 'received_quantity', 'difference_reason']
-        read_only_fields = ['id', 'received_quantity', 'difference_reason']
+        fields = ['id', 'product', 'quantity', 'received_quantity', 'difference_reason', 'requisition_line']
+        read_only_fields = ['id', 'received_quantity', 'difference_reason', 'requisition_line']
         extra_kwargs = {'quantity': {'min_value': 1}}
 
 

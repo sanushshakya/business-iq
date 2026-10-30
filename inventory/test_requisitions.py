@@ -256,3 +256,45 @@ class RequisitionApiTests(RequisitionSetUp):
             self.assertFalse(model_admin.has_add_permission(request))
             self.assertFalse(model_admin.has_change_permission(request))
             self.assertFalse(model_admin.has_delete_permission(request))
+
+
+class RequisitionReviewTests(RequisitionSetUp):
+    """From the G12 review."""
+
+    def test_only_a_store_location_raises_one(self):
+        with self.assertRaises(requisitions.RequisitionError):
+            self.raise_requisition(location=self.wh)
+
+    def test_requisitions_never_move_stock(self):
+        from inventory.models import StockMovement
+
+        requisition = self.raise_requisition()
+        requisitions.fulfil(requisition, self.user, source=self.wh,
+                            quantities={line.pk: line.quantity for line in requisition.lines.all()})
+        self.assertEqual(StockMovement.objects.count(), 0)
+        self.assertEqual(sorted(StockBatch.objects.values_list('quantity', flat=True)), [20, 20])
+
+    def test_cancelled_transfer_takes_a_fulfilled_requisition_back_to_partly(self):
+        requisition = self.raise_requisition()
+        rice, oil = self.lines(requisition)['Fake rice'], self.lines(requisition)['Fake oil']
+        requisitions.fulfil(requisition, self.user, source=self.wh, quantities={rice.pk: 10})
+        second = requisitions.fulfil(requisition, self.user, source=self.wh, quantities={oil.pk: 4})
+        transfers.cancel(second, self.user)
+        requisition.refresh_from_db()
+        self.assertEqual(requisition.status, Requisition.PARTLY_FULFILLED)
+
+    def test_transfer_from_a_requisition_keeps_its_destination(self):
+        requisition = self.raise_requisition()
+        transfer = requisitions.fulfil(requisition, self.user, source=self.wh,
+                                       quantities={self.lines(requisition)['Fake rice'].pk: 5})
+        back = Location.objects.create(company=self.company, code='BACK-1', name='Fake back store', type='back_store',
+                                       branch=self.branch)
+        with self.assertRaises(transfers.TransferError):
+            transfers.replace_draft(transfer, source=self.wh, destination=back, lines=None)
+        api = APIClient()
+        api.force_authenticate(self.user)
+        url = reverse('transfer-detail', args=[transfer.pk])
+        self.assertEqual(api.patch(url, {'note': 'Van 2'}, format='json').status_code, 200)
+        self.assertEqual(api.patch(url, {'destination_location': back.pk}, format='json').status_code, 400)
+        response = api.get(url).json()
+        self.assertEqual(response['lines'][0]['requisition_line'], self.lines(requisition)['Fake rice'].pk)

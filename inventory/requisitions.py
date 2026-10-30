@@ -24,8 +24,9 @@ class RequisitionError(Exception):
 def _validate_location(company, location):
     if location.company_id != company.pk:
         raise RequisitionError({'location': ['This location belongs to another company.']})
-    if location.is_virtual:
-        raise RequisitionError({'location': ['A requisition is raised by a real location, not a virtual one.']})
+    if location.type not in location.BRANCH_TYPES:  # shop floor, butchery, back store
+        raise RequisitionError({'location': ['A requisition is raised by a store location (shop floor, butchery or '
+                                             'back store).']})
     if not location.is_active:
         raise RequisitionError({'location': [f'{location.code} is no longer in use.']})
 
@@ -58,7 +59,7 @@ def _status_for(requisition):
 
 def refresh_status(requisition_id):
     """Recompute an open requisition's status from its lines (after a fulfil or a cancelled transfer)."""
-    requisition = Requisition.objects.select_for_update().get(pk=requisition_id)
+    requisition = Requisition.objects.select_for_update(of=('self',)).get(pk=requisition_id)
     if requisition.status == Requisition.CANCELLED:
         return requisition
     status = _status_for(requisition)

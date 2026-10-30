@@ -9,10 +9,11 @@ from rest_framework import serializers
 
 from common.tenancy import TenantModelSerializer
 
-from . import transfers
+from . import requisitions, transfers
 from .ledger import move, virtual_location
 from .models import (
-    Location, Order, Product, ProductCategory, StockBatch, StockMovement, Supplier, Transfer, TransferLine,
+    Location, Order, Product, ProductCategory, Requisition, RequisitionLine, StockBatch, StockMovement, Supplier,
+    Transfer, TransferLine,
 )
 
 
@@ -232,8 +233,7 @@ class TransferSerializer(TenantModelSerializer):
             raise serializers.ValidationError(error.detail)
 
     def update(self, instance, validated_data):
-        lines = (self._lines(validated_data['lines']) if 'lines' in validated_data
-                 else [(line.product, line.quantity) for line in instance.lines.select_related('product')])
+        lines = self._lines(validated_data['lines']) if 'lines' in validated_data else None
         try:
             return transfers.replace_draft(
                 instance, source=validated_data.get('source_location', instance.source_location),
@@ -255,3 +255,61 @@ class TransferReceiveSerializer(serializers.Serializer):
     """What arrived: every line of the transfer once."""
 
     lines = TransferReceiveLineSerializer(many=True)
+
+
+class RequisitionLineSerializer(TenantModelSerializer):
+    fulfilled_quantity = serializers.IntegerField(read_only=True, help_text='Units on transfers (not cancelled ones).')
+    open_quantity = serializers.IntegerField(read_only=True, help_text='Units not yet on a transfer.')
+
+    class Meta:
+        model = RequisitionLine
+        fields = ['id', 'product', 'quantity', 'fulfilled_quantity', 'open_quantity']
+        read_only_fields = ['id']
+        extra_kwargs = {'quantity': {'min_value': 1}}
+
+
+class RequisitionSerializer(TenantModelSerializer):
+    """
+    A store location asking for stock (``location``). The warehouse fulfils it with ``fulfil`` (a draft transfer
+    per call, in full or in parts); what is not on a transfer stays open. Numbers are per company (R-000001).
+    """
+
+    reference = serializers.CharField(read_only=True)
+    lines = RequisitionLineSerializer(many=True)
+    transfers = serializers.SerializerMethodField(help_text='Ids of the transfers made for it, oldest first.')
+
+    class Meta:
+        model = Requisition
+        fields = ['id', 'number', 'reference', 'location', 'status', 'note', 'lines', 'transfers', 'created_by',
+                  'created_at', 'cancelled_by', 'cancelled_at']
+        read_only_fields = ['id', 'number', 'status', 'created_by', 'created_at', 'cancelled_by', 'cancelled_at']
+
+    def get_transfers(self, requisition) -> list[int]:
+        return list(requisition.transfers().values_list('pk', flat=True))
+
+    def create(self, validated_data):
+        if 'company' not in validated_data:
+            raise serializers.ValidationError({'detail': ['Your account is not linked to a company.']})
+        try:
+            return requisitions.create_requisition(
+                company=validated_data['company'], user=self.context['request'].user,
+                location=validated_data['location'], note=validated_data.get('note', ''),
+                lines=[(line['product'], line['quantity']) for line in validated_data['lines']],
+            )
+        except requisitions.RequisitionError as error:
+            raise serializers.ValidationError(error.detail)
+
+
+class RequisitionFulfilLineSerializer(serializers.Serializer):
+    line = serializers.IntegerField(help_text='A line id of this requisition.')
+    quantity = serializers.IntegerField(min_value=0, help_text='Units to send now (at most what is open).')
+
+
+class RequisitionFulfilSerializer(TenantModelSerializer):
+    """Where the stock comes from and how much of each line to send now; lines left out stay open."""
+
+    lines = RequisitionFulfilLineSerializer(many=True)
+
+    class Meta:
+        model = Transfer
+        fields = ['source_location', 'lines']

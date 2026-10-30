@@ -2,7 +2,7 @@ from django.contrib import admin
 
 from common.tenancy import TenantAdminMixin
 
-from .models import Location, Product, ProductCategory, StockBatch, StockMovement, Transfer, TransferLine, TransferPick
+from .models import Location, Product, ProductCategory, StockBatch, StockMovement, Transfer, TransferLine, TransferPick, Requisition, RequisitionLine
 
 
 @admin.register(ProductCategory)
@@ -89,7 +89,7 @@ class ViewOnlyAdmin(admin.ModelAdmin):
         return False
 
 
-@admin.register(TransferLine, TransferPick)
+@admin.register(TransferLine, TransferPick, RequisitionLine)
 class TransferPartAdmin(TenantAdminMixin, ViewOnlyAdmin):
     """A line or pick changed by hand would no longer match the stock its transfer moved."""
 
@@ -103,3 +103,13 @@ class TransferAdmin(TenantAdminMixin, ViewOnlyAdmin):
     search_fields = ('number', 'note')
     list_select_related = ('source_location', 'destination_location')
     inlines = [TransferLineInline]
+
+
+@admin.register(Requisition)
+class RequisitionAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """View only: requisitions are raised, fulfilled and cancelled through the API."""
+
+    list_display = ('reference', 'location', 'status', 'created_at')
+    list_filter = ('status',)
+    search_fields = ('number', 'note')
+    list_select_related = ('location',)

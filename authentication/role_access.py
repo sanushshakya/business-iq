@@ -88,6 +88,8 @@ ROLE_ROUTES = {
         + _collection('inventory/orders')
         + _collection('inventory/transfers', {'GET', 'POST', 'PUT', 'PATCH'})
         + _route(r'^/inventory/transfers/\d+/(dispatch|receive|cancel)/$', 'POST')
+        + _collection('inventory/requisitions', {'GET', 'POST'})
+        + _route(r'^/inventory/requisitions/\d+/(fulfil|cancel)/$', 'POST')
         + STOCK_ALERTS
         + _collection('pricing/price-changes', READ)
     ),

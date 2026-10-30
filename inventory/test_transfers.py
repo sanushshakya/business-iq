@@ -253,3 +253,24 @@ class TransferFlowTests(TestCase):
         dispatched = Transfer.objects.filter(status=Transfer.DISPATCHED).get()
         with self.assertRaises(transfers.TransferError):
             transfers.replace_draft(dispatched, source=self.wh, destination=self.shop, lines=[(self.product, 1)])
+
+
+class TransferDemandTests(TestCase):
+    """Moving stock between our own locations is not demand."""
+
+    def test_transfers_do_not_count_as_demand(self):
+        from inventory.projections import average_daily_demand
+
+        company = CompanyFactory()
+        user = UserFactory(company=company, is_staff=True)
+        branch = Branch.objects.create(company=company, name='Fake High Street', address='x')
+        shop = Location.objects.get(branch=branch, type='shop_floor')
+        wh = Location.objects.create(company=company, code='WH-1', name='Fake warehouse', type='warehouse')
+        product = ProductFactory(company=company, stock_quantity=10)
+        StockBatchFactory(product=product, quantity=10, location=wh)
+        transfer = transfers.create_transfer(company=company, user=user, source=wh, destination=shop,
+                                             lines=[(product, 6)])
+        transfers.dispatch(transfer, user)
+        transfers.receive(transfer, user, [{'line': transfer.lines.get().pk, 'received_quantity': 5,
+                                            'reason': 'One broken'}])
+        self.assertEqual(average_daily_demand(product, days=30), 0)

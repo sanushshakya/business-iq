@@ -25,11 +25,14 @@ TWO_PLACES = Decimal('0.01')
 
 
 def average_daily_demand(product, days: Optional[int] = None, now=None) -> Decimal:
-    """Units sold per day, averaged over the last ``days`` days (0 when there is no sales history)."""
+    """
+    Units sold per day, averaged over the last ``days`` days (0 when there is no sales history). Transfers between
+    our own locations (and their shortfalls) are not demand.
+    """
     days = days or settings.DEMAND_HISTORY_DAYS
     since = (now or timezone.now()) - timedelta(days=days)
     sold = StockMovement.objects.filter(
-        batch__product=product, movement_type='outbound', date_time__gte=since
+        batch__product=product, movement_type='outbound', date_time__gte=since, transfer__isnull=True
     ).aggregate(total=Sum('quantity'))['total'] or 0
     return Decimal(sold) / Decimal(days)
 

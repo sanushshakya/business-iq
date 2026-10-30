@@ -1,7 +1,8 @@
 # inventory/views.py
 
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
-from rest_framework import mixins, viewsets
+from django.db import OperationalError
+from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
@@ -65,6 +66,11 @@ class StockBatchViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     queryset = StockBatch.objects.all()
     serializer_class = StockBatchSerializer
 
+    def perform_destroy(self, instance):
+        if instance.location.is_virtual:
+            raise ValidationError({'detail': 'Stock at a virtual location (e.g. in transit) is moved only by its transfer.'})
+        instance.delete()
+
 
 class StockMovementViewSet(
     TenantScopedMixin, mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin,
@@ -126,7 +132,7 @@ class TransferViewSet(
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        if self.request.query_params.get('status'):
+        if self.action == 'list' and self.request.query_params.get('status'):
             queryset = queryset.filter(status=self.request.query_params['status'])
         return queryset
 
@@ -135,6 +141,11 @@ class TransferViewSet(
             transfer = step(self.get_object(), self.request.user, *args)
         except transfers.TransferError as error:
             raise ValidationError(error.detail)
+        except OperationalError as error:  # Postgres broke a deadlock with another stock change: nothing was saved
+            if 'deadlock' not in str(error).lower():
+                raise
+            return Response({'detail': 'Stock was changing at the same time; nothing was saved. Try again.'},
+                            status=status.HTTP_409_CONFLICT)
         return Response(TransferSerializer(self.get_queryset().get(pk=transfer.pk), context=self.get_serializer_context()).data)
 
     @extend_schema(request=None, responses=TransferSerializer)

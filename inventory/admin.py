@@ -2,7 +2,7 @@ from django.contrib import admin
 
 from common.tenancy import TenantAdminMixin
 
-from .models import Location, Product, ProductCategory, StockBatch, StockMovement, Transfer, TransferLine
+from .models import Location, Product, ProductCategory, StockBatch, StockMovement, Transfer, TransferLine, TransferPick
 
 
 @admin.register(ProductCategory)
@@ -78,17 +78,8 @@ class TransferLineInline(admin.TabularInline):
         return False
 
 
-@admin.register(Transfer)
-class TransferAdmin(TenantAdminMixin, admin.ModelAdmin):
-    """View only: transfers move stock, so they change only through the API (dispatch, receive, cancel)."""
-
-    list_display = ('reference', 'source_location', 'destination_location', 'status', 'created_at')
-    list_filter = ('status',)
-    search_fields = ('number', 'note')
-    list_select_related = ('source_location', 'destination_location')
-    inlines = [TransferLineInline]
-
-    def has_add_permission(self, request):
+class ViewOnlyAdmin(admin.ModelAdmin):
+    def has_add_permission(self, request, obj=None):
         return False
 
     def has_change_permission(self, request, obj=None):
@@ -96,3 +87,19 @@ class TransferAdmin(TenantAdminMixin, admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.register(TransferLine, TransferPick)
+class TransferPartAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """A line or pick changed by hand would no longer match the stock its transfer moved."""
+
+
+@admin.register(Transfer)
+class TransferAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """View only: transfers move stock, so they change only through the API (dispatch, receive, cancel)."""
+
+    list_display = ('reference', 'source_location', 'destination_location', 'status', 'created_at')
+    list_filter = ('status',)
+    search_fields = ('number', 'note')
+    list_select_related = ('source_location', 'destination_location')
+    inlines = [TransferLineInline]

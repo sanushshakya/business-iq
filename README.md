@@ -144,7 +144,7 @@ token lifetimes, login/refresh throttles, field-encryption keys, and the externa
 | Passwords | `POST /auth/password_reset/` (emails a link), `/auth/password_reset/confirm/` |
 | Invitations | `/auth/invitations/` (staff invite by email, list, revoke), `POST /auth/invitations/accept/` (public) |
 | Company | `/tenants/company/` (yours; staff can edit), `/tenants/branches/`, `/tenants/tills/` |
-| Inventory | `/inventory/products/` (and `.../{id}/stock-projection/`), `categories/`, `suppliers/`, `orders/`, `batches/`, `movements/`, `locations/` (staff only; every company starts with a shop floor per branch and virtual supplier/customer/waste/adjustment/in-transit locations) |
+| Inventory | `/inventory/products/` (and `.../{id}/stock-projection/`), `categories/`, `suppliers/`, `orders/`, `batches/`, `movements/`, `locations/` (staff only; every company starts with a shop floor per branch and virtual supplier/customer/waste/adjustment/in-transit locations), `transfers/` (staff and the stock role: draft → `POST .../{id}/dispatch/` → `.../receive/` with what arrived, or `.../cancel/` a draft) |
 | Demand | `/demand/demands/`, `events/`, `keywords/`; calendar: `/calendar/upcoming/` (next 3 months), `events/`, `alerts/` |
 | Alerts | `/common/api/alerts/stock/`, `/common/api/alerts/demand/create/`, `.../demand/dismiss/{id}/` |
 | Logistics | `/logistics/freight-alerts/`, `providers/`, `deliveries/`, `suppliers/`, `alternative-suppliers/` (read-only), `freight-rates/` (read-only) |

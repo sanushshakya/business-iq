@@ -76,7 +76,8 @@ def create_transfer(*, company, user, source, destination, lines, note=''):
 
 def _locked(transfer, status):
     """The transfer row, locked, if it is still ``status``."""
-    locked = Transfer.objects.select_for_update().select_related('source_location', 'destination_location').get(
+    # of=self: lock the transfer only, not the joined locations (Postgres would lock both rows otherwise).
+    locked = Transfer.objects.select_for_update(of=('self',)).select_related('source_location', 'destination_location').get(
         pk=transfer.pk
     )
     if locked.status != status:
@@ -105,13 +106,15 @@ def dispatch(transfer, user):
     destination = Location.objects.get(pk=transfer.destination_location_id)
     validate_route(transfer.company, source, destination)
     transit = virtual_location(transfer.company_id, Location.IN_TRANSIT)
-    for line in transfer.lines.select_related('product'):
+    for line in transfer.lines.select_related('product').order_by('product_id'):  # one lock order for every step
         try:
             allocations = transfer_fefo(line.product, line.quantity, source=source, to=transit, transfer=transfer)
+            for batch, _, _ in allocations:
+                _check_lot(batch, destination)
         except LedgerError as error:
-            raise TransferError({'lines': [
-                f'{line.product}: only {error.available} available at {source.code}.'
-            ]}) from None
+            message = (str(error) if error.available is None
+                       else f'{line.product}: only {error.available} available at {source.code}.')
+            raise TransferError({'lines': [message]}) from None
         picked = {}
         for _, held, taken in allocations:
             picked[held.pk] = picked.get(held.pk, 0) + taken
@@ -121,6 +124,15 @@ def dispatch(transfer, user):
     transfer.status, transfer.dispatched_by, transfer.dispatched_at = Transfer.DISPATCHED, user, timezone.now()
     transfer.save(update_fields=['status', 'dispatched_by', 'dispatched_at'])
     return transfer
+
+
+def _check_lot(batch, location):
+    """The lot may go to ``location`` later: it isn't there already with another expiry."""
+    clash = StockBatch.objects.filter(product_id=batch.product_id, batch_number=batch.batch_number, location=location) \
+        .exclude(expiration_date=batch.expiration_date).values_list('expiration_date', flat=True).first()
+    if clash is not None:
+        raise LedgerError(f'Batch {batch.batch_number} at {location.code} has another expiry ({clash:%d %b %Y}, not '
+                          f'{batch.expiration_date:%d %b %Y}); correct the lot number first.')
 
 
 def _received(transfer, entries):
@@ -152,15 +164,21 @@ def receive(transfer, user, entries):
     received = _received(transfer, entries)
     destination = transfer.destination_location
     adjustment = virtual_location(transfer.company_id, Location.ADJUSTMENT)
-    for line, (quantity, reason) in received.items():
+    for line, (quantity, reason) in sorted(received.items(), key=lambda item: item[0].product_id):
         remaining = quantity
         for pick in line.picks.select_related('transit_batch').order_by('transit_batch__expiration_date', 'pk'):
             held = StockBatch.objects.select_for_update(of=('self',)).select_related('location').get(
                 pk=pick.transit_batch_id
             )
+            if held.quantity < pick.quantity:  # in-transit stock is only moved by its transfers; never go negative
+                raise TransferError({'detail': [f'Batch {held.batch_number} in transit holds {held.quantity}, '
+                                                f'not the {pick.quantity} sent; ask an admin to check it.']})
             arrived = min(pick.quantity, remaining)
-            if arrived:
-                transfer_batch(held, arrived, destination, transfer=transfer)
+            try:
+                if arrived:
+                    transfer_batch(held, arrived, destination, transfer=transfer)
+            except LedgerError as error:
+                raise TransferError({'lines': [str(error)]}) from None
             if pick.quantity > arrived:
                 move(held, pick.quantity - arrived, 'outbound', counterpart=adjustment, transfer=transfer)
             remaining -= arrived

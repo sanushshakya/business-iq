@@ -119,13 +119,18 @@ def transfer_batch(batch, quantity, to, *, transfer=None):
     """
     Move ``quantity`` units of a (locked) batch to location ``to``, into the same lot there (same batch number and
     expiry; created empty if missing): an outbound movement from the batch and an inbound one into the lot at ``to``.
-    Returns the batch at ``to``. Must run inside ``transaction.atomic()``.
+    A lot with that number but another expiry at ``to`` is a ``LedgerError`` (never merge two expiries). Returns the batch at ``to``. Must run inside ``transaction.atomic()``.
     """
     held, _ = StockBatch.objects.get_or_create(
         product_id=batch.product_id, batch_number=batch.batch_number, location=to,
         defaults={'quantity': 0, 'expiration_date': batch.expiration_date},
     )
     held = StockBatch.objects.select_for_update(of=('self',)).select_related('location').get(pk=held.pk)
+    if held.expiration_date != batch.expiration_date:
+        raise LedgerError(
+            f'Batch {batch.batch_number} at {to.code} has another expiry ({held.expiration_date:%d %b %Y}, not '
+            f'{batch.expiration_date:%d %b %Y}); correct the lot number first.'
+        )
     move(batch, quantity, 'outbound', counterpart=to, transfer=transfer)
     move(held, quantity, 'inbound', counterpart=batch.location, transfer=transfer)
     return held

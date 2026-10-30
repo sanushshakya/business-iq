@@ -88,3 +88,12 @@ class TransferLedgerTests(TestCase):
             movement = move(source, 1, 'outbound', counterpart=self.transit, transfer=transfer)
         self.assertEqual(movement.transfer, transfer)
         self.assertEqual(transfer.reference, 'T-000001')
+
+    def test_transfer_batch_refuses_a_lot_with_another_expiry(self):
+        source = self.batch(5, 30, 'LOT-1')
+        StockBatchFactory(product=self.product, quantity=1, location=self.shop, batch_number='LOT-1',
+                          expiration_date=source.expiration_date + timedelta(days=1))
+        with self.assertRaises(LedgerError), transaction.atomic():
+            transfer_batch(source, 2, self.shop)
+        source.refresh_from_db()
+        self.assertEqual((source.quantity, StockMovement.objects.count()), (5, 0))

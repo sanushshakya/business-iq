@@ -92,6 +92,8 @@ class StockBatchSerializer(TenantModelSerializer):
         location = attrs.get('location') or getattr(self.instance, 'location', None)
         if product is not None and location is not None and product.company_id != location.company_id:
             raise serializers.ValidationError({'location': 'This location belongs to another company.'})
+        if self.instance is not None and self.instance.location.is_virtual:
+            raise serializers.ValidationError('Stock at a virtual location (e.g. in transit) is moved only by its transfer.')
         return attrs
 
 
@@ -106,6 +108,11 @@ class StockMovementSerializer(TenantModelSerializer):
         fields = '__all__'
         read_only_fields = ['source_location', 'destination_location']
         extra_kwargs = {'quantity': {'min_value': 1}}
+
+    def validate_batch(self, batch):
+        if batch.location.is_virtual:
+            raise serializers.ValidationError('Stock at a virtual location (e.g. in transit) is moved only by its transfer.')
+        return batch
 
     @transaction.atomic
     def create(self, validated_data):
@@ -213,6 +220,8 @@ class TransferSerializer(TenantModelSerializer):
         return [(line['product'], line['quantity']) for line in lines]
 
     def create(self, validated_data):
+        if 'company' not in validated_data:
+            raise serializers.ValidationError({'detail': ['Your account is not linked to a company.']})
         try:
             return transfers.create_transfer(
                 company=validated_data['company'], user=self.context['request'].user,

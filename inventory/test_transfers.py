@@ -29,7 +29,7 @@ def ledger_balance(location):
     return (moved_in.aggregate(q=Sum('quantity'))['q'] or 0) - (moved_out.aggregate(q=Sum('quantity'))['q'] or 0)
 
 
-class TransferFlowTests(TestCase):
+class TransferFlowSetUp(TestCase):
     def setUp(self):
         self.company = CompanyFactory()
         self.user = UserFactory(company=self.company, is_staff=True)
@@ -63,6 +63,8 @@ class TransferFlowTests(TestCase):
                              location.code)
         self.assertFalse(StockBatch.objects.filter(quantity__lt=0).exists())
 
+
+class TransferFlowTests(TransferFlowSetUp):
     def test_full_receipt(self):
         transfer = self.draft(6)
         self.assertEqual((transfer.number, transfer.status, StockMovement.objects.count()), (1, Transfer.DRAFT, 0))
@@ -274,3 +276,45 @@ class TransferDemandTests(TestCase):
         transfers.receive(transfer, user, [{'line': transfer.lines.get().pk, 'received_quantity': 5,
                                             'reason': 'One broken'}])
         self.assertEqual(average_daily_demand(product, days=30), 0)
+
+
+class TransferReviewFixTests(TransferFlowSetUp):
+    """Fixes from the G11 review: lot expiry clashes, in-transit stock that can't be drained, lock scope."""
+
+    def test_lot_with_another_expiry_at_destination_refused(self):
+        StockBatchFactory(product=self.product, quantity=1, location=self.shop, batch_number='LOT-1',
+                          expiration_date=self.lot.expiration_date + timedelta(days=20))
+        transfer = self.draft(6)
+        with self.assertRaises(transfers.TransferError) as raised:
+            transfers.dispatch(transfer, self.user)
+        self.assertIn('LOT-1', raised.exception.detail['lines'][0])
+        self.assertEqual(StockMovement.objects.count(), 0)
+
+    def test_lot_with_another_expiry_in_transit_refused(self):
+        other_wh = Location.objects.create(company=self.company, code='WH-2', name='Fake second', type='warehouse')
+        StockBatchFactory(product=self.product, quantity=4, location=other_wh, batch_number='LOT-1',
+                          expiration_date=self.lot.expiration_date + timedelta(days=3))
+        transfers.dispatch(self.draft(2), self.user)
+        with self.assertRaises(transfers.TransferError):
+            transfers.dispatch(self.draft(2, source=other_wh), self.user)
+
+    def test_receive_refused_if_transit_stock_went_missing(self):
+        transfer = self.draft(6)
+        transfers.dispatch(transfer, self.user)
+        StockBatch.objects.filter(location=self.transit).update(quantity=2)  # as if drained outside the transfer
+        with self.assertRaises(transfers.TransferError):
+            transfers.receive(transfer, self.user, self.entry(transfer, 6))
+        self.assertFalse(StockBatch.objects.filter(quantity__lt=0).exists())
+
+    def test_locks_cover_only_the_transfer_row(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        if connection.vendor != 'postgresql':
+            self.skipTest('row locks are Postgres only')
+        transfer = self.draft(6)
+        with CaptureQueriesContext(connection) as queries:
+            transfers.dispatch(transfer, self.user)
+        locks = [q['sql'] for q in queries if 'FOR UPDATE' in q['sql']]
+        self.assertTrue(locks)
+        self.assertTrue(all('FOR UPDATE OF' in sql or 'tenants_company' in sql for sql in locks), locks)

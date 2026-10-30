@@ -13,7 +13,7 @@ from inventory.models import Location, StockBatch, Transfer
 from tenants.models import Branch
 
 
-class TransferApiTests(TestCase):
+class TransferApiSetUp(TestCase):
     def setUp(self):
         self.company = CompanyFactory()
         self.branch = Branch.objects.create(company=self.company, name='Fake High Street', address='x')
@@ -42,6 +42,8 @@ class TransferApiTests(TestCase):
         api.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh_tokens.issue_token_pair(operator)['access_token']}")
         return api
 
+
+class TransferApiTests(TransferApiSetUp):
     def test_create_dispatch_receive_happy_path(self):
         response = self.create(note='Weekly top-up')
         self.assertEqual(response.status_code, 201, response.content)
@@ -156,3 +158,54 @@ class TransferApiTests(TestCase):
                 response = self.api.post(self.url(pk, 'receive'), {'lines': lines}, format='json')
                 self.assertEqual(response.status_code, 400)
         self.assertEqual(Transfer.objects.get(pk=pk).status, 'dispatched')
+
+
+class TransitStockGuardTests(TransferApiSetUp):
+    """Stock in transit belongs to its transfers: the batch and movement APIs can't change it."""
+
+    def dispatched_transit_batch(self):
+        pk = self.create().json()['id']
+        self.api.post(self.url(pk, 'dispatch'))
+        return StockBatch.objects.get(location__type='in_transit')
+
+    def test_movement_from_a_transit_batch_400(self):
+        held = self.dispatched_transit_batch()
+        response = self.api.post(reverse('stockmovement-list'),
+                                 {'batch': held.pk, 'quantity': 6, 'movement_type': 'outbound'}, format='json')
+        self.assertEqual(response.status_code, 400)
+        held.refresh_from_db()
+        self.assertEqual(held.quantity, 6)
+
+    def test_editing_a_transit_batch_400(self):
+        held = self.dispatched_transit_batch()
+        response = self.api.patch(reverse('stockbatch-detail', args=[held.pk]), {'quantity': 0}, format='json')
+        self.assertEqual(response.status_code, 400)
+        held.refresh_from_db()
+        self.assertEqual(held.quantity, 6)
+
+    def test_status_query_on_an_action_is_ignored(self):
+        pk = self.create().json()['id']
+        response = self.api.post(self.url(pk, 'dispatch') + '?status=draft')
+        self.assertEqual((response.status_code, response.json()['status']), (200, 'dispatched'))
+
+    def test_transfer_admins_are_view_only(self):
+        from django.contrib import admin
+        from django.test import RequestFactory
+
+        from inventory.models import TransferLine, TransferPick
+
+        request = RequestFactory().get('/')
+        request.user = UserFactory(company=self.company, is_staff=True, is_superuser=True)
+        for model in (Transfer, TransferLine, TransferPick):
+            model_admin = admin.site._registry[model]
+            with self.subTest(model=model.__name__):
+                self.assertFalse(model_admin.has_add_permission(request))
+                self.assertFalse(model_admin.has_change_permission(request))
+                self.assertFalse(model_admin.has_delete_permission(request))
+
+    def test_superuser_without_company_400(self):
+        api = APIClient()
+        api.force_authenticate(UserFactory(company=None, is_staff=True, is_superuser=True))
+        response = self.create(api=api)
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertEqual(Transfer.objects.count(), 0)

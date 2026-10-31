@@ -200,25 +200,41 @@ class LocationApiTests(TestCase):
         sellable = {r['code'] for r in self.api.get(self.url(), {'sellable': 'true'}).json()['results']}
         self.assertEqual(sellable, {f'SHOP-{self.branch.pk}'})
 
-    def test_non_staff_403(self):
+    def test_non_staff_member_reads_but_cannot_create(self):
         from rest_framework.test import APIClient
 
         from common.tests.factories import UserFactory
 
         api = APIClient()
         api.force_authenticate(UserFactory(company=self.company))
-        self.assertEqual(api.get(self.url()).status_code, 403)
+        self.assertEqual(api.get(self.url()).status_code, 200)
+        response = api.post(self.url(), {'code': 'WH-2', 'name': 'Fake', 'type': 'warehouse'}, format='json')
+        self.assertEqual(response.status_code, 403)
 
-    def test_operator_403(self):
+    def operator(self, role):
         from django.contrib.auth import get_user_model
         from rest_framework.test import APIClient
 
         from authentication import refresh_tokens
 
-        operator, _code = get_user_model().objects.create_operator(self.company, 'Fake Stock', 'stock')
+        operator, _code = get_user_model().objects.create_operator(self.company, 'Fake Operator', role)
         api = APIClient()
         api.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh_tokens.issue_token_pair(operator)['access_token']}")
-        self.assertEqual(api.get(self.url()).status_code, 403)
+        return api
+
+    def test_stock_operator_reads_locations(self):
+        """G13: the transfer and requisition screens list locations for stock operators (read only)."""
+        api = self.operator('stock')
+        response = api.get(self.url())
+        self.assertEqual(response.status_code, 200)
+        pk = response.json()['results'][0]['id']
+        self.assertEqual(api.get(self.url(pk)).status_code, 200)
+        self.assertEqual(api.post(self.url(), {'code': 'WH-2', 'name': 'Fake', 'type': 'warehouse'},
+                                  format='json').status_code, 403)
+        self.assertEqual(api.patch(self.url(pk), {'name': 'Renamed'}, format='json').status_code, 403)
+
+    def test_till_operator_cannot_read_locations(self):
+        self.assertEqual(self.operator('till').get(self.url()).status_code, 403)
 
     def test_schema_lists_locations(self):
         from drf_spectacular.generators import SchemaGenerator

@@ -81,6 +81,7 @@ class StockBatchSerializer(TenantModelSerializer):
         fields = '__all__'
         extra_kwargs = {
             'quantity': {'min_value': 0},
+            'weight_kg': {'min_value': 0},
             'location': {'error_messages': {'required': 'Choose where this stock is received.'}},
         }
 
@@ -118,7 +119,26 @@ class StockBatchSerializer(TenantModelSerializer):
             raise serializers.ValidationError({'location': 'This location belongs to another company.'})
         if self.instance is not None and self.instance.location.is_virtual:
             raise serializers.ValidationError('Stock at a virtual location (e.g. in transit) is moved only by its transfer.')
+        if product is not None:
+            self._check_kind(product, attrs)
         return attrs
+
+    def _check_kind(self, product, attrs):
+        """Each products hold a count, loose ones kg only, catch-weight ones pieces and their kg."""
+        def value(name):
+            return attrs[name] if name in attrs else getattr(self.instance, name, 0)
+
+        quantity, weight = value('quantity'), value('weight_kg')
+        if not product.is_weighed:
+            if weight:
+                raise serializers.ValidationError({'weight_kg': f'{product} is sold by each; leave the kg out.'})
+            return
+        if self.instance is None and not weight:
+            raise serializers.ValidationError({'weight_kg': f'{product} is sold by weight; enter the kg received.'})
+        if not product.is_catch_weight and quantity:
+            raise serializers.ValidationError({'quantity': f'{product} is sold loose by weight; the count stays 0.'})
+        if product.is_catch_weight and self.instance is None and not quantity:
+            raise serializers.ValidationError({'quantity': f'{product} is catch-weight; enter how many pieces.'})
 
 
 class StockMovementSerializer(TenantModelSerializer):
@@ -131,12 +151,28 @@ class StockMovementSerializer(TenantModelSerializer):
         model = StockMovement
         fields = '__all__'
         read_only_fields = ['source_location', 'destination_location']
-        extra_kwargs = {'quantity': {'min_value': 1}}
+        extra_kwargs = {'quantity': {'min_value': 0}, 'weight_kg': {'min_value': 0}}
 
     def validate_batch(self, batch):
         if batch.location.is_virtual:
             raise serializers.ValidationError('Stock at a virtual location (e.g. in transit) is moved only by its transfer.')
         return batch
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        product, quantity, weight = attrs['batch'].product, attrs.get('quantity', 0), attrs.get('weight_kg')
+        if not product.is_weighed:
+            if weight is not None:
+                raise serializers.ValidationError({'weight_kg': f'{product} is sold by each; leave the kg out.'})
+            if quantity < 1:
+                raise serializers.ValidationError({'quantity': 'Move at least 1 unit.'})
+        elif weight is None:
+            raise serializers.ValidationError({'weight_kg': f'{product} is sold by weight; enter the kg.'})
+        elif not product.is_catch_weight and quantity:
+            raise serializers.ValidationError({'quantity': f'{product} is sold loose by weight; the count stays 0.'})
+        elif not (quantity or weight):
+            raise serializers.ValidationError({'weight_kg': 'Move some pieces or some kg.'})
+        return attrs
 
     @transaction.atomic
     def create(self, validated_data):
@@ -145,13 +181,17 @@ class StockMovementSerializer(TenantModelSerializer):
         batch = (StockBatch.objects.select_for_update(of=('self',)).select_related('location')
                  .get(pk=validated_data['batch'].pk))
         quantity, movement_type = validated_data['quantity'], validated_data['movement_type']
+        weight = validated_data.get('weight_kg')
         if movement_type == 'outbound' and quantity > batch.quantity:
             raise serializers.ValidationError(
                 {'quantity': f"Only {batch.quantity} unit(s) left in batch {batch.batch_number}."})
+        if movement_type == 'outbound' and weight is not None and weight > batch.weight_kg:
+            raise serializers.ValidationError(
+                {'weight_kg': f'Only {batch.weight_kg} kg left in batch {batch.batch_number}.'})
         counterpart = virtual_location(
             batch.location.company_id, Location.SUPPLIER if movement_type == 'inbound' else Location.ADJUSTMENT
         )
-        return move(batch, quantity, movement_type, counterpart=counterpart)
+        return move(batch, quantity, movement_type, counterpart=counterpart, weight_kg=weight)
 
 
 class StockProjectionPointSerializer(serializers.Serializer):

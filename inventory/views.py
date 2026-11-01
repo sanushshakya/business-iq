@@ -1,7 +1,7 @@
 # inventory/views.py
 
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
-from django.db import OperationalError
+from django.db import IntegrityError, OperationalError, transaction
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -10,9 +10,10 @@ from rest_framework.response import Response
 from common.tenancy import IsCompanyStaffOrReadOnly, SharedReferenceMixin, TenantScopedMixin
 
 from . import requisitions, transfers
-from .models import Location, ProductCategory, Product, Order, Supplier, StockBatch, StockMovement, Transfer, Requisition
+from .models import BarcodeRule, Location, ProductCategory, Product, Order, Supplier, StockBatch, StockMovement, Transfer, Requisition
 from .projections import project_stock
 from .serializers import (
+    BarcodeRuleSerializer,
     LocationSerializer,
     OrderSerializer,
     ProductCategorySerializer,
@@ -241,3 +242,36 @@ class RequisitionViewSet(
             raise ValidationError(error.detail)
         return Response(RequisitionSerializer(self.get_queryset().get(pk=requisition.pk),
                                               context=self.get_serializer_context()).data)
+
+
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter('active', bool, description='true: only the rules the till uses.'),
+]))
+class BarcodeRuleViewSet(TenantScopedMixin, viewsets.ModelViewSet):
+    """
+    Scale-label layouts (variable-measure EAN-13, prefix 2x) for this company. Company members and the till read
+    them (``?active=true`` is what the till loads); only staff change them.
+    """
+
+    queryset = BarcodeRule.objects.all()
+    serializer_class = BarcodeRuleSerializer
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    def perform_create(self, serializer):
+        self._save_once(super().perform_create, serializer)
+
+    def perform_update(self, serializer):
+        self._save_once(super().perform_update, serializer)
+
+    def _save_once(self, save, serializer):
+        try:  # two saves of one prefix at once: the loser hits the unique constraint
+            with transaction.atomic():
+                save(serializer)
+        except IntegrityError:
+            raise ValidationError({'prefix': 'Another rule already uses this prefix.'}) from None
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self.request.query_params.get('active') == 'true':
+            queryset = queryset.filter(is_active=True)
+        return queryset

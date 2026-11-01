@@ -1,0 +1,340 @@
+{
+  "_about": "G15 shared fixtures for the scale-label EAN-13 parser (Python now, JavaScript in G17). Codes are fake.",
+  "rules": [
+    {
+      "name": "Fake price labels",
+      "prefix": "20",
+      "item_code_length": 5,
+      "value_type": "price",
+      "decimals": 2,
+      "value_check_digit": false,
+      "is_active": true
+    },
+    {
+      "name": "Fake weight labels",
+      "prefix": "21",
+      "item_code_length": 4,
+      "value_type": "weight",
+      "decimals": 3,
+      "value_check_digit": true,
+      "is_active": true
+    },
+    {
+      "name": "Fake 4-digit price",
+      "prefix": "22",
+      "item_code_length": 5,
+      "value_type": "price",
+      "decimals": 2,
+      "value_check_digit": true,
+      "is_active": true
+    },
+    {
+      "name": "Fake general",
+      "prefix": "2",
+      "item_code_length": 6,
+      "value_type": "price",
+      "decimals": 2,
+      "value_check_digit": false,
+      "is_active": true
+    },
+    {
+      "name": "Fake whole pounds",
+      "prefix": "25",
+      "item_code_length": 4,
+      "value_type": "price",
+      "decimals": 0,
+      "value_check_digit": false,
+      "is_active": true
+    },
+    {
+      "name": "Fake retired",
+      "prefix": "24",
+      "item_code_length": 5,
+      "value_type": "price",
+      "decimals": 2,
+      "value_check_digit": false,
+      "is_active": false
+    }
+  ],
+  "check_digits": [
+    {
+      "kind": "value",
+      "digits": "2875",
+      "check": 9
+    },
+    {
+      "kind": "value",
+      "digits": "14685",
+      "check": 6
+    },
+    {
+      "kind": "ean13",
+      "digits": "501234567890",
+      "check": 0
+    },
+    {
+      "kind": "ean13",
+      "digits": "400638133393",
+      "check": 1
+    }
+  ],
+  "layouts": [
+    {
+      "name": "ok",
+      "rule": {
+        "prefix": "20",
+        "item_code_length": 5,
+        "value_type": "price",
+        "decimals": 2,
+        "value_check_digit": false
+      },
+      "error": null
+    },
+    {
+      "name": "prefix_not_2",
+      "rule": {
+        "prefix": "30",
+        "item_code_length": 5,
+        "value_type": "price",
+        "decimals": 2,
+        "value_check_digit": false
+      },
+      "error": "prefix"
+    },
+    {
+      "name": "prefix_not_digits",
+      "rule": {
+        "prefix": "2a",
+        "item_code_length": 5,
+        "value_type": "price",
+        "decimals": 2,
+        "value_check_digit": false
+      },
+      "error": "prefix"
+    },
+    {
+      "name": "prefix_too_long",
+      "rule": {
+        "prefix": "2000",
+        "item_code_length": 5,
+        "value_type": "price",
+        "decimals": 2,
+        "value_check_digit": false
+      },
+      "error": "prefix"
+    },
+    {
+      "name": "item_code_zero",
+      "rule": {
+        "prefix": "20",
+        "item_code_length": 0,
+        "value_type": "price",
+        "decimals": 2,
+        "value_check_digit": false
+      },
+      "error": "item_code_length"
+    },
+    {
+      "name": "value_too_short",
+      "rule": {
+        "prefix": "20",
+        "item_code_length": 7,
+        "value_type": "price",
+        "decimals": 2,
+        "value_check_digit": false
+      },
+      "error": "item_code_length"
+    },
+    {
+      "name": "value_too_long",
+      "rule": {
+        "prefix": "20",
+        "item_code_length": 3,
+        "value_type": "price",
+        "decimals": 2,
+        "value_check_digit": false
+      },
+      "error": "item_code_length"
+    },
+    {
+      "name": "check_on_6_digits",
+      "rule": {
+        "prefix": "2",
+        "item_code_length": 4,
+        "value_type": "price",
+        "decimals": 2,
+        "value_check_digit": true
+      },
+      "error": "value_check_digit"
+    },
+    {
+      "name": "bad_value_type",
+      "rule": {
+        "prefix": "20",
+        "item_code_length": 5,
+        "value_type": "volume",
+        "decimals": 2,
+        "value_check_digit": false
+      },
+      "error": "value_type"
+    },
+    {
+      "name": "decimals_too_many",
+      "rule": {
+        "prefix": "20",
+        "item_code_length": 5,
+        "value_type": "price",
+        "decimals": 4,
+        "value_check_digit": false
+      },
+      "error": "decimals"
+    },
+    {
+      "name": "decimals_negative",
+      "rule": {
+        "prefix": "20",
+        "item_code_length": 5,
+        "value_type": "price",
+        "decimals": -1,
+        "value_check_digit": false
+      },
+      "error": "decimals"
+    }
+  ],
+  "cases": [
+    {
+      "name": "price",
+      "code": "2012345003453",
+      "result": {
+        "prefix": "20",
+        "item_code": "12345",
+        "value": "3.45",
+        "price": "3.45",
+        "weight_kg": null
+      }
+    },
+    {
+      "name": "weight_5_digit_check",
+      "code": "2100424005129",
+      "result": {
+        "prefix": "21",
+        "item_code": "0042",
+        "value": "0.512",
+        "price": null,
+        "weight_kg": "0.512"
+      }
+    },
+    {
+      "name": "price_4_digit_check",
+      "code": "2200077928759",
+      "result": {
+        "prefix": "22",
+        "item_code": "00077",
+        "value": "28.75",
+        "price": "28.75",
+        "weight_kg": null
+      }
+    },
+    {
+      "name": "overlap",
+      "code": "2300001019994",
+      "result": {
+        "prefix": "2",
+        "item_code": "300001",
+        "value": "19.99",
+        "price": "19.99",
+        "weight_kg": null
+      }
+    },
+    {
+      "name": "overlap_specific_wins",
+      "code": "2199996146859",
+      "result": {
+        "prefix": "21",
+        "item_code": "9999",
+        "value": "14.685",
+        "price": null,
+        "weight_kg": "14.685"
+      }
+    },
+    {
+      "name": "no_decimals",
+      "code": "2500010000123",
+      "result": {
+        "prefix": "25",
+        "item_code": "0001",
+        "value": "12",
+        "price": "12",
+        "weight_kg": null
+      }
+    },
+    {
+      "name": "zero",
+      "code": "2100420000005",
+      "result": {
+        "prefix": "21",
+        "item_code": "0042",
+        "value": "0.000",
+        "price": null,
+        "weight_kg": "0.000"
+      }
+    },
+    {
+      "name": "padded",
+      "code": " 2012345003453\r\n",
+      "result": {
+        "prefix": "20",
+        "item_code": "12345",
+        "value": "3.45",
+        "price": "3.45",
+        "weight_kg": null
+      }
+    },
+    {
+      "name": "bad_check_digit",
+      "code": "2012345003454",
+      "error": "check_digit"
+    },
+    {
+      "name": "bad_value_check_digit",
+      "code": "2100425005128",
+      "error": "value_check_digit"
+    },
+    {
+      "name": "bad_value_check_digit_4",
+      "code": "2200077028756",
+      "error": "value_check_digit"
+    },
+    {
+      "name": "unknown_prefix",
+      "code": "5012345678900",
+      "error": "unknown_prefix"
+    },
+    {
+      "name": "inactive_rule_falls_back",
+      "code": "2412345003451",
+      "result": {
+        "prefix": "2",
+        "item_code": "412345",
+        "value": "3.45",
+        "price": "3.45",
+        "weight_kg": null
+      }
+    },
+    {
+      "name": "too_short",
+      "code": "2012345",
+      "error": "format"
+    },
+    {
+      "name": "not_digits",
+      "code": "20123A5003450",
+      "error": "format"
+    },
+    {
+      "name": "empty",
+      "code": "",
+      "error": "format"
+    }
+  ]
+}

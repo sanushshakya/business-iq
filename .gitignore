@@ -29,3 +29,7 @@ staticfiles/
 
 # Uploaded files
 media/
+
+# Coverage reports
+.coverage
+htmlcov/

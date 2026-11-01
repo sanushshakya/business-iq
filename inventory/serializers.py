@@ -14,7 +14,7 @@ from common.tenancy import TenantModelSerializer
 from . import requisitions, transfers
 from .ledger import move, virtual_location
 from .models import (
-    Location, Order, Product, ProductCategory, Requisition, RequisitionLine, StockBatch, StockMovement, Supplier,
+    BarcodeRule, Location, Order, Product, ProductCategory, Requisition, RequisitionLine, StockBatch, StockMovement, Supplier,
     Transfer, TransferLine,
 )
 
@@ -390,3 +390,35 @@ class RequisitionFulfilSerializer(TenantModelSerializer):
     class Meta:
         model = Transfer
         fields = ['source_location', 'lines']
+
+
+class BarcodeRuleSerializer(TenantModelSerializer):
+    """A scale-label layout. ``value_length`` is what is left of the 13 digits for the price or weight."""
+
+    value_length = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BarcodeRule
+        fields = ['id', 'name', 'prefix', 'item_code_length', 'value_type', 'decimals', 'value_check_digit',
+                  'value_length', 'is_active']
+
+    def get_value_length(self, rule) -> int:
+        return rule.to_rule().value_length
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        # Fields left out keep the instance's value, or the model default on create.
+        merged = {name: attrs[name] if name in attrs else getattr(
+                      self.instance, name, BarcodeRule._meta.get_field(name).get_default())
+                  for name in ('prefix', 'item_code_length', 'value_type', 'decimals', 'value_check_digit')}
+        error = BarcodeRule(**merged).to_rule().layout_error()
+        if error:
+            field, message = error.split(': ', 1)
+            raise serializers.ValidationError({field: message})
+        company = self.context['request'].user.company
+        taken = BarcodeRule.objects.filter(company=company, prefix=merged['prefix'])
+        if self.instance is not None:
+            taken = taken.exclude(pk=self.instance.pk)
+        if taken.exists():
+            raise serializers.ValidationError({'prefix': 'Another rule already uses this prefix.'})
+        return attrs

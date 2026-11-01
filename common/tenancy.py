@@ -58,6 +58,7 @@ TENANT_LOOKUPS = {
     'authentication.UserInvitation': 'company',
     'authentication.TwoFactorEvent': 'company',
     'inventory.Location': 'company',
+    'inventory.BarcodeRule': 'company',
     'inventory.Transfer': 'company',
     'inventory.TransferLine': 'transfer__company',
     'inventory.TransferPick': 'line__transfer__company',

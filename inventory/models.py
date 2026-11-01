@@ -413,3 +413,51 @@ class RequisitionLine(models.Model):
     @property
     def open_quantity(self):
         return max(self.quantity - self.fulfilled_quantity, 0)
+
+
+class BarcodeRule(models.Model):
+    """
+    How the company's scales lay out a variable-measure EAN-13 label (G15): ``prefix | item code | [value check
+    digit] | value | check digit``. The value (a price in GBP or a weight in kg, with ``decimals``) takes the digits
+    left over. Read with ``inventory.barcode_parser.parse(code, [rule.to_rule() ...])``; the longest prefix wins.
+    """
+
+    PRICE, WEIGHT = 'price', 'weight'
+    VALUE_TYPES = [(PRICE, 'Price (GBP)'), (WEIGHT, 'Weight (kg)')]
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='barcode_rules')
+    name = models.CharField(max_length=100, blank=True)
+    prefix = models.CharField(max_length=3, help_text='1 to 3 digits starting with 2, e.g. 20.')
+    item_code_length = models.PositiveSmallIntegerField()
+    value_type = models.CharField(max_length=10, choices=VALUE_TYPES)
+    decimals = models.PositiveSmallIntegerField(default=2)
+    value_check_digit = models.BooleanField(default=False, help_text='A GS1 check digit sits before the value.')
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['prefix']
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'prefix'], name='unique_barcode_prefix_per_company'),
+        ]
+
+    def __str__(self):
+        return f'{self.prefix}… {self.name or self.get_value_type_display()}'
+
+    def to_rule(self):
+        from .barcode_parser import Rule
+
+        return Rule(prefix=self.prefix, item_code_length=self.item_code_length, value_type=self.value_type,
+                    decimals=self.decimals, value_check_digit=self.value_check_digit, is_active=self.is_active)
+
+    def clean(self):
+        layout = (self.prefix, self.item_code_length, self.value_type, self.decimals, self.value_check_digit)
+        if any(value in (None, '') for value in layout):
+            return  # the field errors already say what is missing
+        error = self.to_rule().layout_error()
+        if error:
+            field, message = error.split(': ', 1)
+            raise ValidationError({field: message})
+        # The admin leaves company out of the form, so the unique constraint is not checked there.
+        if self.company_id and BarcodeRule.objects.filter(company_id=self.company_id, prefix=self.prefix).exclude(
+                pk=self.pk).exists():
+            raise ValidationError({'prefix': 'Another rule already uses this prefix.'})

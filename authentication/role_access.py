@@ -42,6 +42,7 @@ ROLE_ROUTES = {
         _collection('tenants/tills', READ)
         + _collection('tenants/branches', READ)
         + _collection('inventory/products', READ)
+        + _collection('inventory/barcode-rules', READ)
         + _route(r'^/sales/sessions/$', 'GET', 'POST')
         + _route(r'^/sales/sessions/\d+/$', 'GET')
         + _route(r'^/sales/sessions/\d+/close/$', 'POST')

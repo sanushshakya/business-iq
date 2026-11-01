@@ -81,7 +81,7 @@ class SaleItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = SaleItem
         fields = [
-            'id', 'product', 'product_name', 'quantity', 'unit_price', 'line_total',
+            'id', 'product', 'product_name', 'quantity', 'unit_price', 'weight_kg', 'price_per_kg', 'line_total',
             'vat_code', 'vat_rate', 'net_amount', 'vat_amount',
         ]
         read_only_fields = fields
@@ -116,8 +116,30 @@ class SaleSerializer(serializers.ModelSerializer):
 
 
 class SaleLineSerializer(serializers.Serializer):
+    """
+    A scanned or entered line. Each products send ``quantity``. Products sold by weight send ``weight_kg``: loose ones
+    as one line (``quantity`` 1 or left out), catch-weight ones with ``quantity`` pieces weighing ``weight_kg`` in all.
+    """
+
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
-    quantity = serializers.IntegerField(min_value=1, max_value=10000)
+    quantity = serializers.IntegerField(min_value=1, max_value=10000, required=False)
+    weight_kg = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=Decimal('0.001'), required=False,
+                                         allow_null=True)
+
+    def validate(self, line):
+        product, quantity, weight = line['product'], line.get('quantity'), line.get('weight_kg')
+        if not product.is_weighed:
+            if weight is not None:
+                raise serializers.ValidationError(f'{product.name} is sold by each; leave the kg out.')
+            if quantity is None:
+                raise serializers.ValidationError(f'{product.name}: say how many.')
+        elif weight is None:
+            raise serializers.ValidationError(f'{product.name} is sold by weight; weigh it.')
+        elif product.is_catch_weight and quantity is None:
+            raise serializers.ValidationError(f'{product.name}: say how many pieces.')
+        elif not product.is_catch_weight and quantity not in (None, 1):
+            raise serializers.ValidationError(f'{product.name} is sold loose: one line per weighing.')
+        return {**line, 'quantity': quantity or 1}
 
 
 class CreateSaleSerializer(serializers.Serializer):

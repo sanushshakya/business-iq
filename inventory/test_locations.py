@@ -233,6 +233,17 @@ class LocationApiTests(TestCase):
                                   format='json').status_code, 403)
         self.assertEqual(api.patch(self.url(pk), {'name': 'Renamed'}, format='json').status_code, 403)
 
+    def test_superuser_without_company_403(self):
+        from rest_framework.test import APIClient
+
+        from common.tests.factories import UserFactory
+
+        api = APIClient()
+        api.force_authenticate(UserFactory(company=None, is_staff=True, is_superuser=True))
+        self.assertEqual(api.get(self.url()).status_code, 403)
+        response = api.post(self.url(), {'code': 'WH-2', 'name': 'Fake', 'type': 'warehouse'}, format='json')
+        self.assertEqual(response.status_code, 403)
+
     def test_till_operator_cannot_read_locations(self):
         self.assertEqual(self.operator('till').get(self.url()).status_code, 403)
 

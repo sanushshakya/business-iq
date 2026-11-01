@@ -75,7 +75,7 @@ class StockBatchViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         queryset = super().get_queryset()
         for name in ('location', 'product'):
             value = self.request.query_params.get(name, '')
-            if value.isdigit():
+            if value.isascii() and value.isdigit():  # '²'.isdigit() is True but not an id
                 queryset = queryset.filter(**{f'{name}_id': value})
         return queryset
 
@@ -95,6 +95,13 @@ class StockMovementViewSet(
     serializer_class = StockMovementSerializer
 
 
+class CompanyMemberReadsStaffWrites(IsCompanyStaffOrReadOnly):
+    """Members of a company read, its staff change; a user with no company (even a superuser) gets 403."""
+
+    def has_permission(self, request, view):
+        return bool(getattr(request.user, 'company_id', None)) and super().has_permission(request, view)
+
+
 @extend_schema_view(list=extend_schema(parameters=[
     OpenApiParameter('type', str, description='Only this type, e.g. warehouse.'),
     OpenApiParameter('branch', int, description='Only locations in this branch.'),
@@ -108,7 +115,7 @@ class LocationViewSet(TenantScopedMixin, viewsets.ModelViewSet):
 
     queryset = Location.objects.select_related('branch')
     serializer_class = LocationSerializer
-    permission_classes = [IsCompanyStaffOrReadOnly]
+    permission_classes = [CompanyMemberReadsStaffWrites]
 
     def get_queryset(self):
         queryset = super().get_queryset()

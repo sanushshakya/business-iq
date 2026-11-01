@@ -35,6 +35,7 @@ class BatchFilterTests(TestCase):
         self.assertEqual(self.ids(product=self.rice.pk), {self.at_shop.pk, self.at_wh.pk})
         self.assertEqual(self.ids(location=self.wh.pk, product=self.rice.pk), {self.at_wh.pk})
         self.assertEqual(len(self.ids(location='x')), 3)  # not a number: ignored
+        self.assertEqual(len(self.ids(location='²', product='٣')), 3)  # non-ASCII digits: ignored, not a 500
 
     def test_other_company_location_filter_returns_nothing(self):
         other = CompanyFactory()

@@ -39,7 +39,10 @@ rules = [
     {"name": "Fake whole pounds", "prefix": "25", "item_code_length": 4, "value_type": "price", "decimals": 0, "value_check_digit": False, "is_active": True},
     {"name": "Fake retired", "prefix": "24", "item_code_length": 5, "value_type": "price", "decimals": 2, "value_check_digit": False, "is_active": False},
 ]
-P = lambda prefix, item, value, price=None, weight=None: {"prefix": prefix, "item_code": item, "value": value, "price": price, "weight_kg": weight}
+def P(prefix, item, value, price=None, weight=None):
+    return {"prefix": prefix, "item_code": item, "value": value, "price": price, "weight_kg": weight}
+
+
 cases = [
     {"name": "price", "code": code("20", "12345", "00345", False), "result": P("20", "12345", "3.45", price="3.45")},
     {"name": "weight_5_digit_check", "code": code("21", "0042", "00512", True), "result": P("21", "0042", "0.512", weight="0.512")},

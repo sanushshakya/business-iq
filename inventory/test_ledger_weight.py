@@ -6,7 +6,6 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.db import transaction
-from django.db.models import Sum
 from django.test import TestCase
 from django.utils import timezone
 

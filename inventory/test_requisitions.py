@@ -2,6 +2,8 @@
 
 """G12: store requisitions, fulfilled by the warehouse as transfers (in full or in parts)."""
 
+from decimal import Decimal
+
 from django.contrib.auth import get_user_model
 from django.db.models import Sum
 from django.test import TestCase
@@ -298,3 +300,13 @@ class RequisitionReviewTests(RequisitionSetUp):
         self.assertEqual(api.patch(url, {'destination_location': back.pk}, format='json').status_code, 400)
         response = api.get(url).json()
         self.assertEqual(response['lines'][0]['requisition_line'], self.lines(requisition)['Fake rice'].pk)
+
+
+class WeighedRequisitionTests(RequisitionSetUp):
+    def test_weighed_product_refused(self):
+        mince = ProductFactory(company=self.company, name='Fake mince', sold_by='weight',
+                               price_per_kg=Decimal('8.0000'))
+        with self.assertRaises(requisitions.RequisitionError) as caught:
+            self.raise_requisition(lines=[(mince, 2)])
+        self.assertIn('sold by weight', str(caught.exception.detail))
+        self.assertFalse(Requisition.objects.exists())

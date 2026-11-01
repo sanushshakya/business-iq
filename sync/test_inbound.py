@@ -150,3 +150,44 @@ class OrderPaidLocationTests(TestCase):
         movement = StockMovement.objects.get()
         self.assertEqual((movement.source_location, movement.destination_location.type),
                          (self.batch.location, 'customer'))
+
+
+class OrderPaidWeighedTests(TestCase):
+    """G14: catch-weight products are taken by piece with their batch's average kg; loose ones are not taken."""
+
+    setUp = OrderPaidInboundTests.setUp
+    envelope = OrderPaidInboundTests.envelope
+    post = OrderPaidInboundTests.post
+
+    def weighed(self, catch, pieces, kg):
+        external_id = str(uuid.uuid4())
+        product = ProductFactory(company=self.company, external_id=external_id, sold_by='weight',
+                                 is_catch_weight=catch, price_per_kg=Decimal('9.0000'), stock_quantity=pieces)
+        batch = StockBatchFactory(product=product, quantity=pieces, weight_kg=Decimal(kg))
+        return external_id, batch
+
+    def test_catch_weight_takes_pieces_and_average_kg(self):
+        external_id, batch = self.weighed(True, 4, '2.000')
+        response = self.post(self.envelope([{'product_id': external_id, 'quantity': 1, 'unit_price': '4.50'}]))
+        self.assertEqual(response.json()['status'], 'applied')
+        batch.refresh_from_db()
+        self.assertEqual((batch.quantity, batch.weight_kg), (3, Decimal('1.500')))
+
+    def test_catch_weight_short_takes_what_exists(self):
+        external_id, batch = self.weighed(True, 2, '1.000')
+        response = self.post(self.envelope([{'product_id': external_id, 'quantity': 3, 'unit_price': '4.50'}]))
+        self.assertEqual(response.json()['status'], 'partial')
+        self.assertEqual(InboundEvent.objects.get().detail,
+                         [{'product_id': external_id, 'requested': 3, 'taken': 2, 'reason': 'short_stock'}])
+        batch.refresh_from_db()
+        self.assertEqual((batch.quantity, batch.weight_kg), (0, Decimal('0.000')))
+
+    def test_loose_is_recorded_not_taken(self):
+        external_id, batch = self.weighed(False, 0, '3.000')
+        response = self.post(self.envelope([{'product_id': external_id, 'quantity': 1, 'unit_price': '4.50'}]))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['status'], 'partial')
+        self.assertEqual(InboundEvent.objects.get().detail,
+                         [{'product_id': external_id, 'requested': 1, 'taken': 0, 'reason': 'sold_by_weight'}])
+        batch.refresh_from_db()
+        self.assertEqual(batch.weight_kg, Decimal('3.000'))

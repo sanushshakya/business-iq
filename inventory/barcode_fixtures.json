@@ -1,5 +1,5 @@
 {
-  "_about": "G15 shared fixtures for the scale-label EAN-13 parser (Python now, JavaScript in G17). Codes are fake.",
+  "_about": "Shared barcode fixtures: G15 scale-label EAN-13 (rules, layouts, cases) and G16 GS1 element strings (gs1_cases) (Python now, JavaScript in G17). Codes are fake.",
   "rules": [
     {
       "name": "Fake price labels",
@@ -334,6 +334,824 @@
     {
       "name": "empty",
       "code": "",
+      "error": "format"
+    }
+  ],
+  "gs1_check_digits": [
+    {
+      "digits": "0950110153000",
+      "check": 3
+    },
+    {
+      "digits": "0501234567890",
+      "check": 0
+    }
+  ],
+  "gs1_cases": [
+    {
+      "name": "gs_separated",
+      "code": "010501234567890031030005121726123110LOT42\u001d392200460",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": "05012345678900",
+        "batch": "LOT42",
+        "weight_kg": "0.512",
+        "price": "4.60",
+        "expiry": "2026-12-31",
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "01": "05012345678900",
+          "3103": "000512",
+          "17": "261231",
+          "10": "LOT42",
+          "3922": "00460"
+        }
+      }
+    },
+    {
+      "name": "hri",
+      "code": "(01)05012345678900(3103)000512(17)261231(10)LOT42(3922)00460",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": "05012345678900",
+        "batch": "LOT42",
+        "weight_kg": "0.512",
+        "price": "4.60",
+        "expiry": "2026-12-31",
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "01": "05012345678900",
+          "3103": "000512",
+          "17": "261231",
+          "10": "LOT42",
+          "3922": "00460"
+        }
+      }
+    },
+    {
+      "name": "symbology_e0",
+      "code": "]e0010501234567890031030005121726123110LOT42\u001d392200460",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": "05012345678900",
+        "batch": "LOT42",
+        "weight_kg": "0.512",
+        "price": "4.60",
+        "expiry": "2026-12-31",
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "01": "05012345678900",
+          "3103": "000512",
+          "17": "261231",
+          "10": "LOT42",
+          "3922": "00460"
+        }
+      }
+    },
+    {
+      "name": "symbology_c1_leading_gs",
+      "code": "]C1\u001d010501234567890031030005121726123110LOT42\u001d392200460\r\n",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": "05012345678900",
+        "batch": "LOT42",
+        "weight_kg": "0.512",
+        "price": "4.60",
+        "expiry": "2026-12-31",
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "01": "05012345678900",
+          "3103": "000512",
+          "17": "261231",
+          "10": "LOT42",
+          "3922": "00460"
+        }
+      }
+    },
+    {
+      "name": "symbology_d2",
+      "code": "]d2010501234567890031030005121726123110LOT42\u001d392200460",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": "05012345678900",
+        "batch": "LOT42",
+        "weight_kg": "0.512",
+        "price": "4.60",
+        "expiry": "2026-12-31",
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "01": "05012345678900",
+          "3103": "000512",
+          "17": "261231",
+          "10": "LOT42",
+          "3922": "00460"
+        }
+      }
+    },
+    {
+      "name": "symbology_q3",
+      "code": "]Q3010501234567890031030005121726123110LOT42\u001d392200460",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": "05012345678900",
+        "batch": "LOT42",
+        "weight_kg": "0.512",
+        "price": "4.60",
+        "expiry": "2026-12-31",
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "01": "05012345678900",
+          "3103": "000512",
+          "17": "261231",
+          "10": "LOT42",
+          "3922": "00460"
+        }
+      }
+    },
+    {
+      "name": "gs_after_fixed",
+      "code": "0105012345678900\u001d3103000750\u001d17261115",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": "05012345678900",
+        "batch": null,
+        "weight_kg": "0.750",
+        "price": null,
+        "expiry": "2026-11-15",
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "01": "05012345678900",
+          "3103": "000750",
+          "17": "261115"
+        }
+      }
+    },
+    {
+      "name": "fixed_only_no_gs",
+      "code": "0105012345678900310300075017261115",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": "05012345678900",
+        "batch": null,
+        "weight_kg": "0.750",
+        "price": null,
+        "expiry": "2026-11-15",
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "01": "05012345678900",
+          "3103": "000750",
+          "17": "261115"
+        }
+      }
+    },
+    {
+      "name": "variable_last_no_gs",
+      "code": "01050123456789001726111510ABC123",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": "05012345678900",
+        "batch": "ABC123",
+        "weight_kg": null,
+        "price": null,
+        "expiry": "2026-11-15",
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "01": "05012345678900",
+          "17": "261115",
+          "10": "ABC123"
+        }
+      }
+    },
+    {
+      "name": "batch_at_max_length",
+      "code": "10AAAAAAAAAAAAAAAAAAAA",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": "AAAAAAAAAAAAAAAAAAAA",
+        "weight_kg": null,
+        "price": null,
+        "expiry": null,
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "10": "AAAAAAAAAAAAAAAAAAAA"
+        }
+      }
+    },
+    {
+      "name": "variable_overflow",
+      "code": "010501234567890010AAAAAAAAAAAAAAAAAAAA392200460",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "short_batch_swallows_price",
+      "code": "010501234567890010LOT42392200460",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": "05012345678900",
+        "batch": "LOT42392200460",
+        "weight_kg": null,
+        "price": null,
+        "expiry": null,
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "01": "05012345678900",
+          "10": "LOT42392200460"
+        }
+      }
+    },
+    {
+      "name": "batch_looks_like_ai",
+      "code": "010501234567890010AB17261231",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": "05012345678900",
+        "batch": "AB17261231",
+        "weight_kg": null,
+        "price": null,
+        "expiry": null,
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "01": "05012345678900",
+          "10": "AB17261231"
+        }
+      }
+    },
+    {
+      "name": "batch_symbols",
+      "code": "10A-1/2_x.%",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": "A-1/2_x.%",
+        "weight_kg": null,
+        "price": null,
+        "expiry": null,
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "10": "A-1/2_x.%"
+        }
+      }
+    },
+    {
+      "name": "weight_2_decimals",
+      "code": "3102001250",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": "12.500",
+        "price": null,
+        "expiry": null,
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "3102": "001250"
+        }
+      }
+    },
+    {
+      "name": "weight_0_decimals",
+      "code": "3100000002",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": "2.000",
+        "price": null,
+        "expiry": null,
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "3100": "000002"
+        }
+      }
+    },
+    {
+      "name": "weight_5_decimals",
+      "code": "3105000512",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": "0.00512",
+        "price": null,
+        "expiry": null,
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "3105": "000512"
+        }
+      }
+    },
+    {
+      "name": "zero_weight",
+      "code": "3103000000",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": "0.000",
+        "price": null,
+        "expiry": null,
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "3103": "000000"
+        }
+      }
+    },
+    {
+      "name": "price_3920",
+      "code": "392012",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": null,
+        "price": "12.00",
+        "expiry": null,
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "3920": "12"
+        }
+      }
+    },
+    {
+      "name": "price_3921",
+      "code": "39211",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": null,
+        "price": "0.10",
+        "expiry": null,
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "3921": "1"
+        }
+      }
+    },
+    {
+      "name": "price_3923_whole_pence",
+      "code": "39234600",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": null,
+        "price": "4.60",
+        "expiry": null,
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "3923": "4600"
+        }
+      }
+    },
+    {
+      "name": "price_fractional_pence",
+      "code": "39234605",
+      "today": "2026-11-01",
+      "error": "value"
+    },
+    {
+      "name": "price_at_max_length",
+      "code": "3922000000000000001",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": null,
+        "price": "0.01",
+        "expiry": null,
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "3922": "000000000000001"
+        }
+      }
+    },
+    {
+      "name": "price_too_long",
+      "code": "39220000000000000001",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "day_00",
+      "code": "17260200",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": null,
+        "price": null,
+        "expiry": "2026-02-28",
+        "best_before": null,
+        "expired": true,
+        "elements": {
+          "17": "260200"
+        }
+      }
+    },
+    {
+      "name": "day_00_leap",
+      "code": "17280200",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": null,
+        "price": null,
+        "expiry": "2028-02-29",
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "17": "280200"
+        }
+      }
+    },
+    {
+      "name": "century_50_ahead_same",
+      "code": "17761231",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": null,
+        "price": null,
+        "expiry": "2076-12-31",
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "17": "761231"
+        }
+      }
+    },
+    {
+      "name": "century_51_ahead_previous",
+      "code": "17771231",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": null,
+        "price": null,
+        "expiry": "1977-12-31",
+        "best_before": null,
+        "expired": true,
+        "elements": {
+          "17": "771231"
+        }
+      }
+    },
+    {
+      "name": "century_50_behind_next",
+      "code": "17300101",
+      "today": "2080-01-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": null,
+        "price": null,
+        "expiry": "2130-01-01",
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "17": "300101"
+        }
+      }
+    },
+    {
+      "name": "century_49_behind_same",
+      "code": "17310101",
+      "today": "2080-01-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": null,
+        "price": null,
+        "expiry": "2031-01-01",
+        "best_before": null,
+        "expired": true,
+        "elements": {
+          "17": "310101"
+        }
+      }
+    },
+    {
+      "name": "impossible_month",
+      "code": "17261332",
+      "today": "2026-11-01",
+      "error": "date"
+    },
+    {
+      "name": "impossible_day",
+      "code": "17260230",
+      "today": "2026-11-01",
+      "error": "date"
+    },
+    {
+      "name": "expired",
+      "code": "17261031",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": null,
+        "price": null,
+        "expiry": "2026-10-31",
+        "best_before": null,
+        "expired": true,
+        "elements": {
+          "17": "261031"
+        }
+      }
+    },
+    {
+      "name": "expires_today",
+      "code": "17261101",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": null,
+        "price": null,
+        "expiry": "2026-11-01",
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "17": "261101"
+        }
+      }
+    },
+    {
+      "name": "other_dates",
+      "code": "112610201326102115261120",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": null,
+        "price": null,
+        "expiry": null,
+        "best_before": "2026-11-20",
+        "expired": false,
+        "elements": {
+          "11": "261020",
+          "13": "261021",
+          "15": "261120"
+        }
+      }
+    },
+    {
+      "name": "past_best_before_not_expired",
+      "code": "15261020",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": null,
+        "price": null,
+        "expiry": null,
+        "best_before": "2026-10-20",
+        "expired": false,
+        "elements": {
+          "15": "261020"
+        }
+      }
+    },
+    {
+      "name": "bad_production_date",
+      "code": "11261340",
+      "today": "2026-11-01",
+      "error": "date"
+    },
+    {
+      "name": "bad_gtin_check_digit",
+      "code": "0105012345678901",
+      "today": "2026-11-01",
+      "error": "check_digit"
+    },
+    {
+      "name": "gtin_not_digits",
+      "code": "0105012A45678900",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "unknown_ai",
+      "code": "21SERIAL",
+      "today": "2026-11-01",
+      "error": "unknown_ai"
+    },
+    {
+      "name": "price_with_currency_unsupported",
+      "code": "39328261299",
+      "today": "2026-11-01",
+      "error": "unknown_ai"
+    },
+    {
+      "name": "weight_6_decimals_unsupported",
+      "code": "3106000512",
+      "today": "2026-11-01",
+      "error": "unknown_ai"
+    },
+    {
+      "name": "pounds_unsupported",
+      "code": "3202001250",
+      "today": "2026-11-01",
+      "error": "unknown_ai"
+    },
+    {
+      "name": "repeated_ai",
+      "code": "1726123117261231",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "non_ascii",
+      "code": "10LOT\u00e9",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "batch_with_space",
+      "code": "10LOT 42",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "weight_not_digits",
+      "code": "3103000A12",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "empty",
+      "code": "  ",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "only_separator",
+      "code": "]e0\u001d",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "truncated_fixed",
+      "code": "01050123",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "lone_digit",
+      "code": "0",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "ai_not_digits",
+      "code": "AB1234",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "empty_variable",
+      "code": "10\u001d17261231",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "double_separator",
+      "code": "10LOT\u001d\u001d17261231",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "trailing_gs",
+      "code": "3103000512\u001d",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": "0.512",
+        "price": null,
+        "expiry": null,
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "3103": "000512"
+        }
+      }
+    },
+    {
+      "name": "trailing_double_gs",
+      "code": "3103000512\u001d\u001d",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "gs_before_symbology",
+      "code": "\u001d]C1010501234567890031030005121726123110LOT42\u001d392200460",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "no_break_space_kept",
+      "code": "\u00a03103000512",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "hri_full_width_digits",
+      "code": "(\uff10\uff11)05012345678900",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "hri_with_symbology",
+      "code": "]e0(01)05012345678900(17)261231\n",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": "05012345678900",
+        "batch": null,
+        "weight_kg": null,
+        "price": null,
+        "expiry": "2026-12-31",
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "01": "05012345678900",
+          "17": "261231"
+        }
+      }
+    },
+    {
+      "name": "hri_mixed_with_gs",
+      "code": "(01)05012345678900\u001d(17)261231",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "hri_short_fixed",
+      "code": "(17)2612",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "hri_unknown_ai",
+      "code": "(21)ABC",
+      "today": "2026-11-01",
+      "error": "unknown_ai"
+    },
+    {
+      "name": "hri_unclosed",
+      "code": "(01",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "hri_text_before_bracket",
+      "code": "(01)05012345678900x(17)261231",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "hri_stray_bracket",
+      "code": "(01)05012345678900)(17)261231",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "hri_empty_variable",
+      "code": "(10)(17)261231",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "hri_ai_not_digits",
+      "code": "(1A)123",
+      "today": "2026-11-01",
       "error": "format"
     }
   ]

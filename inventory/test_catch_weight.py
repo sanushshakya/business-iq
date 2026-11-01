@@ -5,6 +5,7 @@
 from decimal import Decimal
 
 from django.test import TestCase
+from django.utils import timezone
 from django.urls import reverse
 from rest_framework.test import APIClient
 
@@ -137,3 +138,39 @@ class WeighedReceivingTests(TestCase):
         self.assertEqual(self.move(batch, 'outbound', quantity=0).status_code, 400)
         self.assertEqual(self.move(batch, 'outbound', quantity=1).status_code, 201)
         self.assertIsNone(StockMovement.objects.get().weight_kg)
+
+
+class WeighedReviewTests(WeighedReceivingTests):
+    def test_last_pieces_must_take_all_their_kg(self):
+        batch = StockBatchFactory(product=self.packs, quantity=2, weight_kg=Decimal('1.000'))
+        url = reverse('stockmovement-list')
+        response = self.api.post(url, {'batch': batch.pk, 'movement_type': 'outbound', 'quantity': 2,
+                                       'weight_kg': '0.600'}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('weight_kg', response.json())
+        response = self.api.post(url, {'batch': batch.pk, 'movement_type': 'outbound', 'quantity': 2,
+                                       'weight_kg': '1.000'}, format='json')
+        self.assertEqual(response.status_code, 201, response.content)
+
+    def test_kind_locked_while_a_sale_can_still_be_voided(self):
+        from sales.models import SaleAllocation, SaleItem
+        from sales.tests.test_sales import make_till
+        from sales.models import Sale, TillSession
+
+        till = make_till(self.company)
+        user = UserFactory(company=self.company)
+        session = TillSession.objects.create(till=till, opened_by=user)
+        sale = Sale.objects.create(session=session, cashier=user, payment_method='card', total=Decimal('1.00'),
+                                   amount_tendered=Decimal('1.00'))
+        batch = StockBatchFactory(product=self.each, quantity=0)
+        item = SaleItem.objects.create(sale=sale, product=self.each, product_name='x', quantity=1,
+                                       unit_price=Decimal('1.00'), line_total=Decimal('1.00'))
+        SaleAllocation.objects.create(item=item, batch=batch, quantity=1)
+        url = reverse('product-detail', args=[self.each.pk])
+        body = {'sold_by': 'weight', 'price_per_kg': '5.0000'}
+        response = self.api.patch(url, body, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('sold_by', response.json())
+        session.closed_at = timezone.now()
+        session.save()
+        self.assertEqual(self.api.patch(url, body, format='json').status_code, 200)

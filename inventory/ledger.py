@@ -94,10 +94,13 @@ def move(batch, quantity, movement_type, *, counterpart, weight_kg=None, transfe
         source, destination = counterpart, location
     else:
         source, destination = location, counterpart
-    changes = {'quantity': F('quantity') + sign * quantity}
-    if weighed:  # exact Decimal from the locked row (an F() sum drifts where the database stores floats)
-        held = StockBatch.objects.filter(pk=batch.pk).values_list('weight_kg', flat=True).get()
-        changes['weight_kg'] = held + sign * weight_kg
+    # Exact values from the locked row (an F() sum of kg drifts where the database stores floats); never below 0.
+    pieces, kg = StockBatch.objects.filter(pk=batch.pk).values_list('quantity', 'weight_kg').get()
+    changes = {'quantity': pieces + sign * quantity}
+    if weighed:
+        changes['weight_kg'] = kg + sign * weight_kg
+    if changes['quantity'] < 0 or changes.get('weight_kg', 0) < 0:
+        raise LedgerError(f'Batch {batch.batch_number} holds {pieces} unit(s) and {kg} kg; that would go below 0.')
     StockBatch.objects.filter(pk=batch.pk).update(**changes)
     Product.objects.filter(pk=batch.product_id).update(stock_quantity=F('stock_quantity') + sign * quantity)
     return StockMovement.objects.create(
@@ -164,7 +167,7 @@ def take_weighed(product, *, quantity, weight_kg, locations, destination, today=
     available = sum(batch.quantity for batch in batches)
     if available < quantity:
         raise LedgerError(f'Only {available} of {product} in date here.', available=available)
-    allocations, pieces_left, kg_left = [], quantity, weight_kg
+    allocations, pieces_left, kg_taken = [], quantity, Decimal('0')
     for batch in batches:
         if pieces_left <= 0:
             break
@@ -172,8 +175,8 @@ def take_weighed(product, *, quantity, weight_kg, locations, destination, today=
         last_of_batch = pieces == batch.quantity
         if weight_kg is None:
             kg = batch.weight_kg if last_of_batch else _kg(batch.weight_kg * pieces / batch.quantity)
-        else:
-            kg = kg_left if pieces == pieces_left else _kg(weight_kg * pieces / quantity)
+        else:  # cumulative rounding: the shares sum to the line's kg exactly and are never negative
+            kg = _kg(weight_kg * (quantity - pieces_left + pieces) / quantity) - kg_taken
         held = batch.weight_kg
         if held < kg:
             move(batch, 0, 'inbound', counterpart=adjustment, weight_kg=kg - held)
@@ -183,8 +186,7 @@ def take_weighed(product, *, quantity, weight_kg, locations, destination, today=
             move(batch, 0, 'outbound', counterpart=adjustment, weight_kg=held - kg)
         allocations.append((batch, pieces, kg))
         pieces_left -= pieces
-        if kg_left is not None:
-            kg_left -= kg
+        kg_taken += kg
     return allocations
 
 

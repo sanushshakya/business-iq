@@ -152,3 +152,9 @@ class WeighedSaleTests(SalesTestCase):
         self.assertEqual([(g['vat_code'], g['vat']) for g in body['vat_summary']],
                          [('zero', '0.00'), ('standard', '1.05')])
         self.assertEqual(StockBatch.objects.get(product=cola).quantity, 8)  # each line unchanged
+
+    def test_weighing_has_a_ceiling(self):
+        rice = self.weighed(batches=((0, '5.000', 5),))
+        response = self.charge(self.open()['id'], [{'product': rice.pk, 'weight_kg': '500.000'}])
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(StockMovement.objects.exists())

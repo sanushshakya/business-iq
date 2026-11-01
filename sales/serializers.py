@@ -123,8 +123,9 @@ class SaleLineSerializer(serializers.Serializer):
 
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
     quantity = serializers.IntegerField(min_value=1, max_value=10000, required=False)
-    weight_kg = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=Decimal('0.001'), required=False,
-                                         allow_null=True)
+    # A ceiling per weighing, so a keying slip (500 for 0.500) is refused rather than booked as found stock.
+    weight_kg = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=Decimal('0.001'),
+                                         max_value=Decimal('100'), required=False, allow_null=True)
 
     def validate(self, line):
         product, quantity, weight = line['product'], line.get('quantity'), line.get('weight_kg')

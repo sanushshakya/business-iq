@@ -49,11 +49,20 @@ class ProductSerializer(TenantModelSerializer):
         if self.instance is not None:
             # Kg and counts mean different things per kind, so the kind is fixed while any stock is held.
             for name in ('sold_by', 'is_catch_weight'):
-                if name in attrs and attrs[name] != getattr(self.instance, name) and StockBatch.objects.filter(
-                    Q(quantity__gt=0) | Q(weight_kg__gt=0), product=self.instance
-                ).exists():
-                    raise serializers.ValidationError({name: 'This product holds stock; empty its stock first.'})
+                if name in attrs and attrs[name] != getattr(self.instance, name) and self._kind_in_use():
+                    raise serializers.ValidationError(
+                        {name: 'This product holds stock or has a sale that can still be voided; empty its stock '
+                               'and close the till sessions first.'})
         return attrs
+
+    def _kind_in_use(self):
+        """Stock held, or a completed sale in an open session (a void would put its units back)."""
+        from sales.models import Sale, SaleAllocation
+
+        return StockBatch.objects.filter(Q(quantity__gt=0) | Q(weight_kg__gt=0), product=self.instance).exists() or (
+            SaleAllocation.objects.filter(item__product=self.instance, item__sale__status=Sale.COMPLETED,
+                                          item__sale__session__closed_at__isnull=True).exists()
+        )
 
 
 class OrderSerializer(TenantModelSerializer):
@@ -188,6 +197,11 @@ class StockMovementSerializer(TenantModelSerializer):
         if movement_type == 'outbound' and weight is not None and weight > batch.weight_kg:
             raise serializers.ValidationError(
                 {'weight_kg': f'Only {batch.weight_kg} kg left in batch {batch.batch_number}.'})
+        if (movement_type == 'outbound' and batch.product.is_catch_weight and quantity
+                and quantity == batch.quantity and weight != batch.weight_kg):
+            # the last pieces take their kg with them, so no batch holds kg with no pieces
+            raise serializers.ValidationError(
+                {'weight_kg': f'These are the last pieces of batch {batch.batch_number}: move all {batch.weight_kg} kg.'})
         counterpart = virtual_location(
             batch.location.company_id, Location.SUPPLIER if movement_type == 'inbound' else Location.ADJUSTMENT
         )

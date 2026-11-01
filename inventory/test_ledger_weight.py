@@ -140,3 +140,25 @@ class WeightLedgerTests(TestCase):
         self.take(self.packs, 2, None)  # the rest, with all the kg left
         self.assertEqual(self.held(batch), (0, D('0.000')))
         self.assert_balanced()
+
+
+class WeightLedgerReviewTests(WeightLedgerTests):
+    """G14 review: exact kg splits and a ledger floor at zero."""
+
+    def test_catch_weight_split_never_negative(self):
+        batches = [self.batch(self.packs, 1, '0.500', 5 + n, f'P-{n}') for n in range(6)]
+        allocations = self.take(self.packs, 6, '0.003')
+        self.assertEqual(sum(kg for _, _, kg in allocations), D('0.003'))
+        self.assertTrue(all(kg >= 0 for _, _, kg in allocations))
+        self.assertEqual(len(allocations), len(batches))
+        self.assert_balanced()
+
+    def test_move_refuses_to_go_below_zero(self):
+        loose = self.batch(self.loose, 0, '1.000', 5, 'L-1')
+        each = self.batch(ProductFactory(company=self.company), 2, '0', 5, 'E-1')
+        with transaction.atomic():
+            with self.assertRaises(LedgerError):
+                move(loose, 0, 'outbound', counterpart=self.customer, weight_kg=D('1.001'))
+            with self.assertRaises(LedgerError):
+                move(each, 3, 'outbound', counterpart=self.customer)
+        self.assertEqual((self.held(loose), self.held(each)), ((0, D('1.000')), (2, D('0.000'))))

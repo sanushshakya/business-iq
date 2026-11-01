@@ -3,6 +3,7 @@
 """G11: dispatching, receiving and cancelling transfers, and the ledger balancing at every location."""
 
 from datetime import timedelta
+from decimal import Decimal
 
 from django.db.models import Sum
 from django.test import TestCase
@@ -318,3 +319,15 @@ class TransferReviewFixTests(TransferFlowSetUp):
         locks = [q['sql'] for q in queries if 'FOR UPDATE' in q['sql']]
         self.assertTrue(locks)
         self.assertTrue(all('FOR UPDATE OF' in sql or 'tenants_company' in sql for sql in locks), locks)
+
+
+class WeighedTransferTests(TransferFlowSetUp):
+    """G14: transfers move counts only, so products sold by weight are refused for now."""
+
+    def test_weighed_product_refused(self):
+        mince = ProductFactory(company=self.company, name='Fake mince', sold_by='weight',
+                               price_per_kg=Decimal('8.0000'))
+        with self.assertRaises(transfers.TransferError) as caught:
+            self.draft(product=mince)
+        self.assertIn('sold by weight', str(caught.exception.detail))
+        self.assertFalse(Transfer.objects.exists())

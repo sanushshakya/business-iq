@@ -119,7 +119,7 @@ class SaleViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveModel
             session=data['session'], cashier=request.user, payment_method=data['payment_method'],
             amount_tendered=data.get('amount_tendered'), client_ref=data['client_ref'],
             loyalty_barcode=data['loyalty_barcode'],
-            lines=[(line['product'], line['quantity']) for line in data['items']],
+            lines=[(line['product'], line['quantity'], line.get('weight_kg')) for line in data['items']],
         )
         return Response(
             SaleSerializer(self.get_queryset().get(pk=sale.pk)).data,

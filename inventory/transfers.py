@@ -48,6 +48,8 @@ def _validate_lines(company, lines):
             raise TransferError({'lines': ['This product belongs to another company.']})
         if product.pk in seen:
             raise TransferError({'lines': [f'{product} is listed twice.']})
+        if product.is_weighed:  # lines and picks are counts only (kg on transfers is in the Parking lot)
+            raise TransferError({'lines': [f"{product} is sold by weight; it can't be transferred yet."]})
         if quantity < 1:
             raise TransferError({'lines': [f'{product}: send at least 1 unit.']})
         seen.add(product.pk)

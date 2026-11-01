@@ -17,7 +17,7 @@ from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import serializers
 
-from inventory.ledger import move, sellable_locations, take_fefo, virtual_location
+from inventory.ledger import LedgerError, move, sellable_locations, take_fefo, take_weighed, virtual_location
 from inventory.models import Location, Product, StockBatch
 from sync.outbox import active_connection, emit
 from vat.services import NoVatRate, rate_for, split_inclusive, uk_date
@@ -105,7 +105,8 @@ def close_session(*, session, user, counted_cash, note=''):
 @transaction.atomic
 def record_sale(*, session, cashier, payment_method, amount_tendered, lines, client_ref=None, loyalty_barcode=''):
     """
-    ``lines`` is a list of ``(Product, quantity)``. Prices come from the product, never from the client.
+    ``lines`` is a list of ``(Product, quantity)`` or ``(Product, quantity, weight_kg)`` (products sold by weight:
+    one line per weighing, priced ``weight_kg × price_per_kg``). Prices come from the product, never from the client.
 
     Returns ``(sale, created)``. A repeated ``client_ref`` on the same session returns the original sale with
     ``created=False``, so a retry after a lost response cannot charge twice (or award loyalty points twice).
@@ -121,10 +122,16 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
     if not session.is_open:
         raise serializers.ValidationError({'session': 'This session is closed. Open the till to sell.'})
 
-    # Merge repeated products and lock them in a fixed order so concurrent sales cannot deadlock.
-    wanted = OrderedDict()
-    for product, quantity in lines:
-        wanted[product.pk] = (product, wanted.get(product.pk, (product, 0))[1] + quantity)
+    # Merge repeated each products (weighed lines stay one per weighing) and lock the products in a fixed order so
+    # concurrent sales cannot deadlock.
+    wanted, weighings = OrderedDict(), {}
+    for product, quantity, *weight in lines:
+        weight = weight[0] if weight else None
+        if weight is None:
+            wanted[product.pk] = (product, wanted.get(product.pk, (product, 0))[1] + quantity)
+        else:
+            wanted.setdefault(product.pk, (product, 0))
+            weighings.setdefault(product.pk, []).append((quantity, weight))
     products = {p.pk: p for p in Product.objects.select_for_update().filter(pk__in=wanted).order_by('pk')}
 
     today = timezone.localdate()
@@ -132,30 +139,45 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
     selling_from = list(sellable_locations(session.till.branch))
     customer = virtual_location(session.till.branch.company_id, Location.CUSTOMER)
     vat_day = uk_date()  # the VAT rate follows the UK calendar day
-    plan, total, problems = [], Decimal('0.00'), []
+    plan, problems = [], []
     for pk in sorted(wanted):
-        product, quantity = wanted[pk]
         product = products[pk]
-        batches = list(
-            StockBatch.objects.select_for_update()
-            .filter(product=product, location__in=selling_from, quantity__gt=0, expiration_date__gte=today)
-            .order_by('expiration_date', 'receive_date', 'pk')
-        )
-        available = sum(b.quantity for b in batches)
-        if quantity > available:
-            problems.append(f'{product.name}: only {available} in date, {quantity} requested.')
+        if product.is_weighed != (pk in weighings):  # the kind changed since the line was checked
+            problems.append(f'{product.name}: this product changed, scan it again.')
             continue
-        line_total = (product.price * quantity).quantize(CENTS, rounding=ROUND_HALF_UP)
+        batches = _sellable_batches(product, selling_from, today)
         try:
             rate = rate_for(product.vat_code, vat_day)
         except NoVatRate:
             problems.append(f'{product.name}: no VAT rate is set up for "{product.vat_code}". Ask an admin.')
             continue
-        net, vat = split_inclusive(line_total, rate)
-        total += line_total
-        plan.append((product, quantity, line_total, rate, net, vat))
+        if not product.is_weighed:
+            quantity = wanted[pk][1]
+            available = sum(b.quantity for b in batches)
+            if quantity > available:
+                problems.append(f'{product.name}: only {available} in date, {quantity} requested.')
+                continue
+            line_total = (product.price * quantity).quantize(CENTS, rounding=ROUND_HALF_UP)
+            plan.append((product, quantity, None, line_total, rate))
+            continue
+        # Weighed: short kg is sold (the gap is booked to ADJUSTMENT); pieces and having some stock are checked.
+        if not product.price_per_kg:
+            problems.append(f'{product.name}: no price per kg is set. Ask an admin.')
+            continue
+        if not batches:
+            problems.append(f'{product.name}: none in date here.')
+            continue
+        pieces = sum(quantity for quantity, _ in weighings[pk])
+        available = sum(b.quantity for b in batches)
+        if product.is_catch_weight and pieces > available:
+            problems.append(f'{product.name}: only {available} in date, {pieces} requested.')
+            continue
+        for quantity, weight in weighings[pk]:
+            line_total = (weight * product.price_per_kg).quantize(CENTS, rounding=ROUND_HALF_UP)
+            plan.append((product, quantity, weight, line_total, rate))
     if problems:
         raise serializers.ValidationError({'items': problems})
+    total = sum((line_total for *_, line_total, _rate in plan), Decimal('0.00'))
 
     if payment_method == Sale.CASH:
         if amount_tendered is None or amount_tendered < total:
@@ -169,18 +191,29 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
         total=total, amount_tendered=amount_tendered, change_due=change, client_ref=client_ref,
         loyalty_barcode=loyalty_barcode,
     )
-    for product, quantity, line_total, rate, net, vat in plan:
+    for product, quantity, weight, line_total, rate in plan:
+        net, vat = split_inclusive(line_total, rate)
         item = SaleItem.objects.create(
             sale=sale, product=product, product_name=product.name, quantity=quantity,
-            unit_price=product.price, line_total=line_total,
+            unit_price=product.price if weight is None else product.price_per_kg.quantize(CENTS, ROUND_HALF_UP),
+            weight_kg=weight, price_per_kg=None if weight is None else product.price_per_kg, line_total=line_total,
             vat_code=product.vat_code, vat_rate=rate, net_amount=net, vat_amount=vat,
         )
-        allocations, shortfall = take_fefo(product, quantity, locations=selling_from, destination=customer,
+        if weight is None:
+            allocations, shortfall = take_fefo(product, quantity, locations=selling_from, destination=customer,
+                                               today=today)
+            if shortfall:  # cannot happen after the check above (rows are locked); never oversell
+                raise serializers.ValidationError({'items': [f'{product.name}: stock changed, try again.']})
+            allocations = [(batch, taken, None) for batch, taken in allocations]
+        else:
+            try:
+                allocations = take_weighed(product, quantity=quantity if product.is_catch_weight else 0,
+                                           weight_kg=weight, locations=selling_from, destination=customer,
                                            today=today)
-        if shortfall:  # cannot happen after the check above (rows are locked); never oversell
-            raise serializers.ValidationError({'items': [f'{product.name}: stock changed, try again.']})
-        for batch, taken in allocations:
-            SaleAllocation.objects.create(item=item, batch=batch, quantity=taken)
+            except LedgerError:  # checked above with the rows locked; never oversell pieces
+                raise serializers.ValidationError({'items': [f'{product.name}: stock changed, try again.']}) from None
+        for batch, taken, kg in allocations:
+            SaleAllocation.objects.create(item=item, batch=batch, quantity=taken, weight_kg=kg)
     if loyalty_barcode:
         connection = active_connection(session.till.branch.company_id)
         if connection:
@@ -188,6 +221,16 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
                 'barcode': loyalty_barcode, 'amount': str(total), 'order_reference': _loyalty_reference(sale),
             })
     return sale, True
+
+
+def _sellable_batches(product, locations, today):
+    """In-date batches holding stock (kg for loose products, pieces otherwise) at ``locations``, locked, FEFO order."""
+    held = {'weight_kg__gt': 0} if product.is_weighed and not product.is_catch_weight else {'quantity__gt': 0}
+    return list(
+        StockBatch.objects.select_for_update()
+        .filter(product=product, location__in=locations, expiration_date__gte=today, **held)
+        .order_by('expiration_date', 'receive_date', 'pk')
+    )
 
 
 def _loyalty_reference(sale):
@@ -208,7 +251,7 @@ def void_sale(*, sale, user, reason=''):
     for allocation in allocations:  # back into the batch (and so the location) each unit came from
         batch = (StockBatch.objects.select_for_update(of=('self',)).select_related('location')
                  .get(pk=allocation.batch_id))
-        move(batch, allocation.quantity, 'inbound', counterpart=customer)
+        move(batch, allocation.quantity, 'inbound', counterpart=customer, weight_kg=allocation.weight_kg)
     sale.status = Sale.VOIDED
     sale.voided_at = timezone.now()
     sale.voided_by = user

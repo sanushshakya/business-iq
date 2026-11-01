@@ -12,7 +12,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.tenancy import HasCompany, IsCompanyStaffOrReadOnly, TenantScopedMixin
-from inventory.ledger import online_locations, take_fefo, virtual_location
+from inventory.ledger import LedgerError, online_locations, take_fefo, take_weighed, virtual_location
 from inventory.models import Location, Product
 
 from . import loyalty
@@ -84,12 +84,37 @@ def _apply_order_paid(company, data):
             unmatched = True
             detail.append({'product_id': product_id, 'requested': quantity, 'taken': 0, 'reason': 'unknown_product'})
             continue
-        allocations, shortfall = take_fefo(product, quantity, locations=selling_from, destination=customer)
+        if product.is_weighed:
+            shortfall = _take_weighed_order(product, quantity, selling_from, customer)
+            if shortfall is None:  # loose products are sold by kg at the counter and never offered online
+                partial = True
+                detail.append({'product_id': product_id, 'requested': quantity, 'taken': 0,
+                               'reason': 'sold_by_weight'})
+                continue
+        else:
+            allocations, shortfall = take_fefo(product, quantity, locations=selling_from, destination=customer)
         if shortfall:
             partial = True
             detail.append({'product_id': product_id, 'requested': quantity,
                            'taken': quantity - shortfall, 'reason': 'short_stock'})
     return ('unmatched' if unmatched else 'partial' if partial else 'applied'), detail
+
+
+def _take_weighed_order(product, quantity, locations, customer):
+    """
+    Take ``quantity`` pieces of a catch-weight product with their batches' average kg (the order has no weights);
+    returns the pieces short. Loose products are not taken: returns None.
+    """
+    if not product.is_catch_weight:
+        return None
+    try:
+        take_weighed(product, quantity=quantity, weight_kg=None, locations=locations, destination=customer)
+        return 0
+    except LedgerError as error:  # too few pieces: take what there is, as for each products
+        if error.available:
+            take_weighed(product, quantity=error.available, weight_kg=None, locations=locations,
+                         destination=customer)
+        return quantity - (error.available or 0)
 
 
 class StorefrontInboundView(APIView):

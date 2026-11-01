@@ -84,6 +84,7 @@ ROLE_ROUTES = {
         + _route(r'^/inventory/products/\d+/stock-projection/$', 'GET')
         + _collection('inventory/categories', READ)
         + _collection('inventory/batches')
+        + _collection('inventory/locations', READ)
         + _collection('inventory/movements', {'GET', 'POST'})
         + _collection('inventory/orders')
         + _collection('inventory/transfers', {'GET', 'POST', 'PUT', 'PATCH'})

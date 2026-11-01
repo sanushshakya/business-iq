@@ -7,8 +7,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
-from common.tenancy import SharedReferenceMixin, TenantScopedMixin
-from tenants.views import IsCompanyStaff
+from common.tenancy import IsCompanyStaffOrReadOnly, SharedReferenceMixin, TenantScopedMixin
 
 from . import requisitions, transfers
 from .models import Location, ProductCategory, Product, Order, Supplier, StockBatch, StockMovement, Transfer, Requisition
@@ -64,9 +63,21 @@ class SupplierViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     serializer_class = SupplierSerializer
 
 
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter('location', int, description='Only batches at this location.'),
+    OpenApiParameter('product', int, description='Only batches of this product.'),
+]))
 class StockBatchViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     queryset = StockBatch.objects.all()
     serializer_class = StockBatchSerializer
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        for name in ('location', 'product'):
+            value = self.request.query_params.get(name, '')
+            if value.isascii() and value.isdigit():  # '²'.isdigit() is True but not an id
+                queryset = queryset.filter(**{f'{name}_id': value})
+        return queryset
 
     def perform_destroy(self, instance):
         if instance.location.is_virtual:
@@ -84,6 +95,13 @@ class StockMovementViewSet(
     serializer_class = StockMovementSerializer
 
 
+class CompanyMemberReadsStaffWrites(IsCompanyStaffOrReadOnly):
+    """Members of a company read, its staff change; a user with no company (even a superuser) gets 403."""
+
+    def has_permission(self, request, view):
+        return bool(getattr(request.user, 'company_id', None)) and super().has_permission(request, view)
+
+
 @extend_schema_view(list=extend_schema(parameters=[
     OpenApiParameter('type', str, description='Only this type, e.g. warehouse.'),
     OpenApiParameter('branch', int, description='Only locations in this branch.'),
@@ -91,13 +109,13 @@ class StockMovementViewSet(
 ]))
 class LocationViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     """
-    Stock locations (company staff only): shop floors, butchery, warehouses, back stores, vans, plus the virtual
+    Stock locations (any company member may read; only staff change them): shop floors, butchery, warehouses, back stores, vans, plus the virtual
     supplier/customer/waste/adjustment/in-transit locations every company has. Retire one with ``is_active``.
     """
 
     queryset = Location.objects.select_related('branch')
     serializer_class = LocationSerializer
-    permission_classes = [IsCompanyStaff]
+    permission_classes = [CompanyMemberReadsStaffWrites]
 
     def get_queryset(self):
         queryset = super().get_queryset()

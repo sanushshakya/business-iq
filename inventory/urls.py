@@ -13,6 +13,7 @@ router.register(r'suppliers', views.SupplierViewSet, basename='supplier')
 router.register(r'batches', views.StockBatchViewSet, basename='stockbatch')
 router.register(r'movements', views.StockMovementViewSet, basename='stockmovement')
 router.register(r'locations', views.LocationViewSet, basename='location')
+router.register(r'barcode-rules', views.BarcodeRuleViewSet, basename='barcoderule')
 router.register(r'transfers', views.TransferViewSet, basename='transfer')
 router.register(r'requisitions', views.RequisitionViewSet, basename='requisition')
 

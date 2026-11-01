@@ -2,7 +2,7 @@ from django.contrib import admin
 
 from common.tenancy import TenantAdminMixin
 
-from .models import Location, Product, ProductCategory, StockBatch, StockMovement, Transfer, TransferLine, TransferPick, Requisition, RequisitionLine
+from .models import BarcodeRule, Location, Product, ProductCategory, StockBatch, StockMovement, Transfer, TransferLine, TransferPick, Requisition, RequisitionLine
 
 
 @admin.register(ProductCategory)
@@ -113,3 +113,11 @@ class RequisitionAdmin(TenantAdminMixin, ViewOnlyAdmin):
     list_filter = ('status',)
     search_fields = ('number', 'note')
     list_select_related = ('location',)
+
+
+@admin.register(BarcodeRule)
+class BarcodeRuleAdmin(TenantAdminMixin, admin.ModelAdmin):
+    """Scale-label layouts (G15); the layout is checked on save (``BarcodeRule.clean``)."""
+
+    list_display = ('prefix', 'name', 'value_type', 'item_code_length', 'decimals', 'value_check_digit', 'is_active')
+    list_filter = ('value_type', 'is_active')

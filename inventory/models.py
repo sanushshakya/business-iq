@@ -297,6 +297,10 @@ class TransferLine(models.Model):
     quantity = models.PositiveIntegerField()
     received_quantity = models.PositiveIntegerField(null=True, blank=True)
     difference_reason = models.CharField(max_length=255, blank=True)
+    # Set when the line fulfils (part of) a store requisition line.
+    requisition_line = models.ForeignKey(
+        'inventory.RequisitionLine', null=True, blank=True, on_delete=models.PROTECT, related_name='transfer_lines'
+    )
 
     class Meta:
         ordering = ['pk']
@@ -320,3 +324,74 @@ class TransferPick(models.Model):
 
     class Meta:
         ordering = ['pk']
+
+
+class Requisition(models.Model):
+    """
+    A store asking the warehouse for stock. The warehouse fulfils it with transfers (``fulfil``), in one go or in
+    parts; what is not yet on a transfer stays open. Cancelling closes what is still open (transfers already made
+    stay). The status follows the lines: open → partly fulfilled → fulfilled, or cancelled.
+    """
+
+    OPEN, PARTLY_FULFILLED, FULFILLED, CANCELLED = 'open', 'partly_fulfilled', 'fulfilled', 'cancelled'
+    STATUSES = [(OPEN, 'Open'), (PARTLY_FULFILLED, 'Partly fulfilled'), (FULFILLED, 'Fulfilled'),
+                (CANCELLED, 'Cancelled')]
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='requisitions')
+    number = models.PositiveIntegerField()  # per company: 1, 2, 3...
+    location = models.ForeignKey(Location, on_delete=models.PROTECT, related_name='requisitions',
+                                 help_text='The store location asking for the stock.')
+    status = models.CharField(max_length=16, choices=STATUSES, default=OPEN)
+    note = models.CharField(max_length=255, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name='+'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    cancelled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name='+'
+    )
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-number', '-id']
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'number'], name='requisition_number_unique_per_company'),
+        ]
+
+    def __str__(self):
+        return self.reference
+
+    @property
+    def reference(self):
+        return f'R-{self.number:06d}' if self.number else 'R-new'
+
+    def transfers(self):
+        """The transfers made for this requisition, oldest first."""
+        return Transfer.objects.filter(lines__requisition_line__requisition=self).distinct().order_by('number')
+
+
+class RequisitionLine(models.Model):
+    """A product and how many units the store asks for."""
+
+    requisition = models.ForeignKey(Requisition, on_delete=models.CASCADE, related_name='lines')
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='+')
+    quantity = models.PositiveIntegerField()
+
+    class Meta:
+        ordering = ['pk']
+        constraints = [
+            models.UniqueConstraint(fields=['requisition', 'product'], name='one_requisition_line_per_product'),
+        ]
+
+    def __str__(self):
+        return f'{self.requisition} · {self.product} × {self.quantity}'
+
+    @property
+    def fulfilled_quantity(self):
+        """Units on transfers for this line, except cancelled ones (a short receipt still counts as sent)."""
+        return self.transfer_lines.exclude(transfer__status=Transfer.CANCELLED).aggregate(
+            total=models.Sum('quantity'))['total'] or 0
+
+    @property
+    def open_quantity(self):
+        return max(self.quantity - self.fulfilled_quantity, 0)

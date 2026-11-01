@@ -43,7 +43,7 @@ def _validate_lines(company, lines):
     if not lines:
         raise TransferError({'lines': ['Add at least one product.']})
     seen = set()
-    for product, quantity in lines:
+    for product, quantity, *_ in lines:
         if product.company_id != company.pk:
             raise TransferError({'lines': ['This product belongs to another company.']})
         if product.pk in seen:
@@ -55,19 +55,28 @@ def _validate_lines(company, lines):
 
 def _write_lines(transfer, lines):
     TransferLine.objects.bulk_create(
-        TransferLine(transfer=transfer, product=product, quantity=quantity) for product, quantity in lines
+        TransferLine(transfer=transfer, product=product, quantity=quantity, requisition_line=(rest or [None])[0])
+        for product, quantity, *rest in lines
     )
+
+
+def next_number(model, company):
+    """The company's next document number for ``model`` (transfers, requisitions); locks the company row."""
+    Company.objects.select_for_update().get(pk=company.pk)  # one number at a time per company
+    last = model.objects.filter(company=company).order_by('-number').values_list('number', flat=True).first()
+    return (last or 0) + 1
 
 
 @transaction.atomic
 def create_transfer(*, company, user, source, destination, lines, note=''):
-    """A new draft. ``lines`` is ``[(product, quantity), ...]``; the number is the company's next one."""
+    """
+    A new draft. ``lines`` is ``[(product, quantity), ...]`` (a third item links a requisition line); the number is
+    the company's next one.
+    """
     validate_route(company, source, destination)
     _validate_lines(company, lines)
-    Company.objects.select_for_update().get(pk=company.pk)  # one number at a time per company
-    last = Transfer.objects.filter(company=company).order_by('-number').values_list('number', flat=True).first()
     transfer = Transfer.objects.create(
-        company=company, number=(last or 0) + 1, source_location=source, destination_location=destination,
+        company=company, number=next_number(Transfer, company), source_location=source, destination_location=destination,
         note=note, created_by=user,
     )
     _write_lines(transfer, lines)
@@ -87,14 +96,25 @@ def _locked(transfer, status):
 
 @transaction.atomic
 def replace_draft(transfer, *, source, destination, lines, note=''):
-    """Change a draft's route, note and lines (the lines are replaced)."""
+    """
+    Change a draft's route, note and lines (``lines`` replaces them; None keeps them). A transfer made from a
+    requisition keeps its lines and destination (cancel it and fulfil again instead).
+    """
     transfer = _locked(transfer, Transfer.DRAFT)
     validate_route(transfer.company, source, destination)
-    _validate_lines(transfer.company, lines)
+    if transfer.lines.filter(requisition_line__isnull=False).exists() and (
+        lines is not None or destination.pk != transfer.destination_location_id
+    ):
+        raise TransferError({'lines': [
+            'This transfer fulfils a requisition: only its source and note can change. Cancel it and fulfil again.'
+        ]})
+    if lines is not None:
+        _validate_lines(transfer.company, lines)
     transfer.source_location, transfer.destination_location, transfer.note = source, destination, note
     transfer.save(update_fields=['source_location', 'destination_location', 'note'])
-    transfer.lines.all().delete()
-    _write_lines(transfer, lines)
+    if lines is not None:
+        transfer.lines.all().delete()
+        _write_lines(transfer, lines)
     return transfer
 
 
@@ -195,4 +215,9 @@ def cancel(transfer, user):
     transfer = _locked(transfer, Transfer.DRAFT)
     transfer.status, transfer.cancelled_by, transfer.cancelled_at = Transfer.CANCELLED, user, timezone.now()
     transfer.save(update_fields=['status', 'cancelled_by', 'cancelled_at'])
+    from .requisitions import refresh_status  # its units are open on the requisition again
+
+    for requisition_id in set(transfer.lines.exclude(requisition_line=None)
+                              .values_list('requisition_line__requisition_id', flat=True)):
+        refresh_status(requisition_id)
     return transfer

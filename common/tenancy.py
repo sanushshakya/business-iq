@@ -61,6 +61,8 @@ TENANT_LOOKUPS = {
     'inventory.Transfer': 'company',
     'inventory.TransferLine': 'transfer__company',
     'inventory.TransferPick': 'line__transfer__company',
+    'inventory.Requisition': 'company',
+    'inventory.RequisitionLine': 'requisition__company',
 }
 
 

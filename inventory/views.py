@@ -10,8 +10,8 @@ from rest_framework.response import Response
 from common.tenancy import SharedReferenceMixin, TenantScopedMixin
 from tenants.views import IsCompanyStaff
 
-from . import transfers
-from .models import Location, ProductCategory, Product, Order, Supplier, StockBatch, StockMovement, Transfer
+from . import requisitions, transfers
+from .models import Location, ProductCategory, Product, Order, Supplier, StockBatch, StockMovement, Transfer, Requisition
 from .projections import project_stock
 from .serializers import (
     LocationSerializer,
@@ -22,6 +22,8 @@ from .serializers import (
     StockMovementSerializer,
     StockProjectionSerializer,
     SupplierSerializer,
+    RequisitionFulfilSerializer,
+    RequisitionSerializer,
     TransferReceiveSerializer,
     TransferSerializer,
 )
@@ -167,3 +169,57 @@ class TransferViewSet(
     def cancel(self, request, pk=None):
         """Cancel a draft. A dispatched transfer is closed by receiving it (0 if nothing arrived)."""
         return self._done(transfers.cancel)
+
+
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter('status', str, description='Only requisitions in this status (open, partly_fulfilled, fulfilled, '
+                                                'cancelled).'),
+]))
+class RequisitionViewSet(
+    TenantScopedMixin, mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    """
+    Store requisitions to the warehouse. Raise one for a store location; ``fulfil`` turns (part of) it into a draft
+    transfer, ``cancel`` closes what is still open. Not edited or deleted.
+    """
+
+    queryset = Requisition.objects.prefetch_related('lines')
+    serializer_class = RequisitionSerializer
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self.action == 'list' and self.request.query_params.get('status'):
+            queryset = queryset.filter(status=self.request.query_params['status'])
+        return queryset
+
+    @extend_schema(request=RequisitionFulfilSerializer, responses={201: TransferSerializer})
+    @action(detail=True, methods=['post'])
+    def fulfil(self, request, pk=None):
+        """Make a draft transfer from ``source_location`` for the given amounts (each at most what is open)."""
+        requisition = self.get_object()
+        serializer = RequisitionFulfilSerializer(data=request.data, context=self.get_serializer_context())
+        serializer.is_valid(raise_exception=True)
+        quantities = {}
+        for line in serializer.validated_data['lines']:
+            if line['line'] in quantities:
+                raise ValidationError({'lines': ['Give each line once.']})
+            quantities[line['line']] = line['quantity']
+        try:
+            transfer = requisitions.fulfil(requisition, request.user,
+                                           source=serializer.validated_data['source_location'], quantities=quantities)
+        except requisitions.RequisitionError as error:
+            raise ValidationError(error.detail)
+        return Response(TransferSerializer(Transfer.objects.prefetch_related('lines').get(pk=transfer.pk),
+                                           context=self.get_serializer_context()).data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(request=None, responses=RequisitionSerializer)
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """Close what is still open; transfers already made stay."""
+        try:
+            requisition = requisitions.cancel(self.get_object(), request.user)
+        except requisitions.RequisitionError as error:
+            raise ValidationError(error.detail)
+        return Response(RequisitionSerializer(self.get_queryset().get(pk=requisition.pk),
+                                              context=self.get_serializer_context()).data)

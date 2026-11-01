@@ -1,7 +1,7 @@
 # inventory/views.py
 
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
-from django.db import OperationalError
+from django.db import IntegrityError, OperationalError, transaction
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -256,6 +256,19 @@ class BarcodeRuleViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     queryset = BarcodeRule.objects.all()
     serializer_class = BarcodeRuleSerializer
     permission_classes = [CompanyMemberReadsStaffWrites]
+
+    def perform_create(self, serializer):
+        self._save_once(super().perform_create, serializer)
+
+    def perform_update(self, serializer):
+        self._save_once(super().perform_update, serializer)
+
+    def _save_once(self, save, serializer):
+        try:  # two saves of one prefix at once: the loser hits the unique constraint
+            with transaction.atomic():
+                save(serializer)
+        except IntegrityError:
+            raise ValidationError({'prefix': 'Another rule already uses this prefix.'}) from None
 
     def get_queryset(self):
         queryset = super().get_queryset()

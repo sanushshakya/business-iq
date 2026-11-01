@@ -113,3 +113,52 @@ class BarcodeRuleApiTests(TestCase):
         with self.assertRaises(BarcodeError) as caught:
             parse(code, [rule.to_rule()])
         self.assertEqual(caught.exception.reason, 'unknown_prefix')
+
+
+class BarcodeRuleReviewTests(TestCase):
+    """G15 review: defaults on create, the admin form, and duplicate prefixes never 500."""
+
+    def setUp(self):
+        self.company = CompanyFactory()
+        self.staff = APIClient()
+        self.staff.force_authenticate(UserFactory(company=self.company, is_staff=True))
+
+    def test_defaults_apply_when_left_out(self):
+        response = self.staff.post(reverse('barcoderule-list'),
+                                   {'prefix': '20', 'item_code_length': 5, 'value_type': 'price'}, format='json')
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual((response.json()['decimals'], response.json()['value_check_digit']), (2, False))
+
+    def test_model_clean_with_blank_fields_reports_errors(self):
+        from django.core.exceptions import ValidationError
+
+        with self.assertRaises(ValidationError) as caught:
+            BarcodeRule(company=self.company, prefix='20', value_type='price').full_clean()
+        self.assertIn('item_code_length', caught.exception.message_dict)
+
+    def test_model_clean_refuses_a_duplicate_prefix(self):
+        from django.core.exceptions import ValidationError
+
+        BarcodeRule.objects.create(company=self.company, **PRICE)
+        with self.assertRaises(ValidationError) as caught:
+            BarcodeRule(company=self.company, **PRICE).full_clean(exclude=['company'])  # as the admin form does
+        self.assertIn('prefix', caught.exception.message_dict)
+        BarcodeRule(company=CompanyFactory(), **PRICE).full_clean()  # another company may use it
+
+    def test_prefix_validator_on_the_model(self):
+        from django.core.exceptions import ValidationError
+
+        with self.assertRaises(ValidationError) as caught:
+            BarcodeRule(company=self.company, **{**PRICE, 'prefix': '2a'}).full_clean()
+        self.assertIn('prefix', caught.exception.message_dict)
+
+    def test_lost_race_on_a_prefix_is_400(self):
+        from unittest import mock
+
+        from django.db import IntegrityError
+
+        with mock.patch('inventory.serializers.BarcodeRuleSerializer.create',
+                        side_effect=IntegrityError('unique_barcode_prefix_per_company')):
+            response = self.staff.post(reverse('barcoderule-list'), PRICE, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('prefix', response.json())

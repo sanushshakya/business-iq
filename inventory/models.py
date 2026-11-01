@@ -450,7 +450,14 @@ class BarcodeRule(models.Model):
                     decimals=self.decimals, value_check_digit=self.value_check_digit, is_active=self.is_active)
 
     def clean(self):
+        layout = (self.prefix, self.item_code_length, self.value_type, self.decimals, self.value_check_digit)
+        if any(value in (None, '') for value in layout):
+            return  # the field errors already say what is missing
         error = self.to_rule().layout_error()
         if error:
             field, message = error.split(': ', 1)
             raise ValidationError({field: message})
+        # The admin leaves company out of the form, so the unique constraint is not checked there.
+        if self.company_id and BarcodeRule.objects.filter(company_id=self.company_id, prefix=self.prefix).exclude(
+                pk=self.pk).exists():
+            raise ValidationError({'prefix': 'Another rule already uses this prefix.'})

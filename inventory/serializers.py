@@ -407,7 +407,9 @@ class BarcodeRuleSerializer(TenantModelSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
-        merged = {name: attrs.get(name, getattr(self.instance, name, None))
+        # Fields left out keep the instance's value, or the model default on create.
+        merged = {name: attrs[name] if name in attrs else getattr(
+                      self.instance, name, BarcodeRule._meta.get_field(name).get_default())
                   for name in ('prefix', 'item_code_length', 'value_type', 'decimals', 'value_check_digit')}
         error = BarcodeRule(**merged).to_rule().layout_error()
         if error:

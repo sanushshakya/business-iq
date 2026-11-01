@@ -2,8 +2,10 @@
 
 
 from collections.abc import Mapping
+from decimal import Decimal
 
 from django.db import transaction
+from django.db.models import Q
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
@@ -30,7 +32,28 @@ class ProductSerializer(TenantModelSerializer):
         extra_kwargs = {
             'price': {'min_value': 0},
             'stock_quantity': {'min_value': 0},
+            'nominal_weight_kg': {'min_value': Decimal('0.001')},
         }
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        def value(name):
+            return attrs[name] if name in attrs else getattr(self.instance, name, Product._meta.get_field(name).get_default())
+
+        weighed = value('sold_by') == Product.WEIGHT
+        if weighed and not (value('price_per_kg') or 0) > 0:
+            raise serializers.ValidationError({'price_per_kg': 'A product sold by weight needs a price per kg.'})
+        if value('is_catch_weight') and not weighed:
+            raise serializers.ValidationError({'is_catch_weight': 'Only a product sold by weight can be catch-weight.'})
+        if self.instance is not None:
+            # Kg and counts mean different things per kind, so the kind is fixed while any stock is held.
+            for name in ('sold_by', 'is_catch_weight'):
+                if name in attrs and attrs[name] != getattr(self.instance, name) and StockBatch.objects.filter(
+                    Q(quantity__gt=0) | Q(weight_kg__gt=0), product=self.instance
+                ).exists():
+                    raise serializers.ValidationError({name: 'This product holds stock; empty its stock first.'})
+        return attrs
 
 
 class OrderSerializer(TenantModelSerializer):

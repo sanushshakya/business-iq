@@ -54,6 +54,16 @@ class Product(models.Model):
     barcode = models.CharField(max_length=32, blank=True, db_index=True)
     # Units kept back for the physical shop: the online storefront is offered in-date stock minus this.
     online_buffer = models.PositiveIntegerField(default=0, help_text='Keep for shop: units never offered online.')
+    # Sold by weight: stock is kept in kg and till lines are priced weight × price_per_kg (``price`` is not used).
+    # Catch-weight products are counted pieces that are each weighed; the others (loose) are kg only, count 0.
+    EACH, WEIGHT = 'each', 'weight'
+    SOLD_BY = [(EACH, 'Each'), (WEIGHT, 'By weight')]
+    sold_by = models.CharField(max_length=10, choices=SOLD_BY, default=EACH)
+    is_catch_weight = models.BooleanField(default=False, help_text='Weighed pieces (packs); only when sold by weight.')
+    nominal_weight_kg = models.DecimalField(
+        max_digits=10, decimal_places=3, null=True, blank=True, help_text='A typical piece (catch-weight).'
+    )
+    price_per_kg = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
 
     class Meta:
         constraints = [
@@ -65,6 +75,10 @@ class Product(models.Model):
 
     def __str__(self):
         return self.name
+
+    @property
+    def is_weighed(self):
+        return self.sold_by == self.WEIGHT
 
 class Order(models.Model):
     """
@@ -116,6 +130,8 @@ class StockBatch(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     batch_number = models.CharField(max_length=50)
     quantity = models.IntegerField(default=0)
+    # Kg held, for products sold by weight (0 for each products). Loose products hold kg only.
+    weight_kg = models.DecimalField(max_digits=10, decimal_places=3, default=0)
     receive_date = models.DateTimeField(auto_now_add=True)
     expiration_date = models.DateField()
     # Where this lot is. A lot split across places is one row per place (same number and expiry).
@@ -144,6 +160,8 @@ class StockMovement(models.Model):
     """
     batch = models.ForeignKey(StockBatch, on_delete=models.CASCADE)
     quantity = models.IntegerField(default=0)
+    # Kg moved, for products sold by weight; empty for each products.
+    weight_kg = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
     movement_type = models.CharField(max_length=10, choices=[('inbound', 'Inbound'), ('outbound', 'Outbound')])
     date_time = models.DateTimeField(auto_now_add=True)
     # Inbound: the batch's location is the destination; outbound: it is the source. The other side is where the

@@ -17,8 +17,10 @@ from datetime import date
 from decimal import Decimal
 
 GS = '\x1d'
+# Only what scanners add around a code; str.strip() would also eat GS (and JavaScript's trim() differs).
+_WHITESPACE = ' \t\r\n'
 _SYMBOLOGY_IDS = (']e0', ']C1', ']d2', ']Q3')
-_BRACKETED = re.compile(r'\((\d{2,4})\)([^()]*)')
+_BRACKETED = re.compile(r'\(([0-9]{2,4})\)([^()]*)')  # ASCII digits only, as in JavaScript
 # GS1 character set 82 (GenSpecs 7.11), allowed in a batch number.
 _CSET82 = frozenset('!"%&\'()*+,-./0123456789:;<=>?ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz')
 _KG, _PENNY = Decimal('0.001'), Decimal('0.01')
@@ -64,7 +66,7 @@ def gtin_check_digit(digits):
 
 def parse_gs1(code, today):
     """Read a scanned element string; raises ``GS1Error``. ``today`` decides the century and ``expired``."""
-    code = code.strip()
+    code = code.strip(_WHITESPACE)
     for identifier in _SYMBOLOGY_IDS:
         if code.startswith(identifier):
             code = code[len(identifier):]

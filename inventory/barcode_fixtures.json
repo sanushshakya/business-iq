@@ -1048,6 +1048,47 @@
       "error": "format"
     },
     {
+      "name": "trailing_gs",
+      "code": "3103000512\u001d",
+      "today": "2026-11-01",
+      "result": {
+        "gtin": null,
+        "batch": null,
+        "weight_kg": "0.512",
+        "price": null,
+        "expiry": null,
+        "best_before": null,
+        "expired": false,
+        "elements": {
+          "3103": "000512"
+        }
+      }
+    },
+    {
+      "name": "trailing_double_gs",
+      "code": "3103000512\u001d\u001d",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "gs_before_symbology",
+      "code": "\u001d]C1010501234567890031030005121726123110LOT42\u001d392200460",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "no_break_space_kept",
+      "code": "\u00a03103000512",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
+      "name": "hri_full_width_digits",
+      "code": "(\uff10\uff11)05012345678900",
+      "today": "2026-11-01",
+      "error": "format"
+    },
+    {
       "name": "hri_with_symbology",
       "code": "]e0(01)05012345678900(17)261231\n",
       "today": "2026-11-01",

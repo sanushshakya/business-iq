@@ -15,7 +15,7 @@ from . import requisitions, transfers
 from .ledger import move, virtual_location
 from .models import (
     BarcodeRule, Location, Order, Product, ProductCategory, Requisition, RequisitionLine, StockBatch, StockMovement, Supplier,
-    Transfer, TransferLine,
+    Transfer, TransferLine, normalise_plu,
 )
 
 
@@ -35,12 +35,25 @@ class ProductSerializer(TenantModelSerializer):
             'nominal_weight_kg': {'min_value': Decimal('0.001')},
         }
 
+    def validate_plu(self, plu):
+        if not plu:
+            return ''
+        try:
+            return normalise_plu(plu)
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(error.message_dict['plu']) from None
+
     def validate(self, attrs):
         attrs = super().validate(attrs)
 
         def value(name):
             return attrs[name] if name in attrs else getattr(self.instance, name, Product._meta.get_field(name).get_default())
 
+        # The PLU constraint is conditional (blank allowed many times), which the tenancy check skips.
+        company_id = self._company_id_for(attrs)
+        if attrs.get('plu') and company_id and Product.objects.filter(company_id=company_id, plu=attrs['plu']).exclude(
+                pk=getattr(self.instance, 'pk', None)).exists():
+            raise serializers.ValidationError({'plu': 'Another product already has this PLU.'})
         weighed = value('sold_by') == Product.WEIGHT
         if weighed and not (value('price_per_kg') or 0) > 0:
             raise serializers.ValidationError({'price_per_kg': 'A product sold by weight needs a price per kg.'})

@@ -15,7 +15,7 @@ class ProductCategoryAdmin(admin.ModelAdmin):
 @admin.register(Product)
 class ProductAdmin(TenantAdminMixin, admin.ModelAdmin):
     list_display = ('name', 'category', 'price', 'stock_quantity', 'reorder_threshold')
-    search_fields = ['name', 'commodity_code']
+    search_fields = ['name', 'commodity_code', 'barcode', 'plu']
     list_filter = ['category']
 
 

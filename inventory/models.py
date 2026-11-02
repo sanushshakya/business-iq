@@ -25,6 +25,13 @@ class ProductCategory(models.Model):
         return self.name
 
 
+def normalise_plu(value):
+    """A PLU as stored: 1 to 8 digits without leading zeros; raises ``ValidationError`` otherwise."""
+    if not (value.isascii() and value.isdigit() and len(value) <= 8) or not value.strip('0'):
+        raise ValidationError({'plu': 'A PLU is 1 to 8 digits (not all zeros).'})
+    return value.lstrip('0')
+
+
 class Product(models.Model):
     """
     Represents a product in the inventory.
@@ -64,6 +71,8 @@ class Product(models.Model):
         max_digits=10, decimal_places=3, null=True, blank=True, help_text='A typical piece (catch-weight).'
     )
     price_per_kg = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    # The item number a scale prints on its labels (G18): digits, stored without leading zeros, unique per company.
+    plu = models.CharField(max_length=8, blank=True, default='', help_text='Scale PLU (item number on labels).')
 
     class Meta:
         constraints = [
@@ -71,7 +80,18 @@ class Product(models.Model):
                 fields=['company', 'external_id'], condition=~models.Q(external_id=''),
                 name='unique_external_id_per_company',
             ),
+            models.UniqueConstraint(fields=['company', 'plu'], condition=~models.Q(plu=''),
+                                    name='unique_plu_per_company'),
         ]
+
+    def clean(self):
+        super().clean()
+        if self.plu:
+            self.plu = normalise_plu(self.plu)
+            # The admin leaves company out of the form, so the unique constraint is not checked there.
+            if self.company_id and Product.objects.filter(company_id=self.company_id, plu=self.plu).exclude(
+                    pk=self.pk).exists():
+                raise ValidationError({'plu': 'Another product already has this PLU.'})
 
     def __str__(self):
         return self.name

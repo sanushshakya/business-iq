@@ -29,6 +29,8 @@ from .models import Sale, SaleAllocation, SaleItem, TillSession
 CENTS = Decimal('0.01')
 # A scanned label's price further than this from today's price is charged but flagged (G18).
 LABEL_TOLERANCE_KEY, DEFAULT_LABEL_TOLERANCE = 'label_price_tolerance_percent', Decimal('10')
+# A weight the cashier typed (no label, no scale agent yet) may be at most this per line, and is marked for audit (G19).
+MANUAL_WEIGHT_MAX_KEY, DEFAULT_MANUAL_WEIGHT_MAX = 'manual_weight_max_kg', Decimal('25')
 
 
 def vat_by_rate(items):
@@ -149,6 +151,9 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
     tolerance = get_company_setting(company_id, LABEL_TOLERANCE_KEY, DEFAULT_LABEL_TOLERANCE, Decimal)
     if not tolerance.is_finite() or tolerance < 0:  # NaN would break every comparison; a typo must not stop sales
         tolerance = DEFAULT_LABEL_TOLERANCE
+    manual_max = get_company_setting(company_id, MANUAL_WEIGHT_MAX_KEY, DEFAULT_MANUAL_WEIGHT_MAX, Decimal)
+    if not manual_max.is_finite() or manual_max <= 0:  # a typo must not stop weighed sales
+        manual_max = DEFAULT_MANUAL_WEIGHT_MAX
     plan, problems = [], []
     for pk in sorted(wanted):
         product = products[pk]
@@ -187,9 +192,16 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
         if product.is_catch_weight and pieces > available:
             problems.append(f'{product.name}: only {available} in date, {pieces} requested.')
             continue
+        typed = [weight for _, weight, label in weighings[pk] if label is None]
+        if any(weight > manual_max for weight in typed):
+            problems.extend(f'{product.name}: {weight} kg is over the {manual_max} kg limit for a typed weight. '
+                            'Check it, or weigh it in parts.' for weight in typed if weight > manual_max)
+            continue
         for quantity, weight, label in weighings[pk]:
             by_weight = (weight * product.price_per_kg).quantize(CENTS, rounding=ROUND_HALF_UP)
-            if label is None or label.label_price is None:
+            if label is None:  # typed at the till
+                plan.append(_Line(product, quantity, weight, by_weight, rate, manual=True))
+            elif label.label_price is None:
                 plan.append(_Line(product, quantity, weight, by_weight, rate, label))
             else:  # the label's price is charged; compared with today's £/kg unless the kg came from that price
                 plan.append(_labelled_line(product, quantity, weight, label, rate,
@@ -223,7 +235,7 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
             vat_code=product.vat_code, vat_rate=line.rate, net_amount=net, vat_amount=vat,
             barcode=line.label.raw[:64] if line.label else '',
             label_price=line.label.label_price if line.label else None,
-            expected_price=line.expected, label_price_flagged=line.flagged,
+            expected_price=line.expected, label_price_flagged=line.flagged, manual_weight=line.manual,
         )
         if weight is None:
             allocations, shortfall = take_fefo(product, quantity, locations=selling_from, destination=customer,
@@ -259,6 +271,7 @@ class _Line:
     label: object = None  # sales.labels.Label for a scanned label
     expected: Decimal | None = None
     flagged: bool = False
+    manual: bool = False  # the weight was typed by the cashier
 
 
 def _labelled_line(product, quantity, weight, label, rate, expected, tolerance, fallback=None):

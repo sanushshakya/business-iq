@@ -85,7 +85,7 @@ class SaleItemSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'product', 'product_name', 'quantity', 'unit_price', 'weight_kg', 'price_per_kg', 'line_total',
             'vat_code', 'vat_rate', 'net_amount', 'vat_amount', 'barcode', 'label_price', 'expected_price',
-            'label_price_flagged',
+            'label_price_flagged', 'manual_weight',
         ]
         read_only_fields = fields
 

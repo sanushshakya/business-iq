@@ -115,6 +115,8 @@ class SaleItem(models.Model):
     label_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     expected_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     label_price_flagged = models.BooleanField(default=False)
+    # The cashier typed the weight (no label, no scale reading): kept for audit (G19).
+    manual_weight = models.BooleanField(default=False)
 
     class Meta:
         ordering = ['id']

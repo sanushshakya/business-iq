@@ -34,9 +34,9 @@ class SaleAdmin(ReadOnlyAdmin):
 @admin.register(SaleItem)
 class SaleItemAdmin(ReadOnlyAdmin):
     list_display = ('sale', 'product_name', 'quantity', 'weight_kg', 'unit_price', 'line_total', 'label_price',
-                    'expected_price', 'label_price_flagged')
-    # Scanned labels charged at a price far from today's (G18), for a manager to look at.
-    list_filter = ['label_price_flagged']
+                    'expected_price', 'label_price_flagged', 'manual_weight')
+    # Scanned labels charged at a price far from today's (G18) and typed weights (G19), for a manager to look at.
+    list_filter = ['label_price_flagged', 'manual_weight']
     search_fields = ['product_name', 'barcode']
 
 

@@ -291,6 +291,22 @@
       }
     },
     {
+      "name": "padded_gs",
+      "code": "\u001d2012345003453",
+      "result": {
+        "prefix": "20",
+        "item_code": "12345",
+        "value": "3.45",
+        "price": "3.45",
+        "weight_kg": null
+      }
+    },
+    {
+      "name": "bom_not_stripped",
+      "code": "\ufeff2012345003453",
+      "error": "format"
+    },
+    {
       "name": "bad_check_digit",
       "code": "2012345003454",
       "error": "check_digit"

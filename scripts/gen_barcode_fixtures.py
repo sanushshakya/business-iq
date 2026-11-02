@@ -52,6 +52,8 @@ cases = [
     {"name": "no_decimals", "code": code("25", "0001", "000012", False), "result": P("25", "0001", "12", price="12")},
     {"name": "zero", "code": code("21", "0042", "00000", True), "result": P("21", "0042", "0.000", weight="0.000")},
     {"name": "padded", "code": " " + code("20", "12345", "00345", False) + "\r\n", "result": P("20", "12345", "3.45", price="3.45")},
+    {"name": "padded_gs", "code": "\x1d" + code("20", "12345", "00345", False), "result": P("20", "12345", "3.45", price="3.45")},
+    {"name": "bom_not_stripped", "code": "\ufeff" + code("20", "12345", "00345", False), "error": "format"},
     {"name": "bad_check_digit", "code": code("20", "12345", "00345", False, bad_ean=True), "error": "check_digit"},
     {"name": "bad_value_check_digit", "code": code("21", "0042", "00512", True, bad_vcd=True), "error": "value_check_digit"},
     {"name": "bad_value_check_digit_4", "code": code("22", "00077", "2875", True, bad_vcd=True), "error": "value_check_digit"},

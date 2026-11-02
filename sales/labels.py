@@ -15,7 +15,7 @@ from inventory.barcodes import products_for_gtin
 from inventory.gs1_parser import GS1Error, parse_gs1
 from inventory.models import BarcodeRule, Product
 
-KG = Decimal('0.001')
+KG, PENNY = Decimal('0.001'), Decimal('0.01')
 MIN_KG, MAX_KG = Decimal('0.001'), Decimal('100')  # the same limits as a weighing typed at the till
 GS1_PROBLEMS = {
     'format': 'damaged or incomplete', 'unknown_ai': 'a field we do not read', 'check_digit': 'check digit',
@@ -45,10 +45,12 @@ def read_label(company, code, today):
         product, weight, price = _gs1_label(company, code, today)
     if weight is not None:
         weight = weight.quantize(KG, rounding=ROUND_HALF_UP)
+    if price is not None and price != price.quantize(PENNY):  # a 3-decimal price rule; never charge part of a penny
+        refuse('The label price is in fractions of a penny. Check the label rule, or ring it up.')
     if not product.is_weighed:
         if weight is not None:
             refuse(f'{product.name} is sold by each, but this is a weight label. Ring it up as a product.')
-        return Label(product, None, price, False, code)
+        return Label(product, None, None if price is None else price.quantize(PENNY), False, code)
     if weight is None and price is None:
         refuse(f'{product.name} is sold by weight, but this label has no weight or price. Weigh it.')
     from_price = weight is None
@@ -60,7 +62,7 @@ def read_label(company, code, today):
         weight = (price / product.price_per_kg).quantize(KG, rounding=ROUND_HALF_UP)
     if not MIN_KG <= weight <= MAX_KG:
         refuse(f'{product.name}: the label weight {weight} kg is not between 0.001 and 100 kg. Weigh it instead.')
-    return Label(product, weight, price, from_price, code)
+    return Label(product, weight, None if price is None else price.quantize(PENNY), from_price, code)
 
 
 def _scale_label(company, code):

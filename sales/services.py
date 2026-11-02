@@ -147,6 +147,8 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
     customer = virtual_location(company_id, Location.CUSTOMER)
     vat_day = uk_date()  # the VAT rate follows the UK calendar day
     tolerance = get_company_setting(company_id, LABEL_TOLERANCE_KEY, DEFAULT_LABEL_TOLERANCE, Decimal)
+    if not tolerance.is_finite() or tolerance < 0:  # NaN would break every comparison; a typo must not stop sales
+        tolerance = DEFAULT_LABEL_TOLERANCE
     plan, problems = [], []
     for pk in sorted(wanted):
         product = products[pk]

@@ -11,10 +11,15 @@ from django.urls import reverse
 from django.utils import timezone
 
 from common.models import Setting
-from common.tests.factories import ProductFactory, StockBatchFactory
+from common.tests.factories import CompanyFactory, ProductFactory, StockBatchFactory, UserFactory
 from inventory.gs1_parser import GS
 from inventory.models import StockBatch, StockMovement
-from sales.models import SaleItem
+from rest_framework.exceptions import ValidationError
+
+from sales.labels import read_label
+from sales.models import SaleItem, TillSession
+from sales.services import record_sale
+from vat.services import uk_date
 from sales.tests.test_labels import add_rules, gtin, scale_code
 from sales.tests.test_sales import SalesTestCase
 
@@ -145,3 +150,70 @@ class LabelSaleTests(SalesTestCase):
         line = self.charge([self.label(scale_code('20', '00077', '00150'))]).json()['items'][0]
         # 1.50 gross at 20%: VAT 0.25, net 1.25
         self.assertEqual((line['vat_amount'], line['net_amount']), ('0.25', '1.25'))
+
+    def test_bad_tolerance_setting_falls_back_to_the_default(self):
+        for value in ('NaN', 'Infinity', '-5', 'ten'):
+            Setting.objects.update_or_create(company=self.company, key='label_price_tolerance_percent',
+                                             defaults={'value': value})
+            response = self.charge([self.label(scale_code('20', '00077', '00179'))])
+            self.assertEqual(response.status_code, 201, (value, response.content))
+            self.assertTrue(response.json()['items'][0]['label_price_flagged'], value)  # 10.5% > the default 10%
+            StockBatchFactory(product=self.cake, quantity=1, batch_number=f'C-{value}',
+                              expiration_date=timezone.localdate() + timedelta(days=30))
+
+    def test_label_for_a_free_product_is_flagged_unless_free(self):
+        self.cake.price = D('0.00')
+        self.cake.save()
+        line = self.charge([self.label(scale_code('20', '00077', '00150'))]).json()['items'][0]
+        self.assertEqual((line['expected_price'], line['label_price_flagged']), ('0.00', True))
+        line = self.charge([self.label(scale_code('20', '00077', '00000'))]).json()['items'][0]
+        self.assertFalse(line['label_price_flagged'])
+
+    def test_gs1_gtin_only_label_on_an_each_product_charges_its_price(self):
+        self.cake.barcode = gtin('0501234567890')[1:]
+        self.cake.save()
+        line = self.charge([self.label('01' + gtin('0501234567890') + '10LOT1')]).json()['items'][0]
+        self.assertEqual((line['line_total'], line['label_price'], line['expected_price'], line['label_price_flagged']),
+                         ('2.00', None, None, False))
+
+    def test_catch_weight_weight_label_takes_one_piece_and_its_kg(self):
+        lamb = ProductFactory(company=self.company, name='Fake Lamb', price=D('0.00'), stock_quantity=0,
+                              sold_by='weight', is_catch_weight=True, price_per_kg=D('12.0000'), plu='43')
+        StockBatchFactory(product=lamb, quantity=3, weight_kg=D('1.500'), batch_number='L-1',
+                          expiration_date=timezone.localdate() + timedelta(days=5))
+        line = self.charge([self.label(scale_code('21', '0043', '00520', with_check=True))]).json()['items'][0]
+        self.assertEqual((line['quantity'], line['weight_kg'], line['line_total']), (1, '0.520', '6.24'))
+        batch = StockBatch.objects.get(product=lamb)
+        self.assertEqual((batch.quantity, batch.weight_kg), (2, D('0.980')))
+
+    def test_product_changed_after_the_label_was_read(self):
+        label = read_label(self.company, scale_code('21', '0042', '00512', with_check=True), uk_date())
+        StockBatch.objects.filter(product=self.mince).update(weight_kg=0)
+        self.mince.__class__.objects.filter(pk=self.mince.pk).update(sold_by='each', price_per_kg=None)
+        session = TillSession.objects.create(till=self.till, opened_by=self.cashier, opening_float=D('0.00'))
+        with self.assertRaises(ValidationError) as caught:
+            record_sale(session=session, cashier=self.cashier, payment_method='card', amount_tendered=None,
+                        lines=[(label.product, 1, label.weight_kg, label)])
+        self.assertIn('changed, scan it again', str(caught.exception.detail))
+
+
+class SuperuserLabelSaleTests(SalesTestCase):
+    def test_superuser_reads_labels_with_the_sessions_company(self):
+        add_rules(self.company)
+        cake = self.stocked(price='2.00', batches=((5, 30),), name='Fake Cake', plu='77')
+        other = CompanyFactory()
+        add_rules(other)
+        ProductFactory(company=other, name='Fake Other Cake', price=D('9.00'), plu='78')
+        admin = UserFactory(company=None, is_superuser=True, is_staff=True)
+        session = self.open()['id']
+        api = self.as_user(admin)
+        response = api.post(reverse('sale-list'), {'session': session, 'payment_method': 'card',
+                                                   'items': [{'barcode': scale_code('20', '00078', '00150')}]},
+                            format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('PLU 78', str(response.json()['items']))
+        response = api.post(reverse('sale-list'), {'session': session, 'payment_method': 'card',
+                                                   'items': [{'barcode': scale_code('20', '00077', '00150')}]},
+                            format='json')
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()['items'][0]['product'], cake.pk)

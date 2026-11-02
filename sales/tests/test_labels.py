@@ -131,3 +131,9 @@ class ReadLabelTests(TestCase):
     def test_inactive_rules_not_used(self):
         BarcodeRule.objects.filter(company=self.company).update(is_active=False)
         self.assertIn('Not a price or weight label', self.refused(scale_code('20', '00077', '00150')))
+
+    def test_price_in_fractions_of_a_penny_refused(self):
+        BarcodeRule.objects.create(company=self.company, name='Fake 3 dp price', prefix='22', item_code_length=5,
+                                   value_type='price', decimals=3, value_check_digit=False)
+        self.assertIn('fractions of a penny', self.refused(scale_code('22', '00077', '01234')))
+        self.assertEqual(self.read(scale_code('22', '00077', '01230')).label_price, D('1.23'))

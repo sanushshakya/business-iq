@@ -109,6 +109,12 @@ class SaleItem(models.Model):
     vat_rate = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     net_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     vat_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    # A scanned label (G18): the raw code as sent, the price printed on it (charged as it is), what the product
+    # costs today when that can be compared, and whether the two are further apart than the company's tolerance.
+    barcode = models.CharField(max_length=64, blank=True)
+    label_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    expected_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    label_price_flagged = models.BooleanField(default=False)
 
     class Meta:
         ordering = ['id']

@@ -33,7 +33,11 @@ class SaleAdmin(ReadOnlyAdmin):
 
 @admin.register(SaleItem)
 class SaleItemAdmin(ReadOnlyAdmin):
-    list_display = ('sale', 'product_name', 'quantity', 'unit_price', 'line_total')
+    list_display = ('sale', 'product_name', 'quantity', 'weight_kg', 'unit_price', 'line_total', 'label_price',
+                    'expected_price', 'label_price_flagged')
+    # Scanned labels charged at a price far from today's (G18), for a manager to look at.
+    list_filter = ['label_price_flagged']
+    search_fields = ['product_name', 'barcode']
 
 
 @admin.register(SaleAllocation)

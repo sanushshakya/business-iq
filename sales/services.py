@@ -10,6 +10,7 @@ affected rows locked, so two tills cannot sell the same last unit.
 """
 
 from collections import OrderedDict
+from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import transaction
@@ -19,12 +20,15 @@ from rest_framework import serializers
 
 from inventory.ledger import LedgerError, move, sellable_locations, take_fefo, take_weighed, virtual_location
 from inventory.models import Location, Product, StockBatch
+from common.services.settings_service import get_company_setting
 from sync.outbox import active_connection, emit
 from vat.services import NoVatRate, rate_for, split_inclusive, uk_date
 
 from .models import Sale, SaleAllocation, SaleItem, TillSession
 
 CENTS = Decimal('0.01')
+# A scanned label's price further than this from today's price is charged but flagged (G18).
+LABEL_TOLERANCE_KEY, DEFAULT_LABEL_TOLERANCE = 'label_price_tolerance_percent', Decimal('10')
 
 
 def vat_by_rate(items):
@@ -122,28 +126,32 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
     if not session.is_open:
         raise serializers.ValidationError({'session': 'This session is closed. Open the till to sell.'})
 
-    # Merge repeated each products (weighed lines stay one per weighing) and lock the products in a fixed order so
-    # concurrent sales cannot deadlock.
-    wanted, weighings = OrderedDict(), {}
-    for product, quantity, *weight in lines:
-        weight = weight[0] if weight else None
-        if weight is None:
-            wanted[product.pk] = (product, wanted.get(product.pk, (product, 0))[1] + quantity)
+    # Merge repeated each products (label lines and weighed lines stay one per scan or weighing) and lock the
+    # products in a fixed order so concurrent sales cannot deadlock.
+    units, labelled, weighings = OrderedDict(), {}, {}
+    for product, quantity, *rest in lines:
+        weight, label = (list(rest) + [None, None])[:2]
+        if weight is not None:
+            weighings.setdefault(product.pk, []).append((quantity, weight, label))
+        elif label is not None:
+            labelled.setdefault(product.pk, []).append(label)
         else:
-            wanted.setdefault(product.pk, (product, 0))
-            weighings.setdefault(product.pk, []).append((quantity, weight))
+            units[product.pk] = units.get(product.pk, 0) + quantity
+    wanted = {*units, *labelled, *weighings}
     products = {p.pk: p for p in Product.objects.select_for_update().filter(pk__in=wanted).order_by('pk')}
 
     today = timezone.localdate()
     # A till sells only what is on its branch's sellable locations (shop floor, butchery counter...).
     selling_from = list(sellable_locations(session.till.branch))
-    customer = virtual_location(session.till.branch.company_id, Location.CUSTOMER)
+    company_id = session.till.branch.company_id
+    customer = virtual_location(company_id, Location.CUSTOMER)
     vat_day = uk_date()  # the VAT rate follows the UK calendar day
+    tolerance = get_company_setting(company_id, LABEL_TOLERANCE_KEY, DEFAULT_LABEL_TOLERANCE, Decimal)
     plan, problems = [], []
     for pk in sorted(wanted):
         product = products[pk]
-        if product.is_weighed != (pk in weighings):  # the kind changed since the line was checked
-            problems.append(f'{product.name}: this product changed, scan it again.')
+        if product.is_weighed != (pk in weighings) or (pk in weighings and pk in {*units, *labelled}):
+            problems.append(f'{product.name}: this product changed, scan it again.')  # the kind changed meanwhile
             continue
         batches = _sellable_batches(product, selling_from, today)
         try:
@@ -152,13 +160,18 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
             problems.append(f'{product.name}: no VAT rate is set up for "{product.vat_code}". Ask an admin.')
             continue
         if not product.is_weighed:
-            quantity = wanted[pk][1]
+            quantity = units.get(pk, 0) + len(labelled.get(pk, []))
             available = sum(b.quantity for b in batches)
             if quantity > available:
                 problems.append(f'{product.name}: only {available} in date, {quantity} requested.')
                 continue
-            line_total = (product.price * quantity).quantize(CENTS, rounding=ROUND_HALF_UP)
-            plan.append((product, quantity, None, line_total, rate))
+            if units.get(pk):
+                plan.append(_Line(product, units[pk], None, (product.price * units[pk]).quantize(CENTS, ROUND_HALF_UP),
+                                  rate))
+            for label in labelled.get(pk, []):  # one unit each, at the label's price when it has one
+                compare = label.label_price is not None
+                plan.append(_labelled_line(product, 1, None, label, rate, product.price if compare else None,
+                                           tolerance, fallback=product.price))
             continue
         # Weighed: short kg is sold (the gap is booked to ADJUSTMENT); pieces and having some stock are checked.
         if not product.price_per_kg:
@@ -167,17 +180,21 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
         if not batches:
             problems.append(f'{product.name}: none in date here.')
             continue
-        pieces = sum(quantity for quantity, _ in weighings[pk])
+        pieces = sum(quantity for quantity, _, _ in weighings[pk])
         available = sum(b.quantity for b in batches)
         if product.is_catch_weight and pieces > available:
             problems.append(f'{product.name}: only {available} in date, {pieces} requested.')
             continue
-        for quantity, weight in weighings[pk]:
-            line_total = (weight * product.price_per_kg).quantize(CENTS, rounding=ROUND_HALF_UP)
-            plan.append((product, quantity, weight, line_total, rate))
+        for quantity, weight, label in weighings[pk]:
+            by_weight = (weight * product.price_per_kg).quantize(CENTS, rounding=ROUND_HALF_UP)
+            if label is None or label.label_price is None:
+                plan.append(_Line(product, quantity, weight, by_weight, rate, label))
+            else:  # the label's price is charged; compared with today's £/kg unless the kg came from that price
+                plan.append(_labelled_line(product, quantity, weight, label, rate,
+                                           None if label.weight_from_price else by_weight, tolerance))
     if problems:
         raise serializers.ValidationError({'items': problems})
-    total = sum((line_total for *_, line_total, _rate in plan), Decimal('0.00'))
+    total = sum((line.total for line in plan), Decimal('0.00'))
 
     if payment_method == Sale.CASH:
         if amount_tendered is None or amount_tendered < total:
@@ -191,13 +208,20 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
         total=total, amount_tendered=amount_tendered, change_due=change, client_ref=client_ref,
         loyalty_barcode=loyalty_barcode,
     )
-    for product, quantity, weight, line_total, rate in plan:
-        net, vat = split_inclusive(line_total, rate)
+    for line in plan:
+        product, quantity, weight = line.product, line.quantity, line.weight
+        net, vat = split_inclusive(line.total, line.rate)
+        if weight is not None:
+            unit_price = product.price_per_kg.quantize(CENTS, ROUND_HALF_UP)
+        else:
+            unit_price = line.total if line.label is not None else product.price
         item = SaleItem.objects.create(
-            sale=sale, product=product, product_name=product.name, quantity=quantity,
-            unit_price=product.price if weight is None else product.price_per_kg.quantize(CENTS, ROUND_HALF_UP),
-            weight_kg=weight, price_per_kg=None if weight is None else product.price_per_kg, line_total=line_total,
-            vat_code=product.vat_code, vat_rate=rate, net_amount=net, vat_amount=vat,
+            sale=sale, product=product, product_name=product.name, quantity=quantity, unit_price=unit_price,
+            weight_kg=weight, price_per_kg=None if weight is None else product.price_per_kg, line_total=line.total,
+            vat_code=product.vat_code, vat_rate=line.rate, net_amount=net, vat_amount=vat,
+            barcode=line.label.raw[:64] if line.label else '',
+            label_price=line.label.label_price if line.label else None,
+            expected_price=line.expected, label_price_flagged=line.flagged,
         )
         if weight is None:
             allocations, shortfall = take_fefo(product, quantity, locations=selling_from, destination=customer,
@@ -221,6 +245,31 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
                 'barcode': loyalty_barcode, 'amount': str(total), 'order_reference': _loyalty_reference(sale),
             })
     return sale, True
+
+
+@dataclass(frozen=True)
+class _Line:
+    product: Product
+    quantity: int
+    weight: Decimal | None
+    total: Decimal
+    rate: Decimal
+    label: object = None  # sales.labels.Label for a scanned label
+    expected: Decimal | None = None
+    flagged: bool = False
+
+
+def _labelled_line(product, quantity, weight, label, rate, expected, tolerance, fallback=None):
+    """A scanned label's line: its printed price is charged (``fallback`` when it has none) and compared with
+    ``expected`` (today's price, None when there is nothing independent to compare)."""
+    total = label.label_price if label.label_price is not None else fallback
+    if expected is None:
+        flagged = False
+    elif expected == 0:
+        flagged = total != 0
+    else:
+        flagged = abs(total - expected) > expected * tolerance / 100
+    return _Line(product, quantity, weight, total, rate, label, expected, flagged)
 
 
 def _sellable_batches(product, locations, today):

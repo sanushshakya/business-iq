@@ -8,7 +8,9 @@ from rest_framework import serializers
 from common.tenancy import scope_queryset
 from inventory.models import Product
 from tenants.models import Till
+from vat.services import uk_date
 
+from .labels import read_label
 from .models import Sale, SaleItem, TillSession
 from .services import session_summary, vat_by_rate
 
@@ -82,7 +84,8 @@ class SaleItemSerializer(serializers.ModelSerializer):
         model = SaleItem
         fields = [
             'id', 'product', 'product_name', 'quantity', 'unit_price', 'weight_kg', 'price_per_kg', 'line_total',
-            'vat_code', 'vat_rate', 'net_amount', 'vat_amount',
+            'vat_code', 'vat_rate', 'net_amount', 'vat_amount', 'barcode', 'label_price', 'expected_price',
+            'label_price_flagged',
         ]
         read_only_fields = fields
 
@@ -119,15 +122,24 @@ class SaleLineSerializer(serializers.Serializer):
     """
     A scanned or entered line. Each products send ``quantity``. Products sold by weight send ``weight_kg``: loose ones
     as one line (``quantity`` 1 or left out), catch-weight ones with ``quantity`` pieces weighing ``weight_kg`` in all.
+    A scanned price or weight label sends only ``barcode`` (the raw scan): the server reads it (``sales.labels``).
     """
 
-    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
+    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all(), required=False)
+    # Not trimmed: GS1 labels may end in a GS separator, which str.strip() would remove.
+    barcode = serializers.CharField(max_length=64, required=False, trim_whitespace=False)
     quantity = serializers.IntegerField(min_value=1, max_value=10000, required=False)
     # A ceiling per weighing, so a keying slip (500 for 0.500) is refused rather than booked as found stock.
     weight_kg = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=Decimal('0.001'),
                                          max_value=Decimal('100'), required=False, allow_null=True)
 
     def validate(self, line):
+        if 'barcode' in line:
+            if set(line) != {'barcode'}:
+                raise serializers.ValidationError('A label line is just the scanned barcode.')
+            return {'barcode': line['barcode'], 'quantity': 1}  # the product, kg and price come from the label
+        if 'product' not in line:
+            raise serializers.ValidationError('Choose a product or scan a label.')
         product, quantity, weight = line['product'], line.get('quantity'), line.get('weight_kg')
         if not product.is_weighed:
             if weight is not None:
@@ -159,10 +171,20 @@ class CreateSaleSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         # Products must belong to the till's company (this also guards superusers, who are not scoped).
-        company_id = attrs['session'].till.branch.company_id
+        company = attrs['session'].till.branch.company
+        problems, today = [], uk_date()
         for line in attrs['items']:
-            if line['product'].company_id != company_id:
+            if 'barcode' in line:  # read on the server, whatever the till showed
+                try:
+                    label = read_label(company, line['barcode'], today)
+                except serializers.ValidationError as error:
+                    problems.extend(str(message) for message in error.detail)
+                    continue
+                line.update(product=label.product, weight_kg=label.weight_kg, label=label)
+            elif line['product'].company_id != company.pk:
                 raise serializers.ValidationError({'items': 'Invalid pk - object does not exist.'})
+        if problems:
+            raise serializers.ValidationError({'items': problems})
         return attrs
 
 

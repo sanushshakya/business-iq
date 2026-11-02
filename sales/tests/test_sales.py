@@ -176,7 +176,8 @@ class SaleTests(SalesTestCase):
             sale['items'],
             [{'id': sale['items'][0]['id'], 'product': product.pk, 'product_name': product.name,
               'quantity': 3, 'unit_price': '2.50', 'weight_kg': None, 'price_per_kg': None, 'line_total': '7.50',
-              'vat_code': 'zero', 'vat_rate': '0.00', 'net_amount': '7.50', 'vat_amount': '0.00'}],
+              'vat_code': 'zero', 'vat_rate': '0.00', 'net_amount': '7.50', 'vat_amount': '0.00',
+              'barcode': '', 'label_price': None, 'expected_price': None, 'label_price_flagged': False}],
         )
         product.refresh_from_db()
         self.assertEqual(product.stock_quantity, 7)

@@ -153,6 +153,14 @@ class YieldTemplateOutputInline(TenantAdminMixin, admin.TabularInline):
     extra = 0
 
 
+@admin.register(YieldTemplateOutput)
+class YieldTemplateOutputAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """Outputs are changed on their template's page, where the template's checks (at most 100%) run."""
+
+    list_display = ('template', 'kind', 'product', 'name', 'expected_percent', 'keeps_days')
+    list_select_related = ('template', 'product')
+
+
 @admin.register(YieldTemplate)
 class YieldTemplateAdmin(TenantAdminMixin, admin.ModelAdmin):
     """Butchery yield templates (G20); outputs total at most 100%, the rest is the expected loss."""

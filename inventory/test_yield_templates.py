@@ -277,6 +277,18 @@ class YieldTemplateAdminTests(TestCase):
             self.client.get(url)
         return len(before) + 1  # the create above
 
+    def test_outputs_are_changed_only_on_the_template_page(self):
+        # A standalone outputs page would skip the template's checks (total at most 100%, products weighed).
+        template = YieldTemplate.objects.create(company=self.company, name='T', input_product=self.side)
+        output = YieldTemplateOutput.objects.create(template=template, product=self.steak, expected_percent=D('50'))
+        self.assertEqual(self.client.get(reverse('admin:inventory_yieldtemplateoutput_add')).status_code, 403)
+        change = reverse('admin:inventory_yieldtemplateoutput_change', args=[output.pk])
+        response = self.client.post(change, {'template': template.pk, 'kind': 'product', 'product': self.steak.pk,
+                                             'expected_percent': '99.00', 'position': 0})
+        self.assertEqual(response.status_code, 403)
+        output.refresh_from_db()
+        self.assertEqual(output.expected_percent, D('50.00'))
+
     def test_admin_saves_a_valid_template(self):
         response = self.post({'kind': 'product', 'product': self.steak.pk, 'expected_percent': '70.00'},
                              {'kind': 'waste', 'name': 'Bone', 'expected_percent': '25.00'})

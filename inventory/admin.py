@@ -149,7 +149,7 @@ class YieldOutputFormSet(BaseInlineFormSet):
 class YieldTemplateOutputInline(TenantAdminMixin, admin.TabularInline):
     model = YieldTemplateOutput
     formset = YieldOutputFormSet
-    fields = ('position', 'kind', 'product', 'name', 'expected_percent')
+    fields = ('position', 'kind', 'product', 'name', 'expected_percent', 'keeps_days')
     extra = 0
 
 

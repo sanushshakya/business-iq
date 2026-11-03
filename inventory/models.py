@@ -196,6 +196,9 @@ class StockMovement(models.Model):
     transfer = models.ForeignKey(
         'inventory.Transfer', null=True, blank=True, on_delete=models.PROTECT, related_name='movements'
     )
+    breakdown = models.ForeignKey(
+        'inventory.Breakdown', null=True, blank=True, on_delete=models.PROTECT, related_name='movements'
+    )
 
     def __str__(self):
         return f"{self.batch.product.name} - {self.movement_type.capitalize()} - {self.quantity}"
@@ -546,6 +549,9 @@ class YieldTemplateOutput(models.Model):
         max_digits=5, decimal_places=2,
         validators=[MinValueValidator(Decimal('0.01')), MaxValueValidator(Decimal('100'))])
     position = models.PositiveSmallIntegerField(default=0)
+    # A product output's batches expire this many days after the breakdown, never after the input (G21); blank:
+    # the input's expiry.
+    keeps_days = models.PositiveSmallIntegerField(null=True, blank=True)
 
     class Meta:
         ordering = ['template', 'position', 'pk']
@@ -586,6 +592,8 @@ def yield_output_problems(input_product, outputs):
             elif not name:
                 problems.append('Name the waste (e.g. Bone).')
                 continue
+            if output.get('keeps_days') is not None:
+                problems.append('Waste is thrown away; leave keeps days out.')
             key = ('waste', name.casefold())
         elif product is None:
             problems.append('Choose the output product.')
@@ -606,3 +614,70 @@ def yield_output_problems(input_product, outputs):
     if total > 100:
         problems.append(f'Outputs add up to {total}%; they can be at most 100%.')
     return problems
+
+
+class Breakdown(models.Model):
+    """
+    A butchery breakdown (G21): part or all of an input batch at a butchery location cut into the template's
+    products (new batches at the same location), waste (to WASTE) and loss (to ADJUSTMENT), so ``input_kg`` = product
+    kg + waste kg + ``loss_kg`` exactly. Recorded in one step (``inventory.breakdowns``); a void reverses it.
+    """
+
+    COMPLETED, VOIDED = 'completed', 'voided'
+    STATUSES = [(COMPLETED, 'Completed'), (VOIDED, 'Voided')]
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='breakdowns')
+    number = models.PositiveIntegerField()  # per company: 1, 2, 3...
+    template = models.ForeignKey(YieldTemplate, on_delete=models.PROTECT, related_name='breakdowns')
+    location = models.ForeignKey(Location, on_delete=models.PROTECT, related_name='breakdowns')
+    input_batch = models.ForeignKey(StockBatch, on_delete=models.PROTECT, related_name='breakdowns')
+    input_pieces = models.PositiveIntegerField(default=0)  # catch-weight inputs
+    input_kg = models.DecimalField(max_digits=10, decimal_places=3)
+    loss_kg = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
+    loss_reason = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=10, choices=STATUSES, default=COMPLETED)
+    client_ref = models.UUIDField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name='+'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    voided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name='+'
+    )
+    voided_at = models.DateTimeField(null=True, blank=True)
+    void_reason = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ['-number', '-id']
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'number'], name='breakdown_number_unique_per_company'),
+            models.UniqueConstraint(fields=['company', 'client_ref'], condition=models.Q(client_ref__isnull=False),
+                                    name='breakdown_client_ref_unique_per_company'),
+        ]
+
+    def __str__(self):
+        return self.reference
+
+    @property
+    def reference(self):
+        return f'BD-{self.number:06d}' if self.number else 'BD-new'
+
+
+class BreakdownLine(models.Model):
+    """What came out of a breakdown for one template output: a product's new batch, or waste."""
+
+    breakdown = models.ForeignKey(Breakdown, on_delete=models.CASCADE, related_name='lines')
+    template_output = models.ForeignKey(YieldTemplateOutput, on_delete=models.PROTECT, related_name='+')
+    kind = models.CharField(max_length=10, choices=YieldTemplateOutput.KINDS)
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, null=True, blank=True, related_name='+')
+    name = models.CharField(max_length=100)
+    weight_kg = models.DecimalField(max_digits=10, decimal_places=3)
+    pieces = models.PositiveIntegerField(default=0)  # catch-weight outputs
+    expiration_date = models.DateField(null=True, blank=True)  # products
+    output_batch = models.ForeignKey(StockBatch, on_delete=models.PROTECT, null=True, blank=True, related_name='+')
+
+    class Meta:
+        ordering = ['breakdown', 'pk']
+
+    def __str__(self):
+        return f'{self.name} {self.weight_kg} kg'

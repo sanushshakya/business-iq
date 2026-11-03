@@ -446,7 +446,7 @@ class YieldTemplateOutputSerializer(TenantModelSerializer):
 
     class Meta:
         model = YieldTemplateOutput
-        fields = ['id', 'kind', 'product', 'name', 'expected_percent']
+        fields = ['id', 'kind', 'product', 'name', 'expected_percent', 'keeps_days']
         read_only_fields = ['id']
 
     def to_representation(self, output):
@@ -506,7 +506,8 @@ class YieldTemplateSerializer(TenantModelSerializer):
             if problems:
                 raise serializers.ValidationError({'outputs': problems})
         elif 'input_product' in attrs and self.instance is not None:  # a new input against the outputs kept
-            kept = [{'kind': o.kind, 'product': o.product, 'name': o.name, 'expected_percent': o.expected_percent}
+            kept = [{'kind': o.kind, 'product': o.product, 'name': o.name, 'expected_percent': o.expected_percent,
+                     'keeps_days': o.keeps_days}
                     for o in self.instance.outputs.all()]
             problems = yield_output_problems(attrs['input_product'], kept)
             if problems:
@@ -519,7 +520,7 @@ class YieldTemplateSerializer(TenantModelSerializer):
         YieldTemplateOutput.objects.bulk_create(
             YieldTemplateOutput(template=template, position=index, kind=output['kind'], product=output.get('product'),
                                 name='' if output['kind'] == YieldTemplateOutput.PRODUCT else output['name'].strip(),
-                                expected_percent=output['expected_percent'])
+                                expected_percent=output['expected_percent'], keeps_days=output.get('keeps_days'))
             for index, output in enumerate(outputs)
         )
 

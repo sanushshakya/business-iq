@@ -73,7 +73,7 @@ def primary_location(company, create=False):
     return location
 
 
-def move(batch, quantity, movement_type, *, counterpart, weight_kg=None, transfer=None):
+def move(batch, quantity, movement_type, *, counterpart, weight_kg=None, transfer=None, breakdown=None):
     """
     Append a ledger entry, apply it to the batch and the product, and return it (the batch row must be locked).
     Products sold by weight need ``weight_kg`` (kg moved, may be 0 for a count-only entry); each products never send it.
@@ -105,7 +105,7 @@ def move(batch, quantity, movement_type, *, counterpart, weight_kg=None, transfe
     Product.objects.filter(pk=batch.product_id).update(stock_quantity=F('stock_quantity') + sign * quantity)
     return StockMovement.objects.create(
         batch=batch, quantity=quantity, weight_kg=weight_kg, movement_type=movement_type,
-        source_location=source, destination_location=destination, transfer=transfer,
+        source_location=source, destination_location=destination, transfer=transfer, breakdown=breakdown,
     )
 
 

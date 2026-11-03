@@ -66,6 +66,8 @@ TENANT_LOOKUPS = {
     'inventory.RequisitionLine': 'requisition__company',
     'inventory.YieldTemplate': 'company',
     'inventory.YieldTemplateOutput': 'template__company',
+    'inventory.Breakdown': 'company',
+    'inventory.BreakdownLine': 'breakdown__company',
 }
 
 

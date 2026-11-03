@@ -129,6 +129,20 @@ class YieldTemplateApiTests(TestCase):
             {'kind': 'waste', 'expected_percent': '5.00'}, {'kind': 'waste', 'name': ' ', 'expected_percent': '5.00'}])
         self.assertEqual(response.json()['outputs'], ['Name the waste (e.g. Bone).'] * 2)
 
+    def test_keeps_days_on_product_outputs(self):
+        response = self.create(outputs=[
+            {'kind': 'product', 'product': self.steak.pk, 'expected_percent': '30.00', 'keeps_days': 5},
+            {'kind': 'product', 'product': self.mince.pk, 'expected_percent': '40.00'}])
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual([o['keeps_days'] for o in response.json()['outputs']], [5, None])
+
+    def test_keeps_days_not_for_waste(self):
+        response = self.create(outputs=[
+            {'kind': 'product', 'product': self.steak.pk, 'expected_percent': '30.00'},
+            {'kind': 'waste', 'name': 'Bone', 'expected_percent': '10.00', 'keeps_days': 3}])
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Waste is thrown away; leave keeps days out.', response.json()['outputs'])
+
     def test_same_output_twice_refused(self):
         twice = [{'kind': 'product', 'product': self.steak.pk, 'expected_percent': '10.00'}] * 2
         self.assertIn('Fake Rump Steak is listed twice.', str(self.create(outputs=twice).json()['outputs']))

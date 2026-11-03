@@ -473,7 +473,7 @@ class YieldTemplateSerializer(TenantModelSerializer):
 
     class Meta:
         model = YieldTemplate
-        fields = ['id', 'name', 'input_product', 'input_product_name', 'is_active', 'note', 'outputs',
+        fields = ['id', 'name', 'input_product', 'input_product_name', 'cost_method', 'is_active', 'note', 'outputs',
                   'expected_yield_percent', 'expected_waste_percent', 'expected_loss_percent', 'created_at']
         read_only_fields = ['id', 'created_at']
 
@@ -549,7 +549,7 @@ class BreakdownLineSerializer(TenantModelSerializer):
     class Meta:
         model = BreakdownLine
         fields = ['id', 'output', 'kind', 'product', 'name', 'weight_kg', 'pieces', 'expiration_date', 'output_batch',
-                  'expected_kg']
+                  'expected_kg', 'allocated_cost']
         read_only_fields = fields
 
     @extend_schema_field(serializers.DecimalField(max_digits=10, decimal_places=3))
@@ -575,6 +575,7 @@ class BreakdownSerializer(TenantModelSerializer):
         model = Breakdown
         fields = ['id', 'number', 'reference', 'template', 'template_name', 'location', 'input_batch',
                   'input_batch_number', 'input_product_name', 'input_pieces', 'input_kg', 'loss_kg', 'loss_reason',
+                  'input_cost', 'cost_method',
                   'expected_loss_kg', 'lines', 'status', 'client_ref', 'created_by', 'created_at', 'voided_by',
                   'voided_at', 'void_reason']
         read_only_fields = fields

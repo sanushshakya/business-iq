@@ -234,7 +234,7 @@ class YieldTemplateAdminTests(TestCase):
     def post(self, *outputs, input_product=None):
         # A superuser is not scoped to a company, so the admin asks which one.
         data = {'name': 'Fake admin template', 'company': self.company.pk,
-                'input_product': input_product or self.side.pk, 'is_active': 'on', 'note': '',
+                'input_product': input_product or self.side.pk, 'cost_method': 'weight', 'is_active': 'on', 'note': '',
                 'outputs-TOTAL_FORMS': str(len(outputs)), 'outputs-INITIAL_FORMS': '0',
                 'outputs-MIN_NUM_FORMS': '0', 'outputs-MAX_NUM_FORMS': '1000'}
         for index, output in enumerate(outputs):

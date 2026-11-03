@@ -158,6 +158,10 @@ class StockBatch(models.Model):
     expiration_date = models.DateField()
     # Where this lot is. A lot split across places is one row per place (same number and expiry).
     location = models.ForeignKey('inventory.Location', on_delete=models.PROTECT, related_name='batches')
+    # Landed cost ex VAT per kg (products sold by weight) or per unit; blank when not known. A breakdown spreads it
+    # over its outputs (G22).
+    unit_cost = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True,
+                                    validators=[MinValueValidator(Decimal('0'))])
 
     class Meta:
         constraints = [
@@ -498,6 +502,11 @@ class YieldTemplate(models.Model):
     company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='yield_templates')
     name = models.CharField(max_length=100)
     input_product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='yield_templates')
+    # How a breakdown spreads the input's cost over the product outputs (G22): by their kg, or by their value
+    # (kg × price per kg). Waste carries none.
+    BY_WEIGHT, BY_VALUE = 'weight', 'value'
+    COST_METHODS = [(BY_WEIGHT, 'By weight'), (BY_VALUE, 'By value')]
+    cost_method = models.CharField(max_length=10, choices=COST_METHODS, default=BY_WEIGHT)
     is_active = models.BooleanField(default=True)
     note = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -635,6 +644,8 @@ class Breakdown(models.Model):
     input_kg = models.DecimalField(max_digits=10, decimal_places=3)
     loss_kg = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
     loss_reason = models.CharField(max_length=255, blank=True)
+    input_cost = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)  # null: batch had none
+    cost_method = models.CharField(max_length=10, choices=YieldTemplate.COST_METHODS, blank=True)  # as used
     status = models.CharField(max_length=10, choices=STATUSES, default=COMPLETED)
     client_ref = models.UUIDField(null=True, blank=True)
     created_by = models.ForeignKey(
@@ -675,6 +686,7 @@ class BreakdownLine(models.Model):
     pieces = models.PositiveIntegerField(default=0)  # catch-weight outputs
     expiration_date = models.DateField(null=True, blank=True)  # products
     output_batch = models.ForeignKey(StockBatch, on_delete=models.PROTECT, null=True, blank=True, related_name='+')
+    allocated_cost = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)  # products, G22
 
     class Meta:
         ordering = ['breakdown', 'pk']

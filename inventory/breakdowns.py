@@ -34,6 +34,7 @@ from .transfers import next_number
 
 EXPECTED_LOSS_REASON = 'Expected loss (template)'
 CENTS, COST_PER_KG = Decimal('0.01'), Decimal('0.0001')
+MAX_COST = Decimal('10000000000')  # Breakdown.input_cost holds 12 digits, 2 after the point
 
 
 class BreakdownError(Exception):
@@ -95,6 +96,9 @@ def _record(company, user, template, location, input_batch, lines, input_kg, inp
 
     products = [entry for entry in entries if entry[0].kind == YieldTemplateOutput.PRODUCT]
     input_cost = None if batch.unit_cost is None else (input_kg * batch.unit_cost).quantize(CENTS, ROUND_HALF_UP)
+    if input_cost is not None and input_cost >= MAX_COST:
+        raise BreakdownError({'input_batch': [
+            f'Batch {batch.batch_number} costs too much to record (check its cost per kg).']})
     shares = _allocate(template, products, input_cost)
     breakdown = Breakdown.objects.create(
         company=company, number=next_number(Breakdown, company), template=template, location=location,
@@ -135,7 +139,8 @@ def _allocate(template, products, input_cost):
     if input_cost is None:
         return {}
     if template.cost_method == YieldTemplate.BY_VALUE:
-        missing = [output.product.name for output, *_ in products if not output.product.price_per_kg]
+        missing = [output.product.name for output, *_ in products
+                   if output.product.price_per_kg is None or output.product.price_per_kg <= 0]
         if missing:
             raise BreakdownError({'template': [
                 f'{name} has no price per kg, which spreading the cost by value needs. Set it, or spread this '
@@ -145,8 +150,18 @@ def _allocate(template, products, input_cost):
         basis = {output.pk: weight for output, weight, *_ in products}
     total = sum(basis.values())
     shares = {pk: (input_cost * part / total).quantize(CENTS, ROUND_HALF_UP) for pk, part in basis.items()}
-    largest = max(basis, key=lambda pk: basis[pk])  # the first of equals: dicts keep the lines' order
-    shares[largest] += input_cost - sum(shares.values())
+    remainder = input_cost - sum(shares.values())
+    # Largest basis first, the first of equals before later ones (sorted is stable; dicts keep the lines' order).
+    by_size = sorted(basis, key=lambda pk: basis[pk], reverse=True)
+    if remainder >= 0:
+        shares[by_size[0]] += remainder
+    else:  # rounding gave out too much: take it back from the largest, then the next, never below 0
+        for pk in by_size:
+            back = min(shares[pk], -remainder)
+            shares[pk] -= back
+            remainder += back
+            if not remainder:
+                break
     return shares
 
 

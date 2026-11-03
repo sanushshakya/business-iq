@@ -68,6 +68,17 @@ class CostAllocationTests(BreakdownTestCase):
         self.assertEqual(self.costs(breakdown), {'Fake Rump Steak': D('0.01'), 'Fake Shin': D('0.01'),
                                                  'Fake Beef Mince': D('0.00')})
 
+    def test_taking_pennies_back_never_goes_below_zero(self):
+        shin, flank = self.shin(), self.output(product=self.weighed('Fake Flank'), percent='1')
+        self.cost('0.0050')
+        lines = [(self.out_steak, '1.000'), (self.out_mince, '1.000'), (shin, '1.000'), (flank, '1.000')]
+        breakdown, _ = self.record(lines=lines, input_kg=D('4.000'), loss_reason='')
+        # £0.02 over four equal outputs: 0.005 → 0.01 each = 0.04; the 0.02 too much comes back a penny at a time
+        costs = [line.allocated_cost for line in breakdown.lines.order_by('pk')]
+        self.assertEqual((breakdown.input_cost, sum(costs)), (D('0.02'), D('0.02')))
+        self.assertEqual(costs, [D('0.00'), D('0.00'), D('0.01'), D('0.01')])
+        self.assertTrue(all(line.output_batch.unit_cost >= 0 for line in breakdown.lines.all()))
+
     def test_by_value(self):
         self.template.cost_method = 'value'
         self.template.save()
@@ -99,6 +110,47 @@ class CostAllocationTests(BreakdownTestCase):
         detail = self.refused()
         self.assertEqual(detail['template'], ['Fake Beef Mince has no price per kg, which spreading the cost by value '
                                               'needs. Set it, or spread this template by weight.'])
+
+    def test_zero_or_negative_price_per_kg_counts_as_missing(self):
+        self.template.cost_method = 'value'
+        self.template.save()
+        for price in ('0.0000', '-1.0000'):
+            with self.subTest(price=price):
+                Product.objects.filter(pk=self.mince.pk).update(price_per_kg=D(price))
+                self.assertIn('Fake Beef Mince has no price per kg', self.refused()['template'][0])
+
+    def test_value_method_without_a_cost_books_without_prices(self):
+        self.template.cost_method = 'value'
+        self.template.save()
+        Product.objects.filter(pk=self.mince.pk).update(price_per_kg=None)
+        self.cost_none()
+        breakdown, _ = self.record()
+        self.assertIsNone(breakdown.input_cost)
+
+    def cost_none(self):
+        StockBatch.objects.filter(pk=self.input.pk).update(unit_cost=None)
+
+    def test_later_method_change_leaves_a_breakdown_alone(self):
+        breakdown, _ = self.record()
+        self.template.cost_method = 'value'
+        self.template.save()
+        breakdown.refresh_from_db()
+        self.assertEqual((breakdown.cost_method, self.costs(breakdown)['Fake Rump Steak']), ('weight', D('20.80')))
+
+    def test_voiding_a_costed_breakdown(self):
+        from inventory.breakdowns import void_breakdown
+        breakdown, _ = self.record()
+        void_breakdown(breakdown, user=self.user, reason='Fake')
+        breakdown.refresh_from_db()
+        self.assertEqual((breakdown.status, breakdown.input_cost), ('voided', D('52.00')))
+        self.assertEqual(StockBatch.objects.get(pk=self.input.pk).weight_kg, D('10.000'))
+
+    def test_a_cost_too_large_to_store_is_refused(self):
+        big = self.batch(self.side, kg='200.000', days=6, number='BIG-1')
+        StockBatch.objects.filter(pk=big.pk).update(unit_cost=D('99999999.9999'))
+        detail = self.refused(input_batch=StockBatch.objects.get(pk=big.pk), input_kg=D('200.000'),
+                              lines=[(self.out_steak, '200.000')])
+        self.assertEqual(detail['input_batch'], ['Batch BIG-1 costs too much to record (check its cost per kg).'])
 
     def test_no_cost_on_the_batch_means_no_allocation(self):
         StockBatch.objects.filter(pk=self.input.pk).update(unit_cost=None)
@@ -135,6 +187,24 @@ class CostApiTests(BreakdownTestCase):
         response = self.api.patch(reverse('yieldtemplate-detail', args=[self.template.pk]), {'cost_method': 'value'},
                                   format='json')
         self.assertEqual((response.status_code, response.json()['cost_method']), (200, 'value'))
+
+    def test_only_staff_set_a_batch_cost(self):
+        from common.tests.factories import UserFactory
+        member = APIClient()
+        member.force_authenticate(UserFactory(company=self.company, is_staff=False))
+        url = reverse('stockbatch-detail', args=[self.input.pk])
+        self.assertEqual(member.patch(url, {'unit_cost': '9.0000'}, format='json').status_code, 200)
+        self.assertIsNone(StockBatch.objects.get(pk=self.input.pk).unit_cost)  # read-only for them
+        self.assertEqual(self.api.patch(url, {'unit_cost': '9.0000'}, format='json').status_code, 200)
+        self.assertEqual(StockBatch.objects.get(pk=self.input.pk).unit_cost, D('9.0000'))
+
+    def test_another_companys_batch_cost_is_404(self):
+        from common.tests.factories import CompanyFactory, UserFactory
+        stranger = APIClient()
+        stranger.force_authenticate(UserFactory(company=CompanyFactory(), is_staff=True))
+        response = stranger.patch(reverse('stockbatch-detail', args=[self.input.pk]), {'unit_cost': '1'},
+                                  format='json')
+        self.assertEqual(response.status_code, 404)
 
     def test_breakdown_shows_costs(self):
         StockBatch.objects.filter(pk=self.input.pk).update(unit_cost=D('5.2000'))

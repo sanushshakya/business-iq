@@ -112,6 +112,9 @@ class StockBatchSerializer(TenantModelSerializer):
         fields = super().get_fields()
         if self.instance is not None:
             fields['location'].read_only = True  # moving stock between locations is a transfer, not an edit
+        user = getattr(self.context.get('request'), 'user', None)
+        if not (user and (user.is_staff or user.is_superuser)):
+            fields['unit_cost'].read_only = True  # landed cost is commercial: staff set it (G22), others only see it
         return fields
 
     def validate_location(self, location):

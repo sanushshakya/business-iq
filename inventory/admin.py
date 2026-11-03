@@ -6,7 +6,7 @@ from common.tenancy import TenantAdminMixin
 
 from .models import (
     BarcodeRule, Location, Product, ProductCategory, StockBatch, StockMovement, Transfer, TransferLine, TransferPick,
-    Requisition, RequisitionLine, Breakdown, BreakdownLine, YieldTemplate, YieldTemplateOutput, other_company_problem, weighed_product_problem,
+    Requisition, RequisitionLine, Breakdown, BreakdownLine, WriteOff, YieldTemplate, YieldTemplateOutput, other_company_problem, weighed_product_problem,
     yield_output_problems,
 )
 
@@ -199,3 +199,13 @@ class BreakdownAdmin(TenantAdminMixin, ViewOnlyAdmin):
 @admin.register(BreakdownLine)
 class BreakdownLineAdmin(TenantAdminMixin, ViewOnlyAdmin):
     """A breakdown line changed by hand would no longer match its movements."""
+
+
+@admin.register(WriteOff)
+class WriteOffAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """Waste write-offs (G23); raised, approved and rejected through the API (the stock moves with them)."""
+
+    list_display = ('reference', 'batch', 'reason', 'quantity', 'weight_kg', 'cost', 'status', 'created_at')
+    list_filter = ('status', 'reason')
+    list_select_related = ('batch__product',)
+

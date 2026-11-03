@@ -10,8 +10,8 @@ from rest_framework.response import Response
 from common.tenancy import IsCompanyStaffOrReadOnly, SharedReferenceMixin, TenantScopedMixin
 from tenants.roles import STOCK
 
-from . import breakdowns, requisitions, transfers
-from .models import BarcodeRule, Location, ProductCategory, Product, Order, Supplier, StockBatch, StockMovement, Transfer, Requisition, YieldTemplate, Breakdown
+from . import breakdowns, requisitions, transfers, write_offs
+from .models import BarcodeRule, Location, ProductCategory, Product, Order, Supplier, StockBatch, StockMovement, Transfer, Requisition, YieldTemplate, Breakdown, WriteOff
 from .ledger import LedgerError
 from .projections import project_stock
 from .serializers import (
@@ -31,6 +31,9 @@ from .serializers import (
     RequisitionSerializer,
     TransferReceiveSerializer,
     TransferSerializer,
+    WriteOffCreateSerializer,
+    WriteOffDecisionSerializer,
+    WriteOffSerializer,
     YieldTemplateSerializer,
 )
 
@@ -389,6 +392,78 @@ class BreakdownViewSet(
                                  reason=serializer.validated_data['reason'])
         return self._response(breakdown, status.HTTP_200_OK)
 
+
+
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter('status', str, enum=[WriteOff.PENDING, WriteOff.WRITTEN_OFF, WriteOff.REJECTED]),
+]))
+class WriteOffViewSet(
+    TenantScopedMixin, mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    """
+    Waste write-offs (G23): stock from a batch to WASTE with a reason. Within the company's threshold it moves at
+    once; above it (or with no known cost) it waits for ``approve`` or ``reject`` by a staff member other than the one
+    who raised it. Staff and the stock role raise them; never edited or deleted.
+    """
+
+    queryset = WriteOff.objects.select_related('batch__product')
+    serializer_class = WriteOffSerializer
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self.action == 'list' and self.request.query_params.get('status'):
+            queryset = queryset.filter(status=self.request.query_params['status'])
+        return queryset
+
+    def _done(self, step, **kwargs):
+        try:
+            write_off = step(**kwargs)
+        except write_offs.WriteOffError as error:
+            raise ValidationError(error.detail)
+        except LedgerError as error:
+            raise ValidationError({'detail': [str(error)]})
+        except OperationalError as error:  # Postgres broke a deadlock with another stock change: nothing was saved
+            if 'deadlock' not in str(error).lower():
+                raise
+            raise Conflict('Stock was changing at the same time; nothing was saved. Try again.') from None
+        return WriteOffSerializer(self.get_queryset().get(pk=write_off.pk), context=self.get_serializer_context()).data
+
+    @extend_schema(request=WriteOffCreateSerializer, responses={201: WriteOffSerializer})
+    def create(self, request, *args, **kwargs):
+        user = request.user
+        if not (user.is_staff or user.is_superuser or user.role == STOCK):
+            raise PermissionDenied('Only staff or the stock team can write stock off.')
+        if user.company is None:
+            raise ValidationError({'detail': ['Your account is not linked to a company.']})
+        serializer = WriteOffCreateSerializer(data=request.data, context=self.get_serializer_context())
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        body = self._done(write_offs.raise_write_off, company=user.company, user=user, batch=data['batch'],
+                          reason=data['reason'], quantity=data['quantity'], weight_kg=data['weight_kg'],
+                          note=data['note'])
+        return Response(body, status=status.HTTP_201_CREATED)
+
+    def _decision(self, request, step):
+        write_off = self.get_object()
+        if not (request.user.is_staff or request.user.is_superuser):
+            raise PermissionDenied('Only staff can approve or reject write-offs.')
+        serializer = WriteOffDecisionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return Response(self._done(step, write_off=write_off, user=request.user,
+                                   note=serializer.validated_data['note']))
+
+    @extend_schema(request=WriteOffDecisionSerializer, responses=WriteOffSerializer)
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        """Approve a pending write-off (not your own); its stock goes to WASTE."""
+        return self._decision(request, write_offs.approve)
+
+    @extend_schema(request=WriteOffDecisionSerializer, responses=WriteOffSerializer)
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        """Reject a pending write-off (not your own); nothing moves."""
+        return self._decision(request, write_offs.reject)
 
 class Conflict(APIException):
     status_code = status.HTTP_409_CONFLICT

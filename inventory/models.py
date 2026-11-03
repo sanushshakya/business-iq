@@ -203,6 +203,9 @@ class StockMovement(models.Model):
     breakdown = models.ForeignKey(
         'inventory.Breakdown', null=True, blank=True, on_delete=models.PROTECT, related_name='movements'
     )
+    write_off = models.ForeignKey(
+        'inventory.WriteOff', null=True, blank=True, on_delete=models.PROTECT, related_name='movements'
+    )
 
     def __str__(self):
         return f"{self.batch.product.name} - {self.movement_type.capitalize()} - {self.quantity}"
@@ -693,3 +696,51 @@ class BreakdownLine(models.Model):
 
     def __str__(self):
         return f'{self.name} {self.weight_kg} kg'
+
+
+class WriteOff(models.Model):
+    """
+    Stock written off to the company's WASTE location (G23), with a reason. Its cost is the amount × the batch's
+    landed ``unit_cost``. Up to the company's threshold (``Setting`` ``write_off_approval_threshold``) it moves at
+    once; above it, or with no known cost, it waits ``pending`` until a staff member other than the one who raised it
+    approves (stock moves then) or rejects it. See ``inventory.write_offs``.
+    """
+
+    PENDING, WRITTEN_OFF, REJECTED = 'pending', 'written_off', 'rejected'
+    STATUSES = [(PENDING, 'Waiting for approval'), (WRITTEN_OFF, 'Written off'), (REJECTED, 'Rejected')]
+    REASONS = [('expired', 'Expired'), ('damaged', 'Damaged'), ('trim', 'Trim'), ('quality', 'Quality'),
+               ('theft', 'Theft'), ('sample', 'Sample')]
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='write_offs')
+    number = models.PositiveIntegerField()  # per company: 1, 2, 3...
+    batch = models.ForeignKey(StockBatch, on_delete=models.PROTECT, related_name='write_offs')
+    location = models.ForeignKey(Location, on_delete=models.PROTECT, related_name='write_offs')
+    reason = models.CharField(max_length=10, choices=REASONS)
+    quantity = models.PositiveIntegerField(default=0)  # units, or pieces for catch-weight; 0 for loose products
+    weight_kg = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)  # weighed products
+    cost = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)  # null: batch had no cost
+    note = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=12, choices=STATUSES, default=PENDING)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name='+'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name='+'
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.CharField(max_length=255, blank=True)
+    written_off_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-number', '-id']
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'number'], name='write_off_number_unique_per_company'),
+        ]
+
+    def __str__(self):
+        return self.reference
+
+    @property
+    def reference(self):
+        return f'W-{self.number:06d}' if self.number else 'W-new'

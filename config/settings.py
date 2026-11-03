@@ -142,6 +142,7 @@ SPECTACULAR_SETTINGS = {
     "ENUM_NAME_OVERRIDES": {
         "VatCodeEnum": "vat.models.VAT_CODES",
         "BreakdownStatusEnum": "inventory.models.Breakdown.STATUSES",
+        "WriteOffStatusEnum": "inventory.models.WriteOff.STATUSES",
     },
 }
 

@@ -15,7 +15,7 @@ from common.tenancy import TenantModelSerializer
 from . import requisitions, transfers
 from .ledger import move, virtual_location
 from .models import (
-    BarcodeRule, Breakdown, BreakdownLine, Location, YieldTemplate, YieldTemplateOutput, weighed_product_problem, yield_output_problems, Order, Product, ProductCategory, Requisition, RequisitionLine, StockBatch, StockMovement, Supplier,
+    BarcodeRule, Breakdown, BreakdownLine, Location, WriteOff, YieldTemplate, YieldTemplateOutput, weighed_product_problem, yield_output_problems, Order, Product, ProductCategory, Requisition, RequisitionLine, StockBatch, StockMovement, Supplier,
     Transfer, TransferLine, normalise_plu,
 )
 
@@ -621,3 +621,41 @@ class BreakdownCreateSerializer(TenantModelSerializer):
 
 class BreakdownVoidSerializer(serializers.Serializer):
     reason = serializers.CharField(max_length=255, help_text='Why the breakdown is being reversed.')
+
+
+class WriteOffSerializer(TenantModelSerializer):
+    """A waste write-off (G23): stock to WASTE with a reason; above the company's threshold it waits for approval."""
+
+    reference = serializers.CharField(read_only=True)
+    product_name = serializers.CharField(source='batch.product.name', read_only=True)
+    batch_number = serializers.CharField(source='batch.batch_number', read_only=True)
+    threshold = serializers.SerializerMethodField(help_text="The company's approval threshold in £, today.")
+
+    class Meta:
+        model = WriteOff
+        fields = ['id', 'number', 'reference', 'batch', 'batch_number', 'product_name', 'location', 'reason',
+                  'quantity', 'weight_kg', 'cost', 'threshold', 'note', 'status', 'created_by', 'created_at',
+                  'decided_by', 'decided_at', 'decision_note', 'written_off_at']
+        read_only_fields = fields
+
+    @extend_schema_field(serializers.DecimalField(max_digits=12, decimal_places=2))
+    def get_threshold(self, write_off):
+        from .write_offs import approval_threshold
+        return f'{approval_threshold(write_off.company_id)}'
+
+
+class WriteOffCreateSerializer(TenantModelSerializer):
+    """Raise a write-off: units (each products), pieces (catch-weight) or ``weight_kg`` (loose products)."""
+
+    quantity = serializers.IntegerField(min_value=0, required=False, default=0)
+    weight_kg = serializers.DecimalField(max_digits=10, decimal_places=3, required=False, allow_null=True,
+                                         default=None)
+    note = serializers.CharField(max_length=255, required=False, allow_blank=True, default='')
+
+    class Meta:
+        model = WriteOff
+        fields = ['batch', 'reason', 'quantity', 'weight_kg', 'note']
+
+
+class WriteOffDecisionSerializer(serializers.Serializer):
+    note = serializers.CharField(max_length=255, required=False, allow_blank=True, default='')

@@ -95,6 +95,7 @@ ROLE_ROUTES = {
         + _collection('inventory/yield-templates', READ)
         + _collection('inventory/breakdowns', {'GET', 'POST'})
         + _route(r'^/inventory/breakdowns/\d+/void/$', 'POST')
+        + _collection('inventory/write-offs', {'GET', 'POST'})
         + STOCK_ALERTS
         + _collection('pricing/price-changes', READ)
     ),

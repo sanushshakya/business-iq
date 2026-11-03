@@ -6,7 +6,9 @@ Waste write-offs (G23): stock from one batch goes out to the company's WASTE loc
 The cost is the amount × the batch's landed ``unit_cost`` (kg for weighed products), to the penny. A write-off whose
 cost is known and at most the company's threshold (``Setting`` ``write_off_approval_threshold``, default £50) moves at
 once; anything above it, or with no known cost, waits ``pending`` until a staff member other than the one who raised
-it approves (the stock moves then, after checking the batch still holds it) or rejects it (nothing moves). Every
+it approves (the stock moves then, after checking the batch still holds it) or rejects it (nothing moves). The
+amount, kg and cost the approver sees are the ones raised: a catch-weight batch whose pieces' kg has changed since
+(other pieces sold) is refused at approval, and a later change to the batch's cost does not change the write-off. Every
 movement carries ``write_off``; stock changes only through ``ledger.move``.
 """
 
@@ -23,6 +25,7 @@ from .transfers import next_number
 
 THRESHOLD_KEY, DEFAULT_THRESHOLD = 'write_off_approval_threshold', Decimal('50.00')
 CENTS = Decimal('0.01')
+MAX_COST = Decimal('10000000000')  # WriteOff.cost holds 12 digits, 2 after the point
 
 
 class WriteOffError(Exception):
@@ -57,6 +60,9 @@ def raise_write_off(*, company, user, batch, reason, quantity=0, weight_kg=None,
             raise WriteOffError({'batch': [f'Batch {batch.batch_number} is not on a real location.']})
         quantity, weight_kg = _amount(batch, quantity or 0, weight_kg)
         cost = _cost(batch, quantity, weight_kg)
+        if cost is not None and cost >= MAX_COST:
+            raise WriteOffError({'batch': [
+                f'Batch {batch.batch_number} costs too much to record (check its cost per kg).']})
         write_off = WriteOff.objects.create(
             company=company, number=next_number(WriteOff, company), batch=batch, location=batch.location,
             reason=reason, quantity=quantity, weight_kg=weight_kg, cost=cost, note=(note or '').strip(),
@@ -79,6 +85,12 @@ def approve(write_off, *, user, note=''):
             unit = ' kg' if write_off.quantity == 0 else ''
             raise WriteOffError({'detail': [f'Batch {batch.batch_number} now holds {held}{unit}; raise a new '
                                             'write-off.']})
+        if batch.product.is_catch_weight:  # the pieces' kg is fixed when raised; the batch may have changed since
+            kg = _amount(batch, write_off.quantity, None)[1]
+            if kg != write_off.weight_kg:
+                raise WriteOffError({'detail': [
+                    f'Batch {batch.batch_number} has changed since this was raised ({write_off.quantity} piece(s) '
+                    f'is now {kg} kg, not {write_off.weight_kg} kg); reject it and raise a new write-off.']})
         _decide(write_off, user, note, WriteOff.WRITTEN_OFF)
         _book(write_off, batch)
     return write_off

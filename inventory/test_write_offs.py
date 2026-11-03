@@ -138,6 +138,13 @@ class RaiseTests(WriteOffTestCase):
                 self.assertIn(field, caught.exception.detail)
         self.assertFalse(WriteOff.objects.exists())
 
+    def test_a_cost_too_large_to_store_is_refused(self):
+        big = self.batch(self.mince, kg='200.000', cost='99999999.9999', number='BIG')
+        with self.assertRaises(WriteOffError) as caught:
+            self.write(batch=big, weight_kg=D('200.000'))
+        self.assertEqual(caught.exception.detail['batch'], ['Batch BIG costs too much to record (check its cost '
+                                                            'per kg).'])
+
     def test_reason_must_be_known(self):
         with self.assertRaises(WriteOffError) as caught:
             self.write(quantity=1, reason='lost')
@@ -200,6 +207,33 @@ class DecisionTests(WriteOffTestCase):
         self.pending.refresh_from_db()
         self.assertEqual(self.pending.status, 'pending')
 
+    def test_catch_weight_batch_changed_while_pending_is_refused(self):
+        legs = ProductFactory(company=self.company, name='Fake Lamb Legs', price=D('0.00'), stock_quantity=0,
+                              sold_by='weight', is_catch_weight=True, price_per_kg=D('9.0000'))
+        batch = self.batch(legs, pieces=3, kg='10.000', cost='6.0000')
+        pending = self.write(batch=batch, quantity=1)  # 3.333 kg, £20.00 > £1.00
+        with transaction.atomic():  # the till sells two pieces meanwhile
+            move(batch, 2, 'outbound', counterpart=virtual_location(self.company, Location.CUSTOMER),
+                 weight_kg=D('6.000'))
+        with self.assertRaises(WriteOffError) as caught:
+            approve(pending, user=self.manager)
+        self.assertEqual(caught.exception.detail['detail'], [
+            f'Batch {batch.batch_number} has changed since this was raised (1 piece(s) is now 4.000 kg, not '
+            '3.333 kg); reject it and raise a new write-off.'])
+        self.assertEqual(self.held(batch), (1, D('4.000')))
+
+    def test_catch_weight_unchanged_batch_approves(self):
+        legs = ProductFactory(company=self.company, name='Fake Lamb Legs', price=D('0.00'), stock_quantity=0,
+                              sold_by='weight', is_catch_weight=True, price_per_kg=D('9.0000'))
+        batch = self.batch(legs, pieces=3, kg='10.000', cost='6.0000')
+        pending = self.write(batch=batch, quantity=1)
+        approve(pending, user=self.manager)
+        self.assertEqual(self.held(batch), (2, D('6.667')))
+
+    def test_superuser_approves(self):
+        boss = UserFactory(company=self.company, is_staff=False, is_superuser=True)
+        self.assertEqual(approve(self.pending, user=boss).status, 'written_off')
+
     def test_cannot_decide_twice(self):
         approve(self.pending, user=self.manager)
         for step in (approve, reject):
@@ -246,6 +280,33 @@ class WriteOffApiTests(WriteOffTestCase):
         self.assertEqual((approved.status_code, approved.json()['status']), (200, 'written_off'))
         self.assertEqual(self.api.post(reverse('writeoff-reject', args=[response.json()['id']]), {},
                                        format='json').status_code, 400)
+
+    def test_raise_by_kg_and_by_pieces(self):
+        response = self.post(batch=self.mince_batch.pk, quantity=0, weight_kg='1.250', reason='trim')
+        self.assertEqual((response.status_code, response.json()['weight_kg'], response.json()['cost']),
+                         (201, '1.250', '5.00'))
+        self.assertIn('weight_kg', self.post(batch=self.mince_batch.pk, quantity=0, weight_kg='9.000').json())
+        self.assertIn('quantity', self.post(quantity=0).json())
+
+    def test_ledger_refusal_at_approval_is_a_400(self):
+        from unittest import mock
+        from inventory.ledger import LedgerError
+        Setting.objects.create(company=self.company, key='write_off_approval_threshold', value='1.00')
+        pending = self.post().json()['id']
+        manager = APIClient()
+        manager.force_authenticate(self.manager)
+        with mock.patch('inventory.write_offs.approve', side_effect=LedgerError('Fake: below 0')):
+            response = manager.post(reverse('writeoff-approve', args=[pending]), {}, format='json')
+        self.assertEqual((response.status_code, response.json()), (400, {'detail': ['Fake: below 0']}))
+
+    def test_list_reads_the_threshold_once(self):
+        for _ in range(3):
+            self.post(quantity=1)
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        with CaptureQueriesContext(connection) as queries:
+            self.api.get(self.list_url)
+        self.assertEqual(sum('common_setting' in q['sql'] for q in queries.captured_queries), 1)
 
     def test_list_filters_status(self):
         Setting.objects.create(company=self.company, key='write_off_approval_threshold', value='1.00')

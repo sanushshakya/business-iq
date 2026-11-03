@@ -641,7 +641,10 @@ class WriteOffSerializer(TenantModelSerializer):
     @extend_schema_field(serializers.DecimalField(max_digits=12, decimal_places=2))
     def get_threshold(self, write_off):
         from .write_offs import approval_threshold
-        return f'{approval_threshold(write_off.company_id)}'
+        known = self.context.setdefault('write_off_thresholds', {})  # one Setting read per company per response
+        if write_off.company_id not in known:
+            known[write_off.company_id] = approval_threshold(write_off.company_id)
+        return f'{known[write_off.company_id]}'
 
 
 class WriteOffCreateSerializer(TenantModelSerializer):

@@ -95,6 +95,11 @@ class BreakdownApiTests(BreakdownTestCase):
                 response = self.post(**{field: value})
                 self.assertEqual(response.status_code, 400)
                 self.assertIn(field, response.json())
+        their_batch = StockBatch.objects.create(
+            product=their_template.input_product, batch_number='THEIRS', quantity=0, weight_kg=D('1.000'),
+            expiration_date=self.today + timedelta(days=5),
+            location=Location.objects.create(company=other, code='X', name='X', type='warehouse'))
+        self.assertIn('input_batch', self.post(input_batch=their_batch.pk).json())
         other_output = self.output(product=self.steak, percent='10', template=their_template)
         response = self.post(lines=[{'output': other_output.pk, 'weight_kg': '1.000'}])
         self.assertEqual(response.status_code, 400)
@@ -109,6 +114,40 @@ class BreakdownApiTests(BreakdownTestCase):
         self.assertEqual((response.json()['status'], response.json()['void_reason']), ('voided', 'Fake: wrong batch'))
         self.assertEqual(StockBatch.objects.get(pk=self.input.pk).weight_kg, D('10.000'))
         self.assertEqual(self.api.post(url, {'reason': 'again'}, format='json').status_code, 400)
+
+    def test_only_staff_or_who_recorded_it_can_void(self):
+        stock = self.operator(STOCK)
+        mine = self.post(api=stock).json()['id']
+        member = APIClient()
+        member.force_authenticate(UserFactory(company=self.company, is_staff=False))
+        url = reverse('breakdown-void', args=[mine])
+        self.assertEqual(member.post(url, {'reason': 'Fake'}, format='json').status_code, 403)
+        self.assertEqual(self.operator(STOCK).post(url, {'reason': 'Fake'}, format='json').status_code, 403)
+        self.assertEqual(self.api.post(url, {'reason': 'Fake'}, format='json').status_code, 200)  # staff
+
+    def test_ordinary_members_cannot_record(self):
+        member = APIClient()
+        member.force_authenticate(UserFactory(company=self.company, is_staff=False))
+        self.assertEqual(self.post(api=member).status_code, 403)
+        self.assertEqual(member.get(self.list_url).status_code, 200)
+
+    def test_deadlock_is_a_409(self):
+        from unittest import mock
+        from django.db import OperationalError
+        with mock.patch('inventory.breakdowns.record_breakdown', side_effect=OperationalError('deadlock detected')):
+            response = self.post()
+        self.assertEqual(response.status_code, 409)
+        breakdown_id = self.post().json()['id']
+        with mock.patch('inventory.breakdowns.void_breakdown', side_effect=OperationalError('deadlock detected')):
+            response = self.api.post(reverse('breakdown-void', args=[breakdown_id]), {'reason': 'x'}, format='json')
+        self.assertEqual(response.status_code, 409)
+
+    def test_ledger_refusal_is_a_400(self):
+        from unittest import mock
+        from inventory.ledger import LedgerError
+        with mock.patch('inventory.breakdowns.record_breakdown', side_effect=LedgerError('Fake: would go below 0')):
+            response = self.post()
+        self.assertEqual((response.status_code, response.json()), (400, {'detail': ['Fake: would go below 0']}))
 
     def test_list_filters_status(self):
         self.post()

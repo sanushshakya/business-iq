@@ -53,7 +53,7 @@ def record_breakdown(*, company, user, template, location, input_batch, lines, i
     try:
         with transaction.atomic():
             return _record(company, user, template, location, input_batch, lines, input_kg, input_pieces,
-                           loss_reason, client_ref), True
+                           loss_reason, client_ref)
     except IntegrityError:
         if client_ref is None:
             raise
@@ -67,7 +67,11 @@ def _record(company, user, template, location, input_batch, lines, input_kg, inp
     today = uk_date()
     batch = StockBatch.objects.select_for_update(of=('self',)).select_related('location', 'product').get(
         pk=input_batch.pk)
-    _check_source(template, location, batch, today)
+    if client_ref is not None:  # the same request may have been booked while this one waited for the lock
+        existing = Breakdown.objects.filter(company=company, client_ref=client_ref).first()
+        if existing:
+            return existing, False
+    _check_source(company, template, location, batch, today)
     input_pieces, input_kg = _input(batch, input_kg, input_pieces)
     entries = _lines(template, lines, batch, today)
 
@@ -89,6 +93,11 @@ def _record(company, user, template, location, input_batch, lines, input_kg, inp
         client_ref=client_ref, created_by=user,
     )
     products = [entry for entry in entries if entry[0].kind == YieldTemplateOutput.PRODUCT]
+    clashes = [f'{output.product.name} already has a batch {breakdown.reference} at {location.code}; rename that batch '
+               'first.' for output, *_ in products if StockBatch.objects.filter(
+                   product=output.product, batch_number=breakdown.reference, location=location).exists()]
+    if clashes:
+        raise BreakdownError({'lines': clashes})
     move(batch, input_pieces, 'outbound', counterpart=location, breakdown=breakdown,
          weight_kg=sum((weight for _, weight, _, _ in products), Decimal('0.000')))
     waste = virtual_location(company, Location.WASTE)
@@ -106,10 +115,15 @@ def _record(company, user, template, location, input_batch, lines, input_kg, inp
     if loss:
         move(batch, 0, 'outbound', counterpart=virtual_location(company, Location.ADJUSTMENT), weight_kg=loss,
              breakdown=breakdown)
-    return breakdown
+    return breakdown, True
 
 
-def _check_source(template, location, batch, today):
+def _check_source(company, template, location, batch, today):
+    # The API only offers the user's own rows; checked here too because superusers are not scoped.
+    for field, row_company in (('template', template.company_id), ('location', location.company_id),
+                               ('input_batch', batch.product.company_id)):
+        if row_company != company.pk:
+            raise BreakdownError({field: ['Invalid pk - object does not exist.']})
     if location.type != Location.BUTCHERY or not location.is_active:
         raise BreakdownError({'location': [f'{location.name} is not a butchery location.'
                                            if location.type != Location.BUTCHERY else f'{location.name} is closed.']})
@@ -209,7 +223,7 @@ def void_breakdown(breakdown, *, user, reason):
         movements = list(StockMovement.objects.filter(breakdown=breakdown).select_related(
             'source_location', 'destination_location').order_by('pk'))
         batches = {b.pk: b for b in StockBatch.objects.select_for_update(of=('self',)).select_related(
-            'location', 'product').filter(pk__in={m.batch_id for m in movements})}
+            'location', 'product').filter(pk__in={m.batch_id for m in movements}).order_by('pk')}  # fixed lock order
         for line in breakdown.lines.filter(output_batch__isnull=False):
             held = batches[line.output_batch_id]
             gone_kg, gone_pieces = line.weight_kg - held.weight_kg, line.pieces - held.quantity
@@ -218,6 +232,10 @@ def void_breakdown(breakdown, *, user, reason):
                 raise BreakdownError({'detail': [
                     f'{gone} of {line.name} from {breakdown.reference} has gone (sold or moved); it cannot be '
                     'voided.']})
+        changed = [b.product.name for b in batches.values() if not b.product.is_weighed]
+        if changed:  # possible once a batch is empty: the ledger would refuse kg for it
+            raise BreakdownError({'detail': [f'{", ".join(sorted(set(changed)))} is no longer sold by weight; '
+                                             'it cannot be voided.']})
         for movement in movements:
             batch = batches[movement.batch_id]
             if movement.movement_type == 'outbound':

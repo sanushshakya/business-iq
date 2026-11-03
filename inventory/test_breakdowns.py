@@ -225,6 +225,56 @@ class RecordTests(BreakdownTestCase):
         self.assertEqual((again.pk, created, created_again), (first.pk, True, False))
         self.assertEqual(StockMovement.objects.count(), movements)
 
+    def test_retry_racing_the_first_returns_it(self):
+        # The second request read no breakdown before the first committed, then waited on the batch lock: once it
+        # gets the lock it must find the first, not refuse because the batch is now empty.
+        from unittest import mock
+        from inventory import breakdowns
+        ref = uuid.uuid4()
+        first, _ = self.record(client_ref=ref)
+        self.assertEqual(self.kg(self.input), D('0.000'))
+        real_filter = Breakdown.objects.filter
+        calls = []
+
+        def stale_first_look(*args, **kwargs):
+            calls.append(kwargs)
+            queryset = real_filter(*args, **kwargs)
+            return queryset.none() if len(calls) == 1 else queryset
+
+        with mock.patch.object(breakdowns.Breakdown.objects, 'filter', side_effect=stale_first_look):
+            again, created = self.record(client_ref=ref)
+        self.assertEqual((again.pk, created), (first.pk, False))
+
+    def test_batch_number_already_used_is_a_clear_error(self):
+        StockBatchFactory(product=self.steak, batch_number='BD-000001', location=self.butchery, quantity=0,
+                          weight_kg=D('0'))
+        detail = self.refused()
+        self.assertEqual(detail['lines'], ['Fake Rump Steak already has a batch BD-000001 at BUTCH-1; rename that '
+                                           'batch first.'])
+
+    def test_rows_of_another_company_refused_by_the_service(self):
+        # The API scopes these; the service checks too (superusers are not scoped).
+        other = CompanyFactory()
+        their_side = ProductFactory(company=other, name='Their Side', sold_by='weight', price_per_kg=D('1.0000'))
+        their_batch = StockBatchFactory(product=their_side, batch_number='THEIRS', quantity=0, weight_kg=D('5.000'),
+                                        location=Location.objects.create(company=other, code='X', name='X',
+                                                                         type='warehouse'))
+        self.assertEqual(self.refused(input_batch=their_batch)['input_batch'], ['Invalid pk - object does not exist.'])
+        their_template = YieldTemplate.objects.create(company=other, name='Theirs', input_product=their_side)
+        self.assertEqual(self.refused(template=their_template)['template'], ['Invalid pk - object does not exist.'])
+
+    def test_lost_race_on_client_ref_returns_the_first(self):
+        from unittest import mock
+        from django.db import IntegrityError
+        from inventory import breakdowns
+        ref = uuid.uuid4()
+        first, _ = self.record(client_ref=ref, lines=[(self.out_steak, '5.000')], input_kg=D('5.000'))
+        with mock.patch.object(breakdowns, '_record', side_effect=IntegrityError('unique client_ref')), \
+                mock.patch.object(breakdowns.Breakdown.objects, 'filter', side_effect=[
+                    Breakdown.objects.none(), Breakdown.objects.filter(pk=first.pk)]):
+            again, created = self.record(client_ref=ref)
+        self.assertEqual((again.pk, created), (first.pk, False))
+
     def test_catch_weight_input_takes_pieces_at_average_kg(self):
         legs = self.weighed('Fake Lamb Legs', catch=True)
         template = YieldTemplate.objects.create(company=self.company, name='Fake legs', input_product=legs)
@@ -322,11 +372,45 @@ class VoidTests(BreakdownTestCase):
         breakdown.refresh_from_db()
         self.assertEqual(breakdown.status, 'completed')
 
+    def test_void_refused_once_a_piece_sold(self):
+        packs = self.weighed('Fake Steak Packs', catch=True)
+        out = self.output(product=packs, percent='20', keeps_days=4)
+        breakdown, _ = self.record(lines=[(out, '9.800', 4)])
+        made = breakdown.lines.get().output_batch
+        with transaction.atomic():
+            move(made, 1, 'outbound', counterpart=virtual_location(self.company, Location.CUSTOMER),
+                 weight_kg=D('0.000'))
+        with self.assertRaises(BreakdownError) as caught:
+            void_breakdown(breakdown, user=self.user, reason='Fake')
+        self.assertEqual(caught.exception.detail['detail'], [
+            '1 piece(s) of Fake Steak Packs from BD-000001 has gone (sold or moved); it cannot be voided.'])
+
     def test_void_twice_refused(self):
         breakdown, _ = self.record()
         void_breakdown(breakdown, user=self.user, reason='Fake')
         with self.assertRaises(BreakdownError):
             void_breakdown(breakdown, user=self.user, reason='Fake')
+
+    def test_void_after_a_product_changed_kind_is_a_clear_error(self):
+        breakdown, _ = self.record()
+        Product.objects.filter(pk=self.side.pk).update(sold_by='each')  # allowed: its batch is empty
+        with self.assertRaises(BreakdownError) as caught:
+            void_breakdown(breakdown, user=self.user, reason='Fake')
+        self.assertIn('Fake Side of Beef', caught.exception.detail['detail'][0])
+        breakdown.refresh_from_db()
+        self.assertEqual(breakdown.status, 'completed')
+
+    def test_breakdowns_are_not_demand(self):
+        from inventory.projections import average_daily_demand
+        legs = self.weighed('Fake Lamb Legs', catch=True)
+        packs = self.weighed('Fake Leg Steaks', catch=True)
+        template = YieldTemplate.objects.create(company=self.company, name='Fake legs', input_product=legs)
+        out = self.output(product=packs, percent='90', template=template)
+        batch = self.batch(legs, kg='10.000', days=6, number='LEGS-1', pieces=3)
+        breakdown, _ = self.record(template=template, input_batch=batch, input_kg=None, input_pieces=2,
+                                   lines=[(out, '6.500', 8)])
+        void_breakdown(breakdown, user=self.user, reason='Fake')
+        self.assertEqual((average_daily_demand(legs, days=7), average_daily_demand(packs, days=7)), (0, 0))
 
     def test_void_needs_a_reason(self):
         breakdown, _ = self.record()

@@ -4,13 +4,15 @@ from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema
 from django.db import IntegrityError, OperationalError, transaction
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 from rest_framework.response import Response
 
 from common.tenancy import IsCompanyStaffOrReadOnly, SharedReferenceMixin, TenantScopedMixin
+from tenants.roles import STOCK
 
 from . import breakdowns, requisitions, transfers
 from .models import BarcodeRule, Location, ProductCategory, Product, Order, Supplier, StockBatch, StockMovement, Transfer, Requisition, YieldTemplate, Breakdown
+from .ledger import LedgerError
 from .projections import project_stock
 from .serializers import (
     BarcodeRuleSerializer,
@@ -328,7 +330,7 @@ class BreakdownViewSet(
     """
 
     queryset = Breakdown.objects.select_related('template', 'input_batch__product').prefetch_related(
-        'lines__template_output', 'lines__breakdown')
+        'template__outputs', 'lines__template_output', 'lines__breakdown')
     serializer_class = BreakdownSerializer
 
     def get_queryset(self):
@@ -336,6 +338,19 @@ class BreakdownViewSet(
         if self.action == 'list' and self.request.query_params.get('status'):
             queryset = queryset.filter(status=self.request.query_params['status'])
         return queryset
+
+    def _booked(self, step, **kwargs):
+        """Run a breakdown step; refusals are 400s and a deadlock broken by Postgres is a 409 (nothing saved)."""
+        try:
+            return step(**kwargs)
+        except breakdowns.BreakdownError as error:
+            raise ValidationError(error.detail)
+        except LedgerError as error:
+            raise ValidationError({'detail': [str(error)]})
+        except OperationalError as error:
+            if 'deadlock' not in str(error).lower():
+                raise
+            raise Conflict('Stock was changing at the same time; nothing was saved. Try again.') from None
 
     def _response(self, breakdown, code):
         return Response(BreakdownSerializer(self.get_queryset().get(pk=breakdown.pk),
@@ -346,30 +361,35 @@ class BreakdownViewSet(
         serializer = BreakdownCreateSerializer(data=request.data, context=self.get_serializer_context())
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        if request.user.company is None:
+        user = request.user
+        if not (user.is_staff or user.is_superuser or user.role == STOCK):
+            raise PermissionDenied('Only staff or the stock team can record a breakdown.')
+        if user.company is None:
             raise ValidationError({'detail': ['Your account is not linked to a company.']})
-        try:
-            breakdown, created = breakdowns.record_breakdown(
-                company=request.user.company, user=request.user, template=data['template'],
-                location=data['location'], input_batch=data['input_batch'], input_kg=data.get('input_kg'),
-                input_pieces=data.get('input_pieces'), loss_reason=data['loss_reason'], client_ref=data['client_ref'],
-                lines=[(line['template_output'], line['weight_kg'], line['pieces'], line['expiration_date'])
-                       for line in data['lines']],
-            )
-        except breakdowns.BreakdownError as error:
-            raise ValidationError(error.detail)
+        breakdown, created = self._booked(
+            breakdowns.record_breakdown, company=user.company, user=user, template=data['template'],
+            location=data['location'], input_batch=data['input_batch'], input_kg=data.get('input_kg'),
+            input_pieces=data.get('input_pieces'), loss_reason=data['loss_reason'], client_ref=data['client_ref'],
+            lines=[(line['template_output'], line['weight_kg'], line['pieces'], line['expiration_date'])
+                   for line in data['lines']],
+        )
         return self._response(breakdown, status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
     @extend_schema(request=BreakdownVoidSerializer, responses=BreakdownSerializer)
     @action(detail=True, methods=['post'])
     def void(self, request, pk=None):
-        """Reverse every movement (refused once an output has been sold or moved)."""
+        """Reverse every movement (refused once an output has been sold or moved). Staff, or who recorded it."""
         breakdown = self.get_object()
+        user = request.user
+        if not (user.is_staff or user.is_superuser or breakdown.created_by_id == user.pk):
+            raise PermissionDenied('Only staff or the person who recorded this breakdown can void it.')
         serializer = BreakdownVoidSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        try:
-            breakdown = breakdowns.void_breakdown(breakdown, user=request.user,
-                                                  reason=serializer.validated_data['reason'])
-        except breakdowns.BreakdownError as error:
-            raise ValidationError(error.detail)
+        breakdown = self._booked(breakdowns.void_breakdown, breakdown=breakdown, user=request.user,
+                                 reason=serializer.validated_data['reason'])
         return self._response(breakdown, status.HTTP_200_OK)
+
+
+class Conflict(APIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_code = 'conflict'

@@ -17,6 +17,7 @@ router.register(r'barcode-rules', views.BarcodeRuleViewSet, basename='barcoderul
 router.register(r'transfers', views.TransferViewSet, basename='transfer')
 router.register(r'requisitions', views.RequisitionViewSet, basename='requisition')
 router.register(r'yield-templates', views.YieldTemplateViewSet, basename='yieldtemplate')
+router.register(r'breakdowns', views.BreakdownViewSet, basename='breakdown')
 
 urlpatterns = [
     path('', include(router.urls)),

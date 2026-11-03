@@ -6,7 +6,7 @@ from common.tenancy import TenantAdminMixin
 
 from .models import (
     BarcodeRule, Location, Product, ProductCategory, StockBatch, StockMovement, Transfer, TransferLine, TransferPick,
-    Requisition, RequisitionLine, YieldTemplate, YieldTemplateOutput, other_company_problem, weighed_product_problem,
+    Requisition, RequisitionLine, Breakdown, BreakdownLine, YieldTemplate, YieldTemplateOutput, other_company_problem, weighed_product_problem,
     yield_output_problems,
 )
 
@@ -165,3 +165,29 @@ class YieldTemplateAdmin(TenantAdminMixin, admin.ModelAdmin):
 
     def get_queryset(self, request):
         return super().get_queryset(request).prefetch_related('outputs')  # expected_loss_percent per row
+
+
+class BreakdownLineInline(admin.TabularInline):
+    model = BreakdownLine
+    fields = ('kind', 'name', 'weight_kg', 'pieces', 'expiration_date', 'output_batch')
+    readonly_fields = fields
+    extra = 0
+    can_delete = False
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(Breakdown)
+class BreakdownAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """Butchery breakdowns (G21); booked and voided only through the API (the stock moves with them)."""
+
+    list_display = ('reference', 'template', 'location', 'input_kg', 'loss_kg', 'status', 'created_at')
+    list_filter = ('status',)
+    list_select_related = ('template', 'location')
+    inlines = [BreakdownLineInline]
+
+
+@admin.register(BreakdownLine)
+class BreakdownLineAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """A breakdown line changed by hand would no longer match its movements."""

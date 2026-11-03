@@ -93,6 +93,8 @@ ROLE_ROUTES = {
         + _collection('inventory/requisitions', {'GET', 'POST'})
         + _route(r'^/inventory/requisitions/\d+/(fulfil|cancel)/$', 'POST')
         + _collection('inventory/yield-templates', READ)
+        + _collection('inventory/breakdowns', {'GET', 'POST'})
+        + _route(r'^/inventory/breakdowns/\d+/void/$', 'POST')
         + STOCK_ALERTS
         + _collection('pricing/price-changes', READ)
     ),

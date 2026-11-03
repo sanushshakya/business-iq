@@ -2,7 +2,7 @@
 
 
 from collections.abc import Mapping
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import transaction
 from django.db.models import Q
@@ -15,7 +15,7 @@ from common.tenancy import TenantModelSerializer
 from . import requisitions, transfers
 from .ledger import move, virtual_location
 from .models import (
-    BarcodeRule, Location, YieldTemplate, YieldTemplateOutput, weighed_product_problem, yield_output_problems, Order, Product, ProductCategory, Requisition, RequisitionLine, StockBatch, StockMovement, Supplier,
+    BarcodeRule, Breakdown, BreakdownLine, Location, YieldTemplate, YieldTemplateOutput, weighed_product_problem, yield_output_problems, Order, Product, ProductCategory, Requisition, RequisitionLine, StockBatch, StockMovement, Supplier,
     Transfer, TransferLine, normalise_plu,
 )
 
@@ -538,3 +538,82 @@ class YieldTemplateSerializer(TenantModelSerializer):
             if outputs is not None:
                 self._save_outputs(template, outputs)
         return template
+
+
+class BreakdownLineSerializer(TenantModelSerializer):
+    """What came out for one template output, and the kg the template expected for this input."""
+
+    output = serializers.PrimaryKeyRelatedField(source='template_output', read_only=True)
+    expected_kg = serializers.SerializerMethodField(help_text="The template's expected % of the input kg.")
+
+    class Meta:
+        model = BreakdownLine
+        fields = ['id', 'output', 'kind', 'product', 'name', 'weight_kg', 'pieces', 'expiration_date', 'output_batch',
+                  'expected_kg']
+        read_only_fields = fields
+
+    @extend_schema_field(serializers.DecimalField(max_digits=10, decimal_places=3))
+    def get_expected_kg(self, line):
+        return f'{_kg_share(line.breakdown.input_kg, line.template_output.expected_percent)}'
+
+
+def _kg_share(kg, percent):
+    return (kg * percent / 100).quantize(Decimal('0.001'), rounding=ROUND_HALF_UP)
+
+
+class BreakdownSerializer(TenantModelSerializer):
+    """A recorded butchery breakdown (G21): input = product kg + waste kg + ``loss_kg`` exactly."""
+
+    reference = serializers.CharField(read_only=True)
+    template_name = serializers.CharField(source='template.name', read_only=True)
+    input_batch_number = serializers.CharField(source='input_batch.batch_number', read_only=True)
+    input_product_name = serializers.CharField(source='input_batch.product.name', read_only=True)
+    expected_loss_kg = serializers.SerializerMethodField(help_text="The template's expected loss for this input.")
+    lines = BreakdownLineSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Breakdown
+        fields = ['id', 'number', 'reference', 'template', 'template_name', 'location', 'input_batch',
+                  'input_batch_number', 'input_product_name', 'input_pieces', 'input_kg', 'loss_kg', 'loss_reason',
+                  'expected_loss_kg', 'lines', 'status', 'client_ref', 'created_by', 'created_at', 'voided_by',
+                  'voided_at', 'void_reason']
+        read_only_fields = fields
+
+    @extend_schema_field(serializers.DecimalField(max_digits=10, decimal_places=3))
+    def get_expected_loss_kg(self, breakdown):
+        return f'{_kg_share(breakdown.input_kg, breakdown.template.expected_loss_percent)}'
+
+
+class BreakdownLineInputSerializer(TenantModelSerializer):
+    output = serializers.PrimaryKeyRelatedField(source='template_output', queryset=YieldTemplateOutput.objects.all(),
+                                                help_text="A template output's id.")
+    pieces = serializers.IntegerField(min_value=0, required=False, default=0,
+                                      help_text='Catch-weight output products only.')
+    expiration_date = serializers.DateField(required=False, allow_null=True, default=None,
+                                            help_text='Earlier than the template allows, if needed.')
+
+    class Meta:
+        model = BreakdownLine
+        fields = ['output', 'weight_kg', 'pieces', 'expiration_date']
+
+
+class BreakdownCreateSerializer(TenantModelSerializer):
+    """
+    Record a breakdown once the cutting is done. Loose inputs send ``input_kg``, catch-weight ones ``input_pieces``.
+    Outputs left out of ``lines`` produced nothing. A repeated ``client_ref`` returns the first breakdown.
+    """
+
+    input_kg = serializers.DecimalField(max_digits=10, decimal_places=3, required=False, allow_null=True)
+    input_pieces = serializers.IntegerField(min_value=1, required=False, allow_null=True)
+    lines = BreakdownLineInputSerializer(many=True, max_length=100)
+    loss_reason = serializers.CharField(max_length=255, required=False, allow_blank=True, default='')
+    client_ref = serializers.UUIDField(required=False, allow_null=True, default=None)
+
+    class Meta:
+        model = Breakdown
+        fields = ['template', 'location', 'input_batch', 'input_kg', 'input_pieces', 'lines', 'loss_reason',
+                  'client_ref']
+
+
+class BreakdownVoidSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=255, help_text='Why the breakdown is being reversed.')

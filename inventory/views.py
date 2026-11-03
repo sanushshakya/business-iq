@@ -9,11 +9,14 @@ from rest_framework.response import Response
 
 from common.tenancy import IsCompanyStaffOrReadOnly, SharedReferenceMixin, TenantScopedMixin
 
-from . import requisitions, transfers
-from .models import BarcodeRule, Location, ProductCategory, Product, Order, Supplier, StockBatch, StockMovement, Transfer, Requisition, YieldTemplate
+from . import breakdowns, requisitions, transfers
+from .models import BarcodeRule, Location, ProductCategory, Product, Order, Supplier, StockBatch, StockMovement, Transfer, Requisition, YieldTemplate, Breakdown
 from .projections import project_stock
 from .serializers import (
     BarcodeRuleSerializer,
+    BreakdownCreateSerializer,
+    BreakdownSerializer,
+    BreakdownVoidSerializer,
     LocationSerializer,
     OrderSerializer,
     ProductCategorySerializer,
@@ -309,3 +312,64 @@ class YieldTemplateViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         if self.request.query_params.get('active') == 'true':
             queryset = queryset.filter(is_active=True)
         return queryset
+
+
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter('status', str, enum=[Breakdown.COMPLETED, Breakdown.VOIDED]),
+]))
+class BreakdownViewSet(
+    TenantScopedMixin, mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    """
+    Butchery breakdowns (G21): an input batch at a butchery location cut into a yield template's products (new
+    batches there), waste (to WASTE) and loss (to ADJUSTMENT). Recorded in one step, reversed by ``void``; never
+    edited or deleted. Staff and the stock role.
+    """
+
+    queryset = Breakdown.objects.select_related('template', 'input_batch__product').prefetch_related(
+        'lines__template_output', 'lines__breakdown')
+    serializer_class = BreakdownSerializer
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self.action == 'list' and self.request.query_params.get('status'):
+            queryset = queryset.filter(status=self.request.query_params['status'])
+        return queryset
+
+    def _response(self, breakdown, code):
+        return Response(BreakdownSerializer(self.get_queryset().get(pk=breakdown.pk),
+                                            context=self.get_serializer_context()).data, status=code)
+
+    @extend_schema(request=BreakdownCreateSerializer, responses={201: BreakdownSerializer, 200: BreakdownSerializer})
+    def create(self, request, *args, **kwargs):
+        serializer = BreakdownCreateSerializer(data=request.data, context=self.get_serializer_context())
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        if request.user.company is None:
+            raise ValidationError({'detail': ['Your account is not linked to a company.']})
+        try:
+            breakdown, created = breakdowns.record_breakdown(
+                company=request.user.company, user=request.user, template=data['template'],
+                location=data['location'], input_batch=data['input_batch'], input_kg=data.get('input_kg'),
+                input_pieces=data.get('input_pieces'), loss_reason=data['loss_reason'], client_ref=data['client_ref'],
+                lines=[(line['template_output'], line['weight_kg'], line['pieces'], line['expiration_date'])
+                       for line in data['lines']],
+            )
+        except breakdowns.BreakdownError as error:
+            raise ValidationError(error.detail)
+        return self._response(breakdown, status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+    @extend_schema(request=BreakdownVoidSerializer, responses=BreakdownSerializer)
+    @action(detail=True, methods=['post'])
+    def void(self, request, pk=None):
+        """Reverse every movement (refused once an output has been sold or moved)."""
+        breakdown = self.get_object()
+        serializer = BreakdownVoidSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            breakdown = breakdowns.void_breakdown(breakdown, user=request.user,
+                                                  reason=serializer.validated_data['reason'])
+        except breakdowns.BreakdownError as error:
+            raise ValidationError(error.detail)
+        return self._response(breakdown, status.HTTP_200_OK)

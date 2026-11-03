@@ -10,7 +10,7 @@ from rest_framework.response import Response
 from common.tenancy import IsCompanyStaffOrReadOnly, SharedReferenceMixin, TenantScopedMixin
 
 from . import requisitions, transfers
-from .models import BarcodeRule, Location, ProductCategory, Product, Order, Supplier, StockBatch, StockMovement, Transfer, Requisition
+from .models import BarcodeRule, Location, ProductCategory, Product, Order, Supplier, StockBatch, StockMovement, Transfer, Requisition, YieldTemplate
 from .projections import project_stock
 from .serializers import (
     BarcodeRuleSerializer,
@@ -26,6 +26,7 @@ from .serializers import (
     RequisitionSerializer,
     TransferReceiveSerializer,
     TransferSerializer,
+    YieldTemplateSerializer,
 )
 
 
@@ -269,6 +270,39 @@ class BarcodeRuleViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                 save(serializer)
         except IntegrityError:
             raise ValidationError({'prefix': 'Another rule already uses this prefix.'}) from None
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self.request.query_params.get('active') == 'true':
+            queryset = queryset.filter(is_active=True)
+        return queryset
+
+
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter('active', bool, description='true: only templates in use.'),
+]))
+class YieldTemplateViewSet(TenantScopedMixin, viewsets.ModelViewSet):
+    """
+    Butchery yield templates (G20): an input product and the outputs and waste it is expected to break down into.
+    Company members and the stock role read them; only staff change them.
+    """
+
+    queryset = YieldTemplate.objects.select_related('input_product').prefetch_related('outputs__product')
+    serializer_class = YieldTemplateSerializer
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    def perform_create(self, serializer):
+        self._save_once(super().perform_create, serializer)
+
+    def perform_update(self, serializer):
+        self._save_once(super().perform_update, serializer)
+
+    def _save_once(self, save, serializer):
+        try:  # two saves of one name at once: the loser hits the unique constraint
+            with transaction.atomic():
+                save(serializer)
+        except IntegrityError:
+            raise ValidationError({'name': 'Another template already has this name.'}) from None
 
     def get_queryset(self):
         queryset = super().get_queryset()

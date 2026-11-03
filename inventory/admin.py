@@ -1,8 +1,13 @@
 from django.contrib import admin
+from django.core.exceptions import ValidationError
+from django.forms.models import BaseInlineFormSet
 
 from common.tenancy import TenantAdminMixin
 
-from .models import BarcodeRule, Location, Product, ProductCategory, StockBatch, StockMovement, Transfer, TransferLine, TransferPick, Requisition, RequisitionLine
+from .models import (
+    BarcodeRule, Location, Product, ProductCategory, StockBatch, StockMovement, Transfer, TransferLine, TransferPick,
+    Requisition, RequisitionLine, YieldTemplate, YieldTemplateOutput, weighed_product_problem, yield_output_problems,
+)
 
 
 @admin.register(ProductCategory)
@@ -121,3 +126,37 @@ class BarcodeRuleAdmin(TenantAdminMixin, admin.ModelAdmin):
 
     list_display = ('prefix', 'name', 'value_type', 'item_code_length', 'decimals', 'value_check_digit', 'is_active')
     list_filter = ('value_type', 'is_active')
+
+
+class YieldOutputFormSet(BaseInlineFormSet):
+    """The API's rules for a template's outputs (``yield_output_problems``), on the admin's inline rows."""
+
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+        rows = [form.cleaned_data for form in self.forms
+                if form.cleaned_data and not form.cleaned_data.get('DELETE')]
+        input_product = getattr(self.instance, 'input_product', None) if self.instance.input_product_id else None
+        problem = weighed_product_problem(input_product)
+        problems = ([problem] if problem else []) + yield_output_problems(input_product, rows)
+        if problems:
+            raise ValidationError(problems)
+
+
+class YieldTemplateOutputInline(TenantAdminMixin, admin.TabularInline):
+    model = YieldTemplateOutput
+    formset = YieldOutputFormSet
+    fields = ('position', 'kind', 'product', 'name', 'expected_percent')
+    extra = 0
+
+
+@admin.register(YieldTemplate)
+class YieldTemplateAdmin(TenantAdminMixin, admin.ModelAdmin):
+    """Butchery yield templates (G20); outputs total at most 100%, the rest is the expected loss."""
+
+    list_display = ('name', 'input_product', 'is_active', 'expected_loss_percent')
+    list_filter = ('is_active',)
+    search_fields = ('name', 'input_product__name')
+    list_select_related = ('input_product',)
+    inlines = [YieldTemplateOutputInline]

@@ -5,9 +5,11 @@ This module contains Django models for the inventory app. These models are respo
 for representing and managing inventory-related data within the application.
 """
 
+from decimal import Decimal
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.core.validators import RegexValidator
+from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
 
 from vat.models import VAT_CODES, ZERO
@@ -481,3 +483,111 @@ class BarcodeRule(models.Model):
         if self.company_id and BarcodeRule.objects.filter(company_id=self.company_id, prefix=self.prefix).exclude(
                 pk=self.pk).exists():
             raise ValidationError({'prefix': 'Another rule already uses this prefix.'})
+
+
+class YieldTemplate(models.Model):
+    """
+    How the butchery expects an input (e.g. a side of beef, sold by weight) to break down (G20): product outputs and
+    waste (bone, fat, trim), each an expected percentage of the input's weight. They total at most 100; the rest is
+    the expected loss (moisture, saw dust). Breakdown orders (G21) start from a template.
+    """
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='yield_templates')
+    name = models.CharField(max_length=100)
+    input_product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='yield_templates')
+    is_active = models.BooleanField(default=True)
+    note = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name']
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'name'], name='unique_yield_template_name_per_company'),
+        ]
+
+    def __str__(self):
+        return self.name
+
+    @staticmethod
+    def percent_totals(outputs):
+        """``(yield, waste, loss)`` percentages for ``outputs`` (objects or dicts with ``kind``/``expected_percent``)."""
+        def get(output, name):
+            return output[name] if isinstance(output, dict) else getattr(output, name)
+        yielded = sum((get(o, 'expected_percent') for o in outputs if get(o, 'kind') == YieldTemplateOutput.PRODUCT),
+                      Decimal('0.00'))
+        waste = sum((get(o, 'expected_percent') for o in outputs if get(o, 'kind') == YieldTemplateOutput.WASTE),
+                    Decimal('0.00'))
+        return yielded, waste, Decimal('100.00') - yielded - waste
+
+    @property
+    def expected_loss_percent(self):
+        return self.percent_totals(list(self.outputs.all()))[2]
+
+
+class YieldTemplateOutput(models.Model):
+    """One output of a yield template: a weighed product, or named waste (no product, goes to the waste location)."""
+
+    PRODUCT, WASTE = 'product', 'waste'
+    KINDS = [(PRODUCT, 'Product'), (WASTE, 'Waste')]
+
+    template = models.ForeignKey(YieldTemplate, on_delete=models.CASCADE, related_name='outputs')
+    kind = models.CharField(max_length=10, choices=KINDS, default=PRODUCT)
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, null=True, blank=True,
+                                related_name='yield_outputs')
+    name = models.CharField(max_length=100, blank=True, help_text='The waste, e.g. Bone; products use their name.')
+    expected_percent = models.DecimalField(
+        max_digits=5, decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01')), MaxValueValidator(Decimal('100'))])
+    position = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ['template', 'position', 'pk']
+
+    def __str__(self):
+        return f'{self.label} {self.expected_percent}%'
+
+    @property
+    def label(self):
+        return self.product.name if self.product_id else self.name
+
+
+def weighed_product_problem(product):
+    """Why ``product`` cannot be in a breakdown (it must be sold by weight), or None."""
+    if product is not None and not product.is_weighed:
+        return f'{product.name} is sold by each; a breakdown needs a weighed product.'
+    return None
+
+
+def yield_output_problems(input_product, outputs):
+    """
+    What is wrong with a yield template's ``outputs`` (dicts: ``kind``, ``product``, ``name``, ``expected_percent``),
+    as messages for the person setting it up; empty when it is fine. Shared by the API and the admin.
+    """
+    problems, seen = [], {}  # key -> the label first given
+    for output in outputs:
+        product, name = output.get('product'), (output.get('name') or '').strip()
+        if output.get('kind') == YieldTemplateOutput.WASTE:
+            if product is not None:
+                problems.append('Waste is not a product; leave the product out.')
+            elif not name:
+                problems.append('Name the waste (e.g. Bone).')
+            key = ('waste', name.casefold())
+        elif product is None:
+            problems.append('Choose the output product.')
+            continue
+        else:
+            if input_product is not None and product.pk == input_product.pk:
+                problems.append(f'{product.name} is the input; it cannot be an output too.')
+            problem = weighed_product_problem(product)
+            if problem:
+                problems.append(problem)
+            key = ('product', product.pk)
+        if key in seen:
+            problems.append(f'{seen[key]} is listed twice.')
+        seen.setdefault(key, product.name if product is not None else name)
+    if not any(o.get('kind') == YieldTemplateOutput.PRODUCT for o in outputs):
+        problems.append('Add at least one product the input breaks down into.')
+    total = sum((o.get('expected_percent') or Decimal('0') for o in outputs), Decimal('0.00'))
+    if total > 100:
+        problems.append(f'Outputs add up to {total}%; they can be at most 100%.')
+    return problems

@@ -64,6 +64,8 @@ TENANT_LOOKUPS = {
     'inventory.TransferPick': 'line__transfer__company',
     'inventory.Requisition': 'company',
     'inventory.RequisitionLine': 'requisition__company',
+    'inventory.YieldTemplate': 'company',
+    'inventory.YieldTemplateOutput': 'template__company',
 }
 
 

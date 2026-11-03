@@ -14,7 +14,7 @@ from common.tenancy import TenantModelSerializer
 from . import requisitions, transfers
 from .ledger import move, virtual_location
 from .models import (
-    BarcodeRule, Location, Order, Product, ProductCategory, Requisition, RequisitionLine, StockBatch, StockMovement, Supplier,
+    BarcodeRule, Location, YieldTemplate, YieldTemplateOutput, weighed_product_problem, yield_output_problems, Order, Product, ProductCategory, Requisition, RequisitionLine, StockBatch, StockMovement, Supplier,
     Transfer, TransferLine, normalise_plu,
 )
 
@@ -435,3 +435,96 @@ class BarcodeRuleSerializer(TenantModelSerializer):
         if taken.exists():
             raise serializers.ValidationError({'prefix': 'Another rule already uses this prefix.'})
         return attrs
+
+
+class YieldTemplateOutputSerializer(TenantModelSerializer):
+    name = serializers.CharField(max_length=100, required=False, allow_blank=True,
+                                 help_text='The waste, e.g. Bone. Product outputs show the product name.')
+
+    class Meta:
+        model = YieldTemplateOutput
+        fields = ['id', 'kind', 'product', 'name', 'expected_percent']
+        read_only_fields = ['id']
+
+    def to_representation(self, output):
+        data = super().to_representation(output)
+        data['name'] = output.label
+        return data
+
+
+class YieldTemplateSerializer(TenantModelSerializer):
+    """
+    A butchery yield template (G20): the input product and what it breaks down into, each an expected % of the
+    input's weight. Outputs total at most 100; ``expected_loss_percent`` is the rest. Sending ``outputs`` replaces
+    them all.
+    """
+
+    input_product_name = serializers.CharField(source='input_product.name', read_only=True)
+    outputs = YieldTemplateOutputSerializer(many=True)
+    expected_yield_percent = serializers.SerializerMethodField(help_text='Product outputs, % of the input weight.')
+    expected_waste_percent = serializers.SerializerMethodField(help_text='Waste outputs, % of the input weight.')
+    expected_loss_percent = serializers.SerializerMethodField(help_text='100 minus outputs and waste.')
+
+    class Meta:
+        model = YieldTemplate
+        fields = ['id', 'name', 'input_product', 'input_product_name', 'is_active', 'note', 'outputs',
+                  'expected_yield_percent', 'expected_waste_percent', 'expected_loss_percent', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+    def _totals(self, template):
+        return YieldTemplate.percent_totals(list(template.outputs.all()))
+
+    def get_expected_yield_percent(self, template) -> Decimal:
+        return f'{self._totals(template)[0]:.2f}'
+
+    def get_expected_waste_percent(self, template) -> Decimal:
+        return f'{self._totals(template)[1]:.2f}'
+
+    def get_expected_loss_percent(self, template) -> Decimal:
+        return f'{self._totals(template)[2]:.2f}'
+
+    def validate_input_product(self, product):
+        problem = weighed_product_problem(product)
+        if problem:
+            raise serializers.ValidationError(problem)
+        return product
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if 'outputs' in attrs:
+            input_product = attrs.get('input_product', getattr(self.instance, 'input_product', None))
+            problems = yield_output_problems(input_product, attrs['outputs'])
+            if problems:
+                raise serializers.ValidationError({'outputs': problems})
+        elif 'input_product' in attrs and self.instance is not None:  # a new input against the outputs kept
+            kept = [{'kind': o.kind, 'product': o.product, 'name': o.name, 'expected_percent': o.expected_percent}
+                    for o in self.instance.outputs.all()]
+            problems = yield_output_problems(attrs['input_product'], kept)
+            if problems:
+                raise serializers.ValidationError({'outputs': problems})
+        return attrs
+
+    @staticmethod
+    def _save_outputs(template, outputs):
+        template.outputs.all().delete()
+        YieldTemplateOutput.objects.bulk_create(
+            YieldTemplateOutput(template=template, position=index, kind=output['kind'], product=output.get('product'),
+                                name='' if output['kind'] == YieldTemplateOutput.PRODUCT else output['name'].strip(),
+                                expected_percent=output['expected_percent'])
+            for index, output in enumerate(outputs)
+        )
+
+    def create(self, validated_data):
+        outputs = validated_data.pop('outputs')
+        with transaction.atomic():
+            template = super().create(validated_data)
+            self._save_outputs(template, outputs)
+        return template
+
+    def update(self, instance, validated_data):
+        outputs = validated_data.pop('outputs', None)
+        with transaction.atomic():
+            template = super().update(instance, validated_data)
+            if outputs is not None:
+                self._save_outputs(template, outputs)
+        return template

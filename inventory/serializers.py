@@ -7,6 +7,7 @@ from decimal import Decimal
 from django.db import transaction
 from django.db.models import Q
 from django.core.exceptions import ValidationError as DjangoValidationError
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from common.tenancy import TenantModelSerializer
@@ -438,6 +439,8 @@ class BarcodeRuleSerializer(TenantModelSerializer):
 
 
 class YieldTemplateOutputSerializer(TenantModelSerializer):
+    # Declared so a left-out kind reaches validation and saving as a product (the model default).
+    kind = serializers.ChoiceField(choices=YieldTemplateOutput.KINDS, default=YieldTemplateOutput.PRODUCT)
     name = serializers.CharField(max_length=100, required=False, allow_blank=True,
                                  help_text='The waste, e.g. Bone. Product outputs show the product name.')
 
@@ -450,6 +453,9 @@ class YieldTemplateOutputSerializer(TenantModelSerializer):
         data = super().to_representation(output)
         data['name'] = output.label
         return data
+
+
+PERCENT = serializers.DecimalField(max_digits=5, decimal_places=2)
 
 
 class YieldTemplateSerializer(TenantModelSerializer):
@@ -474,13 +480,16 @@ class YieldTemplateSerializer(TenantModelSerializer):
     def _totals(self, template):
         return YieldTemplate.percent_totals(list(template.outputs.all()))
 
-    def get_expected_yield_percent(self, template) -> Decimal:
+    @extend_schema_field(PERCENT)
+    def get_expected_yield_percent(self, template):
         return f'{self._totals(template)[0]:.2f}'
 
-    def get_expected_waste_percent(self, template) -> Decimal:
+    @extend_schema_field(PERCENT)
+    def get_expected_waste_percent(self, template):
         return f'{self._totals(template)[1]:.2f}'
 
-    def get_expected_loss_percent(self, template) -> Decimal:
+    @extend_schema_field(PERCENT)
+    def get_expected_loss_percent(self, template):
         return f'{self._totals(template)[2]:.2f}'
 
     def validate_input_product(self, product):

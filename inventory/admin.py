@@ -6,7 +6,8 @@ from common.tenancy import TenantAdminMixin
 
 from .models import (
     BarcodeRule, Location, Product, ProductCategory, StockBatch, StockMovement, Transfer, TransferLine, TransferPick,
-    Requisition, RequisitionLine, YieldTemplate, YieldTemplateOutput, weighed_product_problem, yield_output_problems,
+    Requisition, RequisitionLine, YieldTemplate, YieldTemplateOutput, other_company_problem, weighed_product_problem,
+    yield_output_problems,
 )
 
 
@@ -140,6 +141,7 @@ class YieldOutputFormSet(BaseInlineFormSet):
         input_product = getattr(self.instance, 'input_product', None) if self.instance.input_product_id else None
         problem = weighed_product_problem(input_product)
         problems = ([problem] if problem else []) + yield_output_problems(input_product, rows)
+        problems += [p for p in (other_company_problem(row.get('product'), self.instance.company_id) for row in rows) if p]
         if problems:
             raise ValidationError(problems)
 
@@ -160,3 +162,6 @@ class YieldTemplateAdmin(TenantAdminMixin, admin.ModelAdmin):
     search_fields = ('name', 'input_product__name')
     list_select_related = ('input_product',)
     inlines = [YieldTemplateOutputInline]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related('outputs')  # expected_loss_percent per row

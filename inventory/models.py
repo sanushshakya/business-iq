@@ -508,6 +508,13 @@ class YieldTemplate(models.Model):
     def __str__(self):
         return self.name
 
+    def clean(self):
+        # The API scopes products to the user's company; this guards the admin for superusers (not scoped).
+        if self.input_product_id:
+            problem = other_company_problem(self.input_product, self.company_id)
+            if problem:
+                raise ValidationError({'input_product': problem})
+
     @staticmethod
     def percent_totals(outputs):
         """``(yield, waste, loss)`` percentages for ``outputs`` (objects or dicts with ``kind``/``expected_percent``)."""
@@ -558,6 +565,13 @@ def weighed_product_problem(product):
     return None
 
 
+def other_company_problem(product, company_id):
+    """Why ``product`` cannot be used by ``company_id`` (it is another company's), or None."""
+    if product is not None and company_id is not None and product.company_id != company_id:
+        return f'{product.name} belongs to another company.'
+    return None
+
+
 def yield_output_problems(input_product, outputs):
     """
     What is wrong with a yield template's ``outputs`` (dicts: ``kind``, ``product``, ``name``, ``expected_percent``),
@@ -571,6 +585,7 @@ def yield_output_problems(input_product, outputs):
                 problems.append('Waste is not a product; leave the product out.')
             elif not name:
                 problems.append('Name the waste (e.g. Bone).')
+                continue
             key = ('waste', name.casefold())
         elif product is None:
             problems.append('Choose the output product.')

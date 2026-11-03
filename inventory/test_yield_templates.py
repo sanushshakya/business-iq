@@ -114,6 +114,21 @@ class YieldTemplateApiTests(TestCase):
                 self.assertEqual(response.status_code, 400)
                 self.assertIn(message, str(response.json()['outputs']))
 
+    def test_kind_left_out_means_a_product(self):
+        response = self.create(outputs=[
+            {'kind': 'product', 'product': self.steak.pk, 'expected_percent': '10.00'},
+            {'product': self.mince.pk, 'expected_percent': '20.00'}])
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual([o['kind'] for o in response.json()['outputs']], ['product', 'product'])
+        response = self.create(name='Only defaults', outputs=[{'product': self.mince.pk, 'expected_percent': '20.00'}])
+        self.assertEqual(response.status_code, 201, response.content)
+
+    def test_unnamed_waste_is_one_message(self):
+        response = self.create(outputs=[
+            {'kind': 'product', 'product': self.steak.pk, 'expected_percent': '10.00'},
+            {'kind': 'waste', 'expected_percent': '5.00'}, {'kind': 'waste', 'name': ' ', 'expected_percent': '5.00'}])
+        self.assertEqual(response.json()['outputs'], ['Name the waste (e.g. Bone).'] * 2)
+
     def test_same_output_twice_refused(self):
         twice = [{'kind': 'product', 'product': self.steak.pk, 'expected_percent': '10.00'}] * 2
         self.assertIn('Fake Rump Steak is listed twice.', str(self.create(outputs=twice).json()['outputs']))
@@ -202,9 +217,10 @@ class YieldTemplateAdminTests(TestCase):
         self.steak = weighed(self.company, 'Fake Rump Steak')
         self.client.force_login(UserFactory(company=self.company, is_staff=True, is_superuser=True))
 
-    def post(self, *outputs):
+    def post(self, *outputs, input_product=None):
         # A superuser is not scoped to a company, so the admin asks which one.
-        data = {'name': 'Fake admin template', 'company': self.company.pk, 'input_product': self.side.pk, 'is_active': 'on', 'note': '',
+        data = {'name': 'Fake admin template', 'company': self.company.pk,
+                'input_product': input_product or self.side.pk, 'is_active': 'on', 'note': '',
                 'outputs-TOTAL_FORMS': str(len(outputs)), 'outputs-INITIAL_FORMS': '0',
                 'outputs-MIN_NUM_FORMS': '0', 'outputs-MAX_NUM_FORMS': '1000'}
         for index, output in enumerate(outputs):
@@ -218,8 +234,46 @@ class YieldTemplateAdminTests(TestCase):
         self.assertContains(response, 'Outputs add up to 100.01%; they can be at most 100%.')
         self.assertFalse(YieldTemplate.objects.exists())
 
+    def test_admin_refuses_another_companys_products(self):
+        other = CompanyFactory()
+        theirs = weighed(other, 'Their Side')
+        response = self.post({'kind': 'product', 'product': self.steak.pk, 'expected_percent': '70.00'},
+                             input_product=theirs.pk)
+        self.assertContains(response, 'Their Side belongs to another company.')
+        response = self.post({'kind': 'product', 'product': weighed(other, 'Their Steak').pk,
+                              'expected_percent': '70.00'})
+        self.assertContains(response, 'Their Steak belongs to another company.')
+        self.assertFalse(YieldTemplate.objects.exists())
+
+    def test_admin_list_does_not_query_per_row(self):
+        for number in range(3):
+            template = YieldTemplate.objects.create(company=self.company, name=f'T{number}',
+                                                    input_product=self.side)
+            YieldTemplateOutput.objects.create(template=template, product=self.steak, expected_percent=D('50'))
+        url = reverse('admin:inventory_yieldtemplate_changelist')
+        self.client.get(url)
+        with self.assertNumQueries(self._queries(url)):
+            YieldTemplate.objects.create(company=self.company, name='T9', input_product=self.side)
+            self.client.get(url)
+
+    def _queries(self, url):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        with CaptureQueriesContext(connection) as before:
+            self.client.get(url)
+        return len(before) + 1  # the create above
+
     def test_admin_saves_a_valid_template(self):
         response = self.post({'kind': 'product', 'product': self.steak.pk, 'expected_percent': '70.00'},
                              {'kind': 'waste', 'name': 'Bone', 'expected_percent': '25.00'})
         self.assertEqual(response.status_code, 302)
         self.assertEqual(YieldTemplate.objects.get().expected_loss_percent, D('5.00'))
+
+
+class YieldTemplateSchemaTests(TestCase):
+    def test_percentages_are_decimal_strings_in_the_schema(self):
+        from drf_spectacular.generators import SchemaGenerator
+        schema = SchemaGenerator().get_schema(request=None, public=True)
+        fields = schema['components']['schemas']['YieldTemplate']['properties']
+        for name in ('expected_yield_percent', 'expected_waste_percent', 'expected_loss_percent'):
+            self.assertEqual((fields[name]['type'], fields[name].get('format')), ('string', 'decimal'), name)

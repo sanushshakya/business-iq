@@ -194,7 +194,8 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
             continue
         typed = [weight for _, weight, label in weighings[pk] if label is None]
         if any(weight > manual_max for weight in typed):
-            problems.extend(f'{product.name}: {weight} kg is over the {manual_max} kg limit for a typed weight. '
+            limit = f'{manual_max.normalize():f}'  # '2.5000' -> 2.5, '1E+1' -> 10
+            problems.extend(f'{product.name}: {weight} kg is over the {limit} kg limit for a typed weight. '
                             'Check it, or weigh it in parts.' for weight in typed if weight > manual_max)
             continue
         for quantity, weight, label in weighings[pk]:

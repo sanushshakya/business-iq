@@ -102,3 +102,23 @@ class ManualWeightTests(SalesTestCase):
         sold = self.charge([{'product': packs.pk, 'quantity': 2, 'weight_kg': '4.800'}])
         self.assertEqual(sold.status_code, 201, sold.content)
         self.assertIs(sold.data['items'][0]['manual_weight'], True)
+
+    def test_limit_message_prints_the_setting_plainly(self):
+        Setting.objects.create(company=self.company, key='manual_weight_max_kg', value='2.5000')
+        response = self.charge([{'product': self.mince.pk, 'weight_kg': '3.000'}])
+        self.assertIn('over the 2.5 kg limit', response.data['items'][0])
+        Setting.objects.filter(company=self.company).update(value='1E+1')
+        response = self.charge([{'product': self.mince.pk, 'weight_kg': '11.000'}])
+        self.assertIn('over the 10 kg limit', response.data['items'][0])
+
+    def test_label_and_typed_line_of_one_product(self):
+        add_rules(self.company)
+        Setting.objects.create(company=self.company, key='manual_weight_max_kg', value='0.5')
+        label = {'barcode': scale_code('21', '0042', '00512', with_check=True)}
+        over = self.charge([label, {'product': self.mince.pk, 'weight_kg': '0.600'}])
+        self.assertEqual(over.status_code, 400)
+        self.assertEqual(len(over.data['items']), 1)
+        self.assertIn('0.600 kg is over the 0.5 kg limit', over.data['items'][0])
+        sold = self.charge([label, {'product': self.mince.pk, 'weight_kg': '0.400'}])
+        self.assertEqual(sold.status_code, 201, sold.content)
+        self.assertEqual([item['manual_weight'] for item in sold.data['items']], [False, True])

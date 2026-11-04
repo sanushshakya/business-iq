@@ -31,7 +31,7 @@ class BranchCodeTests(TestCase):
         self.assertEqual(list(Branch.objects.values_list('code', flat=True)), ['', ''])
 
     def test_bad_codes_refused(self):
-        for code in ('HIGHS', 'H', 'H-S', 'H S'):
+        for code in ('HIGHS', 'H', 'H-S', 'H S', 'B7', 'b12'):  # B<id> is the fallback for branches with no code
             with self.subTest(code=code):
                 response = self.create(code)
                 self.assertEqual(response.status_code, 400, response.content)
@@ -43,3 +43,8 @@ class BranchCodeTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn('code', response.json())
         Branch.objects.create(company=CompanyFactory(), name='Theirs', address='x', code='HS')  # another company: fine
+
+    def test_form_encoded_post_works(self):  # the browsable API and form posts send a QueryDict
+        response = self.api.post(reverse('branch-list'), {'name': 'Fake Form Street', 'address': 'x', 'code': 'fs'})
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(Branch.objects.get().code, 'FS')

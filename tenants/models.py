@@ -30,7 +30,8 @@ class Company(models.Model):
         return self.name
 
 
-BRANCH_CODE = RegexValidator(r'^[A-Z0-9]{2,4}$', '2–4 capital letters or digits, e.g. HS.')
+# Not B<digits>: tills number a branch with no code B<id>, so such a code could repeat another branch's numbers.
+BRANCH_CODE = RegexValidator(r'^(?!B[0-9]+$)[A-Z0-9]{2,4}$', '2–4 capital letters or digits (not B and a number), e.g. HS.')
 
 
 class Branch(models.Model):
@@ -60,10 +61,6 @@ class Branch(models.Model):
             models.UniqueConstraint(fields=['company', 'code'], condition=~models.Q(code=''),
                                     name='unique_branch_code_per_company'),
         ]
-
-    def clean(self):
-        super().clean()
-        self.code = (self.code or '').strip().upper()
 
     def __str__(self):
         return f"{self.company.name} - {self.name}"

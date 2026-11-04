@@ -25,8 +25,9 @@ class BranchSerializer(TenantModelSerializer):
         read_only_fields = ['created_at']
 
     def to_internal_value(self, data):
-        if isinstance(data, dict) and isinstance(data.get('code'), str):  # 'hs ' is HS
-            data = {**data, 'code': data['code'].strip().upper()}
+        if hasattr(data, 'copy') and isinstance(data.get('code'), str):  # 'hs ' is HS (a dict or a form's QueryDict)
+            data = data.copy()
+            data['code'] = data['code'].strip().upper()
         return super().to_internal_value(data)
 
     def validate(self, attrs):

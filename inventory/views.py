@@ -1,16 +1,18 @@
 # inventory/views.py
 
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from django.db import IntegrityError, OperationalError, transaction
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from common.tenancy import IsCompanyStaffOrReadOnly, SharedReferenceMixin, TenantScopedMixin
 from tenants.roles import STOCK
 
-from . import breakdowns, requisitions, transfers, write_offs
+from . import breakdowns, reports, requisitions, transfers, write_offs
 from .models import BarcodeRule, Location, ProductCategory, Product, Order, Supplier, StockBatch, StockMovement, Transfer, Requisition, YieldTemplate, Breakdown, WriteOff
 from .ledger import LedgerError
 from .projections import project_stock
@@ -34,6 +36,9 @@ from .serializers import (
     WriteOffCreateSerializer,
     WriteOffDecisionSerializer,
     WriteOffSerializer,
+    ReportQuerySerializer,
+    WasteReportSerializer,
+    YieldReportSerializer,
     YieldTemplateSerializer,
 )
 
@@ -464,6 +469,51 @@ class WriteOffViewSet(
     def reject(self, request, pk=None):
         """Reject a pending write-off (not your own); nothing moves."""
         return self._decision(request, write_offs.reject)
+
+class _ReportView(APIView):
+    """A G24 report for the user's company; staff and the stock role."""
+
+    groups = ()
+    report = serializer_class = None
+
+    def get(self, request):
+        user = request.user
+        if not (user.is_staff or user.is_superuser or user.role == STOCK):
+            raise PermissionDenied('Only staff or the stock team can see this report.')
+        if user.company is None:
+            raise ValidationError({'detail': ['Your account is not linked to a company.']})
+        query = ReportQuerySerializer(data=request.query_params, groups=self.groups)
+        query.is_valid(raise_exception=True)
+        return Response(self.serializer_class(type(self).report(user.company, **query.validated_data)).data)
+
+
+_REPORT_PARAMS = [
+    OpenApiParameter('from', OpenApiTypes.DATE, description='First UK date (default: Monday 7 weeks before "to").'),
+    OpenApiParameter('to', OpenApiTypes.DATE, description='Last UK date, inclusive (default: today).'),
+]
+
+
+class YieldReportView(_ReportView):
+    """Actual vs expected yield of completed breakdowns, by input product, supplier or butcher (G24)."""
+
+    groups, report, serializer_class = reports.YIELD_GROUPS, reports.yield_report, YieldReportSerializer
+
+    @extend_schema(parameters=[*_REPORT_PARAMS, OpenApiParameter('group', str, enum=reports.YIELD_GROUPS)],
+                   responses=YieldReportSerializer)
+    def get(self, request):
+        return super().get(request)
+
+
+class WasteReportView(_ReportView):
+    """Written-off stock per UK week (from Monday), by reason or product, with its known cost (G24)."""
+
+    groups, report, serializer_class = reports.WASTE_GROUPS, reports.waste_report, WasteReportSerializer
+
+    @extend_schema(parameters=[*_REPORT_PARAMS, OpenApiParameter('group', str, enum=reports.WASTE_GROUPS)],
+                   responses=WasteReportSerializer)
+    def get(self, request):
+        return super().get(request)
+
 
 class Conflict(APIException):
     status_code = status.HTTP_409_CONFLICT

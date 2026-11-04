@@ -2,6 +2,7 @@
 
 
 from collections.abc import Mapping
+from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import transaction
@@ -12,7 +13,9 @@ from rest_framework import serializers
 
 from common.tenancy import TenantModelSerializer
 
-from . import requisitions, transfers
+from vat.services import uk_date
+
+from . import reports, requisitions, transfers
 from .ledger import move, virtual_location
 from .models import (
     BarcodeRule, Breakdown, BreakdownLine, Location, WriteOff, YieldTemplate, YieldTemplateOutput, weighed_product_problem, yield_output_problems, Order, Product, ProductCategory, Requisition, RequisitionLine, StockBatch, StockMovement, Supplier,
@@ -662,3 +665,86 @@ class WriteOffCreateSerializer(TenantModelSerializer):
 
 class WriteOffDecisionSerializer(serializers.Serializer):
     note = serializers.CharField(max_length=255, required=False, allow_blank=True, default='')
+
+
+class ReportQuerySerializer(serializers.Serializer):
+    """``from`` and ``to`` are inclusive UK dates (default: the last 8 weeks, from a Monday, up to today)."""
+
+    MAX_DAYS = 366
+
+    def __init__(self, *args, groups=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['group'] = serializers.ChoiceField(choices=groups, default=groups[0])
+        self.fields['from'] = serializers.DateField(required=False)
+        self.fields['to'] = serializers.DateField(required=False)
+
+    def validate(self, attrs):
+        end = attrs.get('to') or uk_date()
+        start = attrs.get('from') or reports.week_start(end) - timedelta(weeks=7)
+        if start > end:
+            raise serializers.ValidationError({'from': ['Must be on or before "to".']})
+        if (end - start).days >= self.MAX_DAYS:
+            raise serializers.ValidationError({'from': [f'Ask for {self.MAX_DAYS} days or fewer.']})
+        return {'start': start, 'end': end, 'group': attrs['group']}
+
+
+KG_FIELD = {'max_digits': 14, 'decimal_places': 3}
+MONEY_FIELD = {'max_digits': 16, 'decimal_places': 2}
+
+
+class YieldOutputRowSerializer(serializers.Serializer):
+    kind = serializers.ChoiceField(choices=YieldTemplateOutput.KINDS)
+    product = serializers.IntegerField(allow_null=True)
+    name = serializers.CharField()
+    actual_kg = serializers.DecimalField(**KG_FIELD)
+    expected_kg = serializers.DecimalField(**KG_FIELD)
+    variance_kg = serializers.DecimalField(**KG_FIELD, help_text='Actual − expected.')
+    actual_percent = serializers.DecimalField(max_digits=7, decimal_places=2, help_text='% of the input kg.')
+    expected_percent = serializers.DecimalField(max_digits=7, decimal_places=2)
+
+
+class YieldGroupSerializer(serializers.Serializer):
+    key = serializers.IntegerField(allow_null=True, help_text='Product, supplier or user id; null when not recorded.')
+    name = serializers.CharField()
+    breakdowns = serializers.IntegerField()
+    input_kg = serializers.DecimalField(**KG_FIELD)
+    outputs = YieldOutputRowSerializer(many=True)
+    loss_kg = serializers.DecimalField(**KG_FIELD)
+    expected_loss_kg = serializers.DecimalField(**KG_FIELD)
+    input_cost = serializers.DecimalField(**MONEY_FIELD, allow_null=True,
+                                          help_text='Sum of the known input costs; null when none was known.')
+
+
+class YieldReportSerializer(serializers.Serializer):
+    """Completed breakdowns between two UK dates: each output's actual kg against the template's expected %."""
+
+    group = serializers.ChoiceField(choices=reports.YIELD_GROUPS)
+    rows = YieldGroupSerializer(many=True)
+
+    def get_fields(self):  # 'from' is a Python keyword, so it cannot be declared in the class body
+        return {'from': serializers.DateField(), 'to': serializers.DateField(), **super().get_fields()}
+
+
+class WasteRowSerializer(serializers.Serializer):
+    key = serializers.CharField(help_text='The reason code, or the product id.')
+    name = serializers.CharField()
+    write_offs = serializers.IntegerField()
+    quantity = serializers.IntegerField(help_text='Units, or pieces for catch-weight.')
+    weight_kg = serializers.DecimalField(**KG_FIELD)
+    cost = serializers.DecimalField(**MONEY_FIELD, help_text='Sum of the known costs.')
+    uncosted = serializers.IntegerField(help_text='Write-offs whose batch had no cost.')
+
+
+class WasteWeekSerializer(serializers.Serializer):
+    week_start = serializers.DateField(help_text='The Monday (UK).')
+    rows = WasteRowSerializer(many=True)
+    total_cost = serializers.DecimalField(**MONEY_FIELD)
+
+
+class WasteReportSerializer(YieldReportSerializer):
+    """Write-offs written off between two UK dates, per week from Monday."""
+
+    group = serializers.ChoiceField(choices=reports.WASTE_GROUPS)
+    rows = None
+    weeks = WasteWeekSerializer(many=True)
+    total_cost = serializers.DecimalField(**MONEY_FIELD)

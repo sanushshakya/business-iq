@@ -96,6 +96,8 @@ ROLE_ROUTES = {
         + _collection('inventory/breakdowns', {'GET', 'POST'})
         + _route(r'^/inventory/breakdowns/\d+/void/$', 'POST')
         + _collection('inventory/write-offs', {'GET', 'POST'})
+        + _collection('inventory/suppliers', READ)
+        + _route(r'^/inventory/reports/(yield|waste)/$', 'GET')
         + STOCK_ALERTS
         + _collection('pricing/price-changes', READ)
     ),

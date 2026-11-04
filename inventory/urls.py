@@ -21,5 +21,7 @@ router.register(r'breakdowns', views.BreakdownViewSet, basename='breakdown')
 router.register(r'write-offs', views.WriteOffViewSet, basename='writeoff')
 
 urlpatterns = [
+    path('reports/yield/', views.YieldReportView.as_view(), name='report-yield'),
+    path('reports/waste/', views.WasteReportView.as_view(), name='report-waste'),
     path('', include(router.urls)),
 ]

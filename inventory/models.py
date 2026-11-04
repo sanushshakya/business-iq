@@ -11,6 +11,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
+from django.utils import timezone
 
 from vat.models import VAT_CODES, ZERO
 
@@ -76,7 +77,8 @@ class Product(models.Model):
     # The item number a scale prints on its labels (G18): digits, stored without leading zeros, unique per company.
     plu = models.CharField(max_length=8, blank=True, default='', help_text='Scale PLU (item number on labels).')
     # The till catalogue's version (G26): moves on every save and every stock movement, so tills fetch only changes.
-    updated_at = models.DateTimeField(auto_now=True, db_index=True)
+    # Set in save() rather than auto_now, so loading a snapshot (loaddata, the seed command) still gets a value.
+    updated_at = models.DateTimeField(default=timezone.now, db_index=True, editable=False)
 
     class Meta:
         constraints = [
@@ -98,6 +100,7 @@ class Product(models.Model):
                 raise ValidationError({'plu': 'Another product already has this PLU.'})
 
     def save(self, *args, update_fields=None, **kwargs):
+        self.updated_at = timezone.now()
         if update_fields is not None:  # a partial save (e.g. a price approval) is still a change tills must see
             update_fields = {*update_fields, 'updated_at'}
         super().save(*args, update_fields=update_fields, **kwargs)

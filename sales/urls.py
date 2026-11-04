@@ -10,5 +10,6 @@ router.register(r'sessions', views.TillSessionViewSet, basename='tillsession')
 router.register(r'sales', views.SaleViewSet, basename='sale')
 
 urlpatterns = [
+    path('catalogue/', views.CatalogueView.as_view(), name='till-catalogue'),
     path('', include(router.urls)),
 ]

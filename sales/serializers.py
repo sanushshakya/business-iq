@@ -6,8 +6,11 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from common.tenancy import scope_queryset
+from inventory.serializers import BarcodeRuleSerializer
 from inventory.models import Product
 from tenants.models import Till
+from tenants.serializers import BranchSerializer, TillSerializer
+from vat.serializers import VatRateSerializer
 from vat.services import uk_date
 
 from .labels import read_label
@@ -190,3 +193,41 @@ class CreateSaleSerializer(serializers.Serializer):
 
 class VoidSaleSerializer(serializers.Serializer):
     reason = serializers.CharField(required=False, allow_blank=True, max_length=255, default='')
+
+
+class CatalogueProductSerializer(serializers.ModelSerializer):
+    """What a till needs of a product to find it (name, barcode, PLU) and price it (G26)."""
+
+    class Meta:
+        model = Product
+        fields = ['id', 'name', 'barcode', 'plu', 'price', 'price_per_kg', 'sold_by', 'is_catch_weight',
+                  'nominal_weight_kg', 'vat_code', 'stock_quantity', 'category']
+        read_only_fields = fields
+
+
+class CatalogueSettingsSerializer(serializers.Serializer):
+    manual_weight_max_kg = serializers.DecimalField(max_digits=12, decimal_places=3, coerce_to_string=True,
+                                                    normalize_output=True)
+    offline_warn_hours = serializers.IntegerField()
+    offline_confirm_hours = serializers.IntegerField()
+    offline_stop_hours = serializers.IntegerField()
+
+
+class CatalogueSerializer(serializers.Serializer):
+    """
+    The till catalogue (G26). ``full`` means ``products`` is everything (drop what is not in it); otherwise it holds
+    only products changed since ``since``, and ``removed`` the ids of products deleted since then. Send ``cursor`` back
+    as ``since`` next time.
+    """
+
+    cursor = serializers.DateTimeField()
+    full = serializers.BooleanField()
+    user = serializers.IntegerField()
+    company = serializers.IntegerField()
+    products = CatalogueProductSerializer(many=True)
+    removed = serializers.ListField(child=serializers.IntegerField())
+    vat_rates = VatRateSerializer(many=True)
+    barcode_rules = BarcodeRuleSerializer(many=True)
+    tills = TillSerializer(many=True)
+    branches = BranchSerializer(many=True)
+    settings = CatalogueSettingsSerializer()

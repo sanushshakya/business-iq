@@ -3,14 +3,16 @@
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from common.tenancy import TenantScopedMixin
 
+from .catalogue import catalogue, read_cursor
 from .models import Sale, TillSession
 from .serializers import (
-    CloseSessionSerializer, CreateSaleSerializer, OpenSessionSerializer, SaleSerializer,
+    CatalogueSerializer, CloseSessionSerializer, CreateSaleSerializer, OpenSessionSerializer, SaleSerializer,
     TillSessionSerializer, VoidSaleSerializer,
 )
 from .services import close_session, open_session, record_sale, void_sale
@@ -138,3 +140,19 @@ class SaleViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveModel
         serializer.is_valid(raise_exception=True)
         void_sale(sale=sale, user=request.user, reason=serializer.validated_data['reason'])
         return Response(SaleSerializer(self.get_queryset().get(pk=sale.pk)).data)
+
+
+class CatalogueView(APIView):
+    """
+    The till catalogue (G26): products, prices, VAT, barcode rules, tills and till settings, which the till keeps in
+    its browser to keep finding and pricing products while offline. Pass the last ``cursor`` as ``since`` to get only
+    what changed.
+    """
+
+    @extend_schema(parameters=[OpenApiParameter('since', str, description='The cursor of the last refresh.')],
+                   responses=CatalogueSerializer)
+    def get(self, request):
+        if request.user.company is None:
+            raise ValidationError({'detail': ['Your account is not linked to a company.']})
+        since = read_cursor(request.query_params.get('since'))
+        return Response(CatalogueSerializer(catalogue(request.user, since)).data)

@@ -109,6 +109,14 @@ def close_session(*, session, user, counted_cash, note=''):
 
 
 @transaction.atomic
+def manual_weight_limit(company_id):
+    """The most kg one typed weight may be (``manual_weight_max_kg``); a value that is not a number above 0 is 25."""
+    limit = get_company_setting(company_id, MANUAL_WEIGHT_MAX_KEY, DEFAULT_MANUAL_WEIGHT_MAX, Decimal)
+    if not limit.is_finite() or limit <= 0:  # a typo must not stop weighed sales
+        return DEFAULT_MANUAL_WEIGHT_MAX
+    return limit
+
+
 def record_sale(*, session, cashier, payment_method, amount_tendered, lines, client_ref=None, loyalty_barcode=''):
     """
     ``lines`` is a list of ``(Product, quantity)`` or ``(Product, quantity, weight_kg)`` (products sold by weight:
@@ -151,9 +159,7 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
     tolerance = get_company_setting(company_id, LABEL_TOLERANCE_KEY, DEFAULT_LABEL_TOLERANCE, Decimal)
     if not tolerance.is_finite() or tolerance < 0:  # NaN would break every comparison; a typo must not stop sales
         tolerance = DEFAULT_LABEL_TOLERANCE
-    manual_max = get_company_setting(company_id, MANUAL_WEIGHT_MAX_KEY, DEFAULT_MANUAL_WEIGHT_MAX, Decimal)
-    if not manual_max.is_finite() or manual_max <= 0:  # a typo must not stop weighed sales
-        manual_max = DEFAULT_MANUAL_WEIGHT_MAX
+    manual_max = manual_weight_limit(company_id)
     plan, problems = [], []
     for pk in sorted(wanted):
         product = products[pk]

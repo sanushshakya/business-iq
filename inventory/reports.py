@@ -54,7 +54,7 @@ def _yield_group(breakdown, group):
         supplier = breakdown.input_batch.supplier
         return (supplier.pk, supplier.name) if supplier else (None, NO_SUPPLIER)
     user = breakdown.created_by
-    return (user.pk, user.name or user.email) if user else (None, NO_BUTCHER)
+    return (user.pk, user.name or f'User #{user.pk}') if user else (None, NO_BUTCHER)  # never the email
 
 
 def _output_key(kind, product_id, name):
@@ -74,12 +74,14 @@ def yield_report(company, start, end, group):
     for breakdown in breakdowns:
         key, name = _yield_group(breakdown, group)
         row = groups.setdefault(key, {'key': key, 'name': name, 'breakdowns': 0, 'input_kg': ZERO_KG,
-                                      'loss_kg': ZERO_KG, 'expected_loss_kg': ZERO_KG, 'input_cost': None,
+                                      'loss_kg': ZERO_KG, 'expected_loss_kg': ZERO_KG, 'input_cost': None, 'uncosted': 0,
                                       'outputs': {}})
         row['breakdowns'] += 1
         row['input_kg'] += breakdown.input_kg
         row['loss_kg'] += breakdown.loss_kg
-        if breakdown.input_cost is not None:
+        if breakdown.input_cost is None:
+            row['uncosted'] += 1
+        else:
             row['input_cost'] = (row['input_cost'] or ZERO) + breakdown.input_cost
         outputs = list(breakdown.template.outputs.all())
         row['expected_loss_kg'] += _share(breakdown.input_kg, breakdown.template.percent_totals(outputs)[2])

@@ -114,7 +114,7 @@ class YieldReportTests(ReportTestCase):
         self.assertEqual(steak['variance_kg'], D('0.100'))
         self.assertEqual((steak['actual_percent'], steak['expected_percent']), (D('30.67'), D('30.00')))
         self.assertEqual((row['loss_kg'], row['expected_loss_kg']), (D('0.350'), D('0.450')))
-        self.assertEqual(row['input_cost'], D('50.00'))  # only the first had a cost
+        self.assertEqual((row['input_cost'], row['uncosted']), (D('50.00'), 1))  # only the first had a cost
         self.assertEqual([o['kind'] for o in row['outputs']], ['product', 'product', 'waste', 'waste'])
 
     def test_by_supplier(self):
@@ -127,7 +127,7 @@ class YieldReportTests(ReportTestCase):
     def test_by_butcher(self):
         rows = {row['name']: row for row in self.yield_rows('butcher')}
         self.assertEqual(rows['Fake Butcher']['input_kg'], D('5.000'))
-        self.assertEqual(rows[self.user.email]['input_kg'], D('10.000'))
+        self.assertEqual(rows[f'User #{self.user.pk}']['input_kg'], D('10.000'))  # no name: never the email
 
     def test_voided_breakdown_excluded(self):
         [row] = self.yield_rows()

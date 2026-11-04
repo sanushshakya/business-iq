@@ -95,6 +95,15 @@ class SupplierSerializer(TenantModelSerializer):
         fields = '__all__'
 
 
+class SupplierNameSerializer(TenantModelSerializer):
+    """Just who a supplier is, for operators who pick one (the stock role on Receive, G24); not their contacts."""
+
+    class Meta:
+        model = Supplier
+        fields = ['id', 'name']
+        read_only_fields = fields
+
+
 class StockBatchSerializer(TenantModelSerializer):
     """
     A lot of a product at one location. ``location`` is set when the stock is received: leave it out and the
@@ -115,6 +124,7 @@ class StockBatchSerializer(TenantModelSerializer):
         fields = super().get_fields()
         if self.instance is not None:
             fields['location'].read_only = True  # moving stock between locations is a transfer, not an edit
+            fields['supplier'].read_only = True  # who it came from is history (yield by supplier, G24)
         user = getattr(self.context.get('request'), 'user', None)
         if not (user and (user.is_staff or user.is_superuser)):
             fields['unit_cost'].read_only = True  # landed cost is commercial: staff set it (G22), others only see it
@@ -713,6 +723,7 @@ class YieldGroupSerializer(serializers.Serializer):
     expected_loss_kg = serializers.DecimalField(**KG_FIELD)
     input_cost = serializers.DecimalField(**MONEY_FIELD, allow_null=True,
                                           help_text='Sum of the known input costs; null when none was known.')
+    uncosted = serializers.IntegerField(help_text='Breakdowns whose input batch had no cost.')
 
 
 class YieldReportSerializer(serializers.Serializer):

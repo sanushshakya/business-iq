@@ -29,6 +29,7 @@ from .serializers import (
     StockMovementSerializer,
     StockProjectionSerializer,
     SupplierSerializer,
+    SupplierNameSerializer,
     RequisitionFulfilSerializer,
     RequisitionSerializer,
     TransferReceiveSerializer,
@@ -76,6 +77,11 @@ class OrderViewSet(TenantScopedMixin, viewsets.ModelViewSet):
 class SupplierViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     queryset = Supplier.objects.all()
     serializer_class = SupplierSerializer
+
+    def get_serializer_class(self):
+        if getattr(self.request.user, 'is_operator', False):  # operators only pick a supplier by name
+            return SupplierNameSerializer
+        return super().get_serializer_class()
 
 
 @extend_schema_view(list=extend_schema(parameters=[

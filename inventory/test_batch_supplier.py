@@ -12,6 +12,7 @@ from inventory.ledger import move, transfer_batch, virtual_location
 from inventory.models import Location, StockBatch, Supplier
 from inventory.test_breakdowns import BreakdownTestCase
 from tenants.models import Branch
+from tenants.roles import STOCK
 
 
 class BatchSupplierApiTests(TestCase):
@@ -44,6 +45,28 @@ class BatchSupplierApiTests(TestCase):
         response = self.receive(supplier=theirs.pk)
         self.assertEqual(response.status_code, 400)
         self.assertIn('supplier', response.json())
+
+
+    def test_supplier_cannot_be_changed_after_receipt(self):
+        batch = self.receive(supplier=self.supplier.pk).json()
+        other = Supplier.objects.create(company=self.company, name='Fake Other Farm')
+        self.api.patch(reverse('stockbatch-detail', args=[batch['id']]), {'supplier': other.pk}, format='json')
+        self.assertEqual(StockBatch.objects.get(pk=batch['id']).supplier, self.supplier)
+
+    def test_stock_role_sees_only_supplier_names(self):
+        Supplier.objects.filter(pk=self.supplier.pk).update(contact_info='Fake Contact 01234', address='1 Fake Lane')
+        stock = APIClient()
+        stock.force_authenticate(UserFactory(company=self.company, role=STOCK))
+        [row] = stock.get(reverse('supplier-list')).json()['results']
+        self.assertEqual(row, {'id': self.supplier.pk, 'name': 'Fake Farms Ltd'})
+        [row] = self.api.get(reverse('supplier-list')).json()['results']  # staff still see everything
+        self.assertEqual(row['address'], '1 Fake Lane')
+
+    def test_supplier_with_batches_cannot_be_deleted(self):
+        self.receive(supplier=self.supplier.pk)
+        response = self.api.delete(reverse('supplier-detail', args=[self.supplier.pk]))
+        self.assertEqual((response.status_code, response.json()['code']), (409, 'Protected'))  # common/exceptions.py
+        self.assertTrue(Supplier.objects.filter(pk=self.supplier.pk).exists())
 
 
 class SupplierPassedOnTests(BreakdownTestCase):

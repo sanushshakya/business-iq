@@ -349,6 +349,8 @@ class RoleAccessTests(OperatorTestCase):
         self.assertEqual(freight.post('/logistics/providers/', {}).status_code, 400)
         self.assertEqual(demand.post('/logistics/providers/', {}).status_code, 403)
         self.assertEqual(stock.post('/inventory/batches/', {}).status_code, 400)
+        self.assertEqual(till.post('/sales/offline-sales/', {}, format='json').status_code, 400)  # G28: allowed
+        self.assertEqual(stock.post('/sales/offline-sales/', {}, format='json').status_code, 403)
         self.assertEqual(freight.post('/inventory/batches/', {}).status_code, 403)
         # Never anything that changes a company, its users or its settings.
         for client in (demand, freight, till, stock):

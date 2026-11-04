@@ -11,9 +11,11 @@ from rest_framework.views import APIView
 from common.tenancy import HasCompany, TenantScopedMixin
 
 from .catalogue import catalogue, read_cursor
+from .offline_sync import sync_offline_sales
 from .models import Sale, TillSession
 from .serializers import (
-    CatalogueSerializer, CloseSessionSerializer, CreateSaleSerializer, OpenSessionSerializer, SaleSerializer,
+    CatalogueSerializer, CloseSessionSerializer, CreateSaleSerializer, OfflineSaleBatchSerializer,
+    OfflineSaleResultsSerializer, OpenSessionSerializer, SaleSerializer,
     TillSessionSerializer, VoidSaleSerializer,
 )
 from .services import close_session, open_session, record_sale, void_sale
@@ -157,3 +159,21 @@ class CatalogueView(APIView):
     def get(self, request):
         since = read_cursor(request.query_params.get('since'))
         return Response(CatalogueSerializer(catalogue(request.user, since)).data)
+
+
+class OfflineSalesView(APIView):
+    """
+    Sales a till made while offline (G27), sent when it reconnects (G28): recorded oldest first, each on its own, at
+    what the till charged. A sale is never refused for differing from today's view (stock, price, a closed session...):
+    those become exceptions for a manager. Sending a sale again changes nothing (``duplicate``); ``error`` means it
+    could not be recorded yet and stays on the till.
+    """
+
+    permission_classes = [IsAuthenticated, HasCompany]
+
+    @extend_schema(request=OfflineSaleBatchSerializer, responses=OfflineSaleResultsSerializer)
+    def post(self, request):
+        serializer = OfflineSaleBatchSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        results = sync_offline_sales(request.user, serializer.validated_data['sales'])
+        return Response(OfflineSaleResultsSerializer({'results': results}).data)

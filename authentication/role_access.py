@@ -51,6 +51,7 @@ ROLE_ROUTES = {
         + _route(r'^/sales/sales/\d+/void/$', 'POST')
         + _route(r'^/sync/loyalty/lookup/$', 'POST')
         + _route(r'^/sales/catalogue/$', 'GET')
+        + _route(r'^/sales/offline-sales/$', 'POST')
     ),
     DEMAND: (
         PRODUCTS_READ

@@ -11,5 +11,6 @@ router.register(r'sales', views.SaleViewSet, basename='sale')
 
 urlpatterns = [
     path('catalogue/', views.CatalogueView.as_view(), name='till-catalogue'),
+    path('offline-sales/', views.OfflineSalesView.as_view(), name='offline-sales'),
     path('', include(router.urls)),
 ]

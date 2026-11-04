@@ -315,6 +315,14 @@ def void_sale(*, sale, user, reason=''):
         raise serializers.ValidationError({'detail': 'This sale is already voided.'})
     if not TillSession.objects.get(pk=sale.session_id).is_open:
         raise serializers.ValidationError({'detail': 'The session is closed, so this sale can no longer be voided.'})
+    return reverse_sale(sale, user=user, reason=reason)
+
+
+def reverse_sale(sale, *, user, reason='', voided_at=None, notify_loyalty=True):
+    """
+    Put a (locked) sale's stock back into the batches it came from and mark it voided. The checks are the caller's:
+    ``void_sale`` (online) and an offline void replayed at sync (G28), which may land on a session closed since.
+    """
     allocations = list(
         SaleAllocation.objects.filter(item__sale=sale).select_related('batch').order_by('batch_id')
     )
@@ -324,11 +332,11 @@ def void_sale(*, sale, user, reason=''):
                  .get(pk=allocation.batch_id))
         move(batch, allocation.quantity, 'inbound', counterpart=customer, weight_kg=allocation.weight_kg)
     sale.status = Sale.VOIDED
-    sale.voided_at = timezone.now()
+    sale.voided_at = voided_at or timezone.now()
     sale.voided_by = user
     sale.void_reason = reason
     sale.save(update_fields=['status', 'voided_at', 'voided_by', 'void_reason'])
-    if sale.loyalty_barcode:  # a sale is voided at most once (checked above), so this reverses once
+    if sale.loyalty_barcode and notify_loyalty:  # voided at most once (checked by the caller): reverses once
         connection = active_connection(sale.session.till.branch.company_id)
         if connection:
             emit(connection, 'loyalty.reverse', {'order_reference': _loyalty_reference(sale)})

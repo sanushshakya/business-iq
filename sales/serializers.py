@@ -14,7 +14,7 @@ from vat.serializers import VatRateSerializer
 from vat.services import uk_date
 
 from .labels import read_label
-from .models import Sale, SaleItem, TillSession
+from .models import Sale, SaleException, SaleItem, TillSession
 from .services import session_summary, vat_by_rate
 
 MONEY = {'max_digits': 12, 'decimal_places': 2, 'min_value': Decimal('0.00')}
@@ -231,3 +231,56 @@ class CatalogueSerializer(serializers.Serializer):
     tills = TillSerializer(many=True)
     branches = BranchSerializer(many=True)
     settings = CatalogueSettingsSerializer()
+
+
+class OfflineSaleLineSerializer(serializers.Serializer):
+    """A line as the till queued it (G27): what was scanned or typed, the product it read, and what it charged."""
+
+    product = serializers.IntegerField(min_value=1, help_text="The product the till sold (from a label: its reading).")
+    barcode = serializers.CharField(max_length=64, required=False, allow_blank=True, trim_whitespace=False)
+    quantity = serializers.IntegerField(min_value=1, max_value=10000, required=False)
+    weight_kg = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=Decimal('0.001'),
+                                         max_value=Decimal('100'), required=False, allow_null=True)
+    charged = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal('0'),
+                                       help_text="The line's gross on the offline receipt (what the customer paid).")
+
+
+class OfflineVoidSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=255, allow_blank=True)
+    voided_at = serializers.DateTimeField()
+    voided_by = serializers.IntegerField(required=False, allow_null=True)
+
+
+class OfflineSaleSerializer(serializers.Serializer):
+    """One sale a till made offline (G27), sent when it reconnects (G28)."""
+
+    client_ref = serializers.UUIDField()
+    offline_number = serializers.CharField(max_length=32, required=False, allow_blank=True, default='')
+    created_at = serializers.DateTimeField(help_text='When the till made the sale.')
+    session = serializers.IntegerField(min_value=1)
+    cashier = serializers.IntegerField(required=False, allow_null=True)
+    payment_method = serializers.ChoiceField(choices=Sale.PAYMENT_METHODS)
+    amount_tendered = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal('0'), required=False,
+                                               allow_null=True)
+    card_auth_code = serializers.CharField(max_length=12, required=False, allow_blank=True, default='')
+    loyalty_barcode = serializers.CharField(max_length=32, required=False, allow_blank=True, default='')
+    confirmed_at = serializers.DateTimeField(required=False, allow_null=True)
+    items = OfflineSaleLineSerializer(many=True, allow_empty=False, max_length=200)
+    void = OfflineVoidSerializer(required=False, allow_null=True)
+
+
+class OfflineSaleBatchSerializer(serializers.Serializer):
+    sales = OfflineSaleSerializer(many=True, allow_empty=False, max_length=100)
+
+
+class OfflineSaleResultSerializer(serializers.Serializer):
+    client_ref = serializers.UUIDField()
+    status = serializers.ChoiceField(choices=['recorded', 'duplicate', 'error'])
+    sale = serializers.IntegerField(required=False)
+    receipt_number = serializers.CharField(required=False)
+    exceptions = serializers.ListField(child=serializers.ChoiceField(choices=SaleException.KINDS))
+    detail = serializers.CharField(required=False)
+
+
+class OfflineSaleResultsSerializer(serializers.Serializer):
+    results = OfflineSaleResultSerializer(many=True)

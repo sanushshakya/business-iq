@@ -255,7 +255,7 @@ class OfflineSaleSerializer(serializers.Serializer):
     """One sale a till made offline (G27), sent when it reconnects (G28)."""
 
     client_ref = serializers.UUIDField()
-    offline_number = serializers.CharField(max_length=32, required=False, allow_blank=True, default='')
+    offline_number = serializers.CharField(max_length=32, help_text='The offline receipt number the till printed.')
     created_at = serializers.DateTimeField(help_text='When the till made the sale.')
     session = serializers.IntegerField(min_value=1)
     cashier = serializers.IntegerField(required=False, allow_null=True)

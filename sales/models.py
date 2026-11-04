@@ -152,11 +152,12 @@ class SaleException(models.Model):
     (it was paid); a manager reviews these (G29).
     """
 
-    PRICE, STOCK, LABEL, WEIGHT_LIMIT, SESSION_CLOSED, CASHIER = (
-        'price', 'stock', 'label', 'weight_limit', 'session_closed', 'cashier')
-    KINDS = [(PRICE, 'Price differs'), (STOCK, 'Not enough stock'), (LABEL, 'Label not readable'),
+    PRICE, STOCK, LABEL, WEIGHT_LIMIT, SESSION_CLOSED, CASHIER, PRODUCT_CHANGED, TENDER = (
+        'price', 'stock', 'label', 'weight_limit', 'session_closed', 'cashier', 'product_changed', 'tender')
+    KINDS = [(PRICE, 'Price differs'), (STOCK, 'Not enough stock'), (LABEL, 'Label not readable as sold'),
              (WEIGHT_LIMIT, 'Typed weight over the limit'), (SESSION_CLOSED, 'Session already closed'),
-             (CASHIER, 'Cashier not found')]
+             (CASHIER, 'Cashier not found'), (PRODUCT_CHANGED, 'Product changed since the sale'),
+             (TENDER, 'Cash tendered below the total')]
 
     sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name='exceptions')
     item = models.ForeignKey(SaleItem, null=True, blank=True, on_delete=models.CASCADE, related_name='exceptions')

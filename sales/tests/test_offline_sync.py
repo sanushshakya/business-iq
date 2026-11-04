@@ -8,6 +8,7 @@ G28: sales a till made offline are replayed on the server in order, once each, a
 import uuid
 from datetime import timedelta
 from decimal import Decimal
+from unittest import mock
 
 from django.db import transaction
 from django.urls import reverse
@@ -17,9 +18,12 @@ from common.models import Setting
 from common.tests.factories import CompanyFactory, ProductFactory, StockBatchFactory, UserFactory
 from inventory.ledger import move, virtual_location
 from inventory.models import Location, Product, StockBatch, StockMovement
+from sales import offline_sync
 from sales.models import Sale, SaleException, TillSession
 from sales.services import session_summary
+from sales.tests.test_labels import gtin
 from sales.tests.test_sales import SalesTestCase, make_till
+from sync.models import OutboundEvent, StorefrontConnection
 from vat.models import VatRate
 
 D = Decimal
@@ -239,4 +243,131 @@ class RefusalTests(OfflineSyncTestCase):
     def test_too_many_sales_is_400(self):
         sales = [self.offline([self.rice_line()]) for _ in range(101)]
         response = self.client.post(reverse('offline-sales'), {'sales': sales}, format='json')
+        self.assertEqual(response.status_code, 400)
+
+
+class ReviewFixTests(OfflineSyncTestCase):
+    """G28 review: never block the queue, never lose a void, keep the till's reading."""
+
+    def setUp(self):
+        super().setUp()
+        self.connection = StorefrontConnection.objects.create(company=self.company, base_url='https://m18.example.com/',
+                                                              webhook_secret='test-webhook-secret')
+        self.enterContext(mock.patch('sync.outbox.deliver_outbound_event.apply_async'))
+
+    def events(self):
+        return list(OutboundEvent.objects.order_by('pk').values_list('event_type', flat=True))
+
+    def test_gs1_label_without_price_on_an_each_product(self):
+        Product.objects.filter(pk=self.rice.pk).update(barcode=gtin('0501234567890')[1:])
+        line = {'barcode': '01' + gtin('0501234567890') + '10LOT1', 'product': self.rice.pk, 'charged': '2.50'}
+        [result] = self.send(self.offline([line]))
+        self.assertEqual((result['status'], result['exceptions']), ('recorded', []))
+        self.assertEqual(self.stock(self.rice), 4)
+
+    def test_an_unexpected_error_is_an_error_result_and_the_rest_go_through(self):
+        first, second = self.offline([self.rice_line()], minutes_ago=20), self.offline([self.rice_line()])
+        real = offline_sync.record_offline_sale
+        calls = []
+
+        def flaky(user, data):
+            calls.append(data['client_ref'])
+            if len(calls) == 1:
+                raise RuntimeError('Fake: disk full')
+            return real(user, data)
+
+        with mock.patch('sales.offline_sync.record_offline_sale', side_effect=flaky):
+            results = self.send(first, second)
+        self.assertEqual([r['status'] for r in results], ['error', 'recorded'])
+        self.assertNotIn('disk', results[0]['detail'])  # no internals to the till
+        self.assertEqual(Sale.objects.count(), 1)
+
+    def test_same_offline_number_twice_is_an_error_not_a_crash(self):
+        one = self.offline([self.rice_line()], minutes_ago=20)
+        two = self.offline([self.rice_line()], offline_number=one['offline_number'])
+        results = self.send(one, two)
+        self.assertEqual([r['status'] for r in results], ['recorded', 'error'])
+
+    def test_void_of_a_sale_already_on_the_server_is_applied(self):
+        ref = str(uuid.uuid4())
+        self.assertEqual(self.sell(self.session, [(self.rice, 1)], method='card', client_ref=ref).status_code, 201)
+        void = {'reason': 'Fake: wrong item', 'voided_at': timezone.now().isoformat(), 'voided_by': self.cashier.pk}
+        [result] = self.send(self.offline([self.rice_line()], client_ref=ref, method='card', void=void))
+        self.assertEqual(result['status'], 'duplicate')
+        sale = Sale.objects.get()
+        self.assertEqual((sale.status, sale.void_reason), ('voided', 'Fake: wrong item'))
+        self.assertEqual(self.stock(self.rice), 5)
+
+    def test_void_of_an_online_sale_with_loyalty_reverses_its_points(self):
+        ref = str(uuid.uuid4())
+        body = {'session': self.session, 'payment_method': 'card', 'client_ref': ref, 'loyalty_barcode': '9900012345',
+                'items': [{'product': self.rice.pk, 'quantity': 1}]}
+        with self.captureOnCommitCallbacks(execute=True):
+            self.assertEqual(self.client.post(reverse('sale-list'), body, format='json').status_code, 201)
+        void = {'reason': 'Fake', 'voided_at': timezone.now().isoformat(), 'voided_by': self.cashier.pk}
+        self.send(self.offline([self.rice_line()], client_ref=ref, method='card', void=void))
+        self.assertEqual(self.events(), ['loyalty.award', 'loyalty.reverse'])
+
+    def test_sale_voided_offline_moves_no_stock_even_when_short(self):
+        void = {'reason': 'Fake', 'voided_at': timezone.now().isoformat(), 'voided_by': self.cashier.pk}
+        [result] = self.send(self.offline([self.rice_line(8)], void=void, loyalty_barcode='9900012345'))
+        self.assertEqual((result['status'], result['exceptions']), ('recorded', []))
+        self.assertEqual(Sale.objects.get().status, 'voided')
+        self.assertEqual(self.stock(self.rice), 5)
+        self.assertFalse(StockMovement.objects.filter(batch__product=self.rice, movement_type='outbound').exists())
+        self.assertFalse(StockBatch.objects.filter(batch_number__startswith='SHORT-').exists())
+        self.assertEqual(self.events(), [])  # no award, no reverse
+
+    def test_loyalty_awarded_for_a_synced_sale(self):
+        self.send(self.offline([self.rice_line()], loyalty_barcode='9900012345'))
+        self.assertEqual(self.events(), ['loyalty.award'])
+
+    def test_product_now_sold_by_weight_is_kept_with_an_exception(self):
+        Product.objects.filter(pk=self.rice.pk).update(sold_by='weight', price_per_kg=D('5.0000'))
+        [result] = self.send(self.offline([self.rice_line(2)]))
+        # no kg was recorded for it, so no stock could be taken: a manager counts it
+        self.assertEqual((result['status'], result['exceptions']), ('recorded', ['product_changed', 'stock']))
+        self.assertEqual(Sale.objects.get().total, D('5.00'))
+
+    def test_weighed_product_without_price_per_kg_is_kept(self):
+        Product.objects.filter(pk=self.mince.pk).update(price_per_kg=None)
+        [result] = self.send(self.offline([{'product': self.mince.pk, 'weight_kg': '0.500', 'charged': '4.50'}]))
+        self.assertEqual(result['status'], 'recorded')
+        item = Sale.objects.get().items.get()
+        self.assertEqual((item.line_total, item.unit_price), (D('4.50'), D('4.50')))
+
+    def test_label_now_reading_as_another_product_keeps_the_tills_reading(self):
+        StockBatchFactory(product=self.mince, quantity=0, weight_kg=D('2.000'),
+                          expiration_date=timezone.localdate() + timedelta(days=5))
+        Product.objects.filter(pk=self.rice.pk).update(barcode=gtin('0501234567890')[1:])  # the label is rice now
+        line = {'barcode': '01' + gtin('0501234567890') + '10LOT1', 'product': self.mince.pk, 'weight_kg': '0.500',
+                'charged': '4.50'}
+        [result] = self.send(self.offline([line]))
+        self.assertEqual(result['exceptions'], ['label'])
+        item = Sale.objects.get().items.get()
+        self.assertEqual((item.product, item.weight_kg, item.line_total), (self.mince, D('0.500'), D('4.50')))
+        self.assertEqual(self.stock(self.rice), 5)
+
+    def test_unit_price_matches_the_charged_line(self):
+        [result] = self.send(self.offline([self.rice_line(2, charged='4.00')]))
+        item = Sale.objects.get().items.get()
+        self.assertEqual((item.unit_price, item.line_total), (D('2.00'), D('4.00')))
+
+    def test_cash_short_of_the_total_is_an_exception(self):
+        [result] = self.send(self.offline([self.rice_line(2)], tendered='4.00'))
+        self.assertEqual(result['exceptions'], ['tender'])
+
+    def test_client_ref_seen_on_another_session_of_the_company_is_a_duplicate(self):
+        sale = self.offline([self.rice_line()])
+        self.send(sale)
+        TillSession.objects.filter(pk=self.session).update(closed_at=timezone.now(), closed_by=self.manager)
+        other = self.open()['id']
+        [again] = self.send({**sale, 'session': other})
+        self.assertEqual(again['status'], 'duplicate')
+        self.assertEqual(Sale.objects.count(), 1)
+
+    def test_offline_number_is_required(self):
+        response = self.client.post(reverse('offline-sales'), {'sales': [self.offline([self.rice_line()],
+                                                                                      offline_number='')]},
+                                    format='json')
         self.assertEqual(response.status_code, 400)

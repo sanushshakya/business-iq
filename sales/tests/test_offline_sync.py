@@ -287,6 +287,7 @@ class ReviewFixTests(OfflineSyncTestCase):
         two = self.offline([self.rice_line()], offline_number=one['offline_number'])
         results = self.send(one, two)
         self.assertEqual([r['status'] for r in results], ['recorded', 'error'])
+        self.assertIn('offline number', results[1]['detail'])
 
     def test_void_of_a_sale_already_on_the_server_is_applied(self):
         ref = str(uuid.uuid4())

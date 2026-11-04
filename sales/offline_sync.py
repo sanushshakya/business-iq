@@ -23,7 +23,7 @@ from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -62,6 +62,12 @@ def sync_offline_sales(user, sales):
                 sale, created, kinds = record_offline_sale(user, data)
         except OfflineSaleError as error:
             results.append({'client_ref': ref, 'status': 'error', 'detail': error.detail, 'exceptions': []})
+            continue
+        except IntegrityError as error:  # the only unique rule left after the client_ref check
+            if 'offline_number' not in str(error):
+                raise
+            results.append({'client_ref': ref, 'status': 'error', 'exceptions': [],
+                            'detail': 'This offline number was already used on this session by another sale.'})
             continue
         except Exception:  # never let one sale block the till's queue; its savepoint rolled back
             logger.exception('Offline sale %s could not be recorded', ref)

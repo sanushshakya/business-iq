@@ -69,6 +69,7 @@ TENANT_LOOKUPS = {
     'inventory.Breakdown': 'company',
     'inventory.BreakdownLine': 'breakdown__company',
     'inventory.WriteOff': 'company',
+    'inventory.ProductRemoval': 'company',
 }
 
 

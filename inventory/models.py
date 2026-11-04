@@ -75,6 +75,8 @@ class Product(models.Model):
     price_per_kg = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
     # The item number a scale prints on its labels (G18): digits, stored without leading zeros, unique per company.
     plu = models.CharField(max_length=8, blank=True, default='', help_text='Scale PLU (item number on labels).')
+    # The till catalogue's version (G26): moves on every save and every stock movement, so tills fetch only changes.
+    updated_at = models.DateTimeField(auto_now=True, db_index=True)
 
     class Meta:
         constraints = [
@@ -95,12 +97,28 @@ class Product(models.Model):
                     pk=self.pk).exists():
                 raise ValidationError({'plu': 'Another product already has this PLU.'})
 
+    def save(self, *args, update_fields=None, **kwargs):
+        if update_fields is not None:  # a partial save (e.g. a price approval) is still a change tills must see
+            update_fields = {*update_fields, 'updated_at'}
+        super().save(*args, update_fields=update_fields, **kwargs)
+
     def __str__(self):
         return self.name
 
     @property
     def is_weighed(self):
         return self.sold_by == self.WEIGHT
+
+
+class ProductRemoval(models.Model):
+    """A deleted product (G26), so tills holding the catalogue drop it on their next refresh."""
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='product_removals')
+    product_id = models.PositiveBigIntegerField()
+    removed_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    def __str__(self):
+        return f'Product {self.product_id} removed'
 
 class Order(models.Model):
     """

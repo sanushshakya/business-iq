@@ -162,6 +162,8 @@ class StockBatch(models.Model):
     # over its outputs (G22).
     unit_cost = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True,
                                     validators=[MinValueValidator(Decimal('0'))])
+    # Who it was received from (G24), for yield by supplier; breakdown outputs and transferred lots keep it.
+    supplier = models.ForeignKey(Supplier, on_delete=models.PROTECT, null=True, blank=True, related_name='batches')
 
     class Meta:
         constraints = [

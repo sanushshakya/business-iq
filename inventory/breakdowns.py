@@ -122,7 +122,7 @@ def _record(company, user, template, location, input_batch, lines, input_kg, inp
         if output.kind == YieldTemplateOutput.PRODUCT:
             line.output_batch = StockBatch.objects.create(
                 product=output.product, batch_number=breakdown.reference, location=location, quantity=0,
-                weight_kg=Decimal('0.000'), expiration_date=expiry,
+                weight_kg=Decimal('0.000'), expiration_date=expiry, supplier_id=batch.supplier_id,
                 unit_cost=None if cost is None else (cost / weight).quantize(COST_PER_KG, ROUND_HALF_UP))
             move(line.output_batch, pieces, 'inbound', counterpart=location, weight_kg=weight, breakdown=breakdown)
         else:

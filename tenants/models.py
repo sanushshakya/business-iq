@@ -1,6 +1,7 @@
 import secrets
 
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+from django.core.validators import RegexValidator
 from django.db import models
 
 from .roles import ROLE_CHOICES, TILL
@@ -29,6 +30,9 @@ class Company(models.Model):
         return self.name
 
 
+BRANCH_CODE = RegexValidator(r'^[A-Z0-9]{2,4}$', '2–4 capital letters or digits, e.g. HS.')
+
+
 class Branch(models.Model):
     """
     Model representing a branch of a company.
@@ -43,12 +47,23 @@ class Branch(models.Model):
     company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='branches', verbose_name='Company')
     name = models.CharField(max_length=255, verbose_name='Branch Name')
     address = models.TextField(verbose_name='Address')
+    # Starts its tills' offline receipt numbers (G27, e.g. HS-T02-QK-000417); blank: B<id> is used.
+    code = models.CharField(max_length=4, blank=True, default='', db_default='', validators=[BRANCH_CODE], verbose_name='Code',
+                            help_text='2–4 capital letters or digits, e.g. HS.')
     is_active = models.BooleanField(default=True, verbose_name='Is Active')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Created At')
 
     class Meta:
         verbose_name = 'Branch'
         verbose_name_plural = 'Branches'
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'code'], condition=~models.Q(code=''),
+                                    name='unique_branch_code_per_company'),
+        ]
+
+    def clean(self):
+        super().clean()
+        self.code = (self.code or '').strip().upper()
 
     def __str__(self):
         return f"{self.company.name} - {self.name}"

@@ -24,6 +24,20 @@ class BranchSerializer(TenantModelSerializer):
         fields = '__all__'
         read_only_fields = ['created_at']
 
+    def to_internal_value(self, data):
+        if isinstance(data, dict) and isinstance(data.get('code'), str):  # 'hs ' is HS
+            data = {**data, 'code': data['code'].strip().upper()}
+        return super().to_internal_value(data)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        code = attrs.get('code')
+        company_id = self._company_id_for(attrs)
+        if code and company_id and Branch.objects.filter(company_id=company_id, code=code).exclude(
+                pk=getattr(self.instance, 'pk', None)).exists():  # the constraint is conditional: check it here
+            raise serializers.ValidationError({'code': 'Another branch already has this code.'})
+        return attrs
+
 
 class TillSerializer(TenantModelSerializer):
     class Meta:

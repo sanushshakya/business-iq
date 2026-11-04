@@ -53,6 +53,7 @@ class CatalogueTests(SalesTestCase):
         self.assertEqual([r['prefix'] for r in body['barcode_rules']], ['21'])
         self.assertEqual([t['id'] for t in body['tills']], [self.till.pk])
         self.assertEqual([b['id'] for b in body['branches']], [self.till.branch_id])
+        self.assertIn('code', body['branches'][0])  # tills number offline sales with it (G27)
         self.assertTrue({r['code'] for r in body['vat_rates']} >= {'zero', 'standard'})
         self.assertEqual(body['removed'], [])
 

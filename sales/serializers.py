@@ -200,8 +200,8 @@ class CatalogueProductSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Product
-        fields = ['id', 'name', 'barcode', 'plu', 'price', 'price_per_kg', 'sold_by', 'is_catch_weight',
-                  'nominal_weight_kg', 'vat_code', 'stock_quantity', 'category']
+        fields = ['id', 'name', 'barcode', 'plu', 'commodity_code', 'price', 'price_per_kg', 'sold_by',
+                  'is_catch_weight', 'nominal_weight_kg', 'vat_code', 'stock_quantity', 'category']
         read_only_fields = fields
 
 

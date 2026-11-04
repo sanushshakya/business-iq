@@ -108,7 +108,6 @@ def close_session(*, session, user, counted_cash, note=''):
     return session
 
 
-@transaction.atomic
 def manual_weight_limit(company_id):
     """The most kg one typed weight may be (``manual_weight_max_kg``); a value that is not a number above 0 is 25."""
     limit = get_company_setting(company_id, MANUAL_WEIGHT_MAX_KEY, DEFAULT_MANUAL_WEIGHT_MAX, Decimal)
@@ -117,6 +116,7 @@ def manual_weight_limit(company_id):
     return limit
 
 
+@transaction.atomic
 def record_sale(*, session, cashier, payment_method, amount_tendered, lines, client_ref=None, loyalty_barcode=''):
     """
     ``lines`` is a list of ``(Product, quantity)`` or ``(Product, quantity, weight_kg)`` (products sold by weight:

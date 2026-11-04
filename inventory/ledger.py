@@ -20,7 +20,6 @@ what the record holds is booked to (or from) ADJUSTMENT; no batch goes below 0 p
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db.models import F
-from django.db.models.functions import Now
 from django.utils import timezone
 
 from .models import Location, Product, StockBatch, StockMovement
@@ -105,7 +104,7 @@ def move(batch, quantity, movement_type, *, counterpart, weight_kg=None, transfe
         raise LedgerError(f'Batch {batch.batch_number} holds {pieces} unit(s) and {kg} kg; that would go below 0.')
     StockBatch.objects.filter(pk=batch.pk).update(**changes)
     Product.objects.filter(pk=batch.product_id).update(  # updated_at: tills see stock change (G26 catalogue)
-        stock_quantity=F('stock_quantity') + sign * quantity, updated_at=Now())
+        stock_quantity=F('stock_quantity') + sign * quantity, updated_at=timezone.now())  # the app clock, like save()
     return StockMovement.objects.create(
         batch=batch, quantity=quantity, weight_kg=weight_kg, movement_type=movement_type,
         source_location=source, destination_location=destination, transfer=transfer, breakdown=breakdown,

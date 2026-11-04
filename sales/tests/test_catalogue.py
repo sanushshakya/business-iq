@@ -48,6 +48,7 @@ class CatalogueTests(SalesTestCase):
                          {'sold_by': 'weight', 'price_per_kg': '8.9900', 'plu': '123', 'vat_code': 'zero',
                           'price': '0.00'})
         self.assertNotIn('external_id', mince)
+        self.assertIn('commodity_code', mince)  # the till's search box also matches it
         self.assertEqual((body['user'], body['company']), (self.cashier.pk, self.company.pk))
         self.assertEqual([r['prefix'] for r in body['barcode_rules']], ['21'])
         self.assertEqual([t['id'] for t in body['tills']], [self.till.pk])
@@ -77,6 +78,13 @@ class CatalogueTests(SalesTestCase):
         body = self.get(since=cursor)
         self.assertEqual([(p['name'], p['stock_quantity']) for p in body['products']], [('Fake Rice', 8)])
 
+    def test_overlap_resends_changes_just_before_the_cursor(self):
+        cursor = self.get()['cursor']
+        since = timezone.datetime.fromisoformat(cursor)
+        Product.objects.filter(pk=self.rice.pk).update(updated_at=since - timedelta(seconds=30))  # still committing
+        Product.objects.filter(pk=self.mince.pk).update(updated_at=since - timedelta(seconds=90))  # already sent
+        self.assertEqual(self.names(self.get(since=cursor)), {'Fake Rice'})
+
     def test_deleted_product_is_removed(self):
         cursor = self.get()['cursor']
         pk = self.mince.pk
@@ -103,6 +111,6 @@ class CatalogueTests(SalesTestCase):
         operator = self.as_user(UserFactory(company=self.company, role=TILL))
         self.assertEqual(self.names(self.get(client=operator)), {'Fake Rice', 'Fake Mince'})
 
-    def test_user_without_company_is_400(self):
+    def test_user_without_company_is_403(self):
         response = self.as_user(UserFactory(company=None)).get(reverse('till-catalogue'))
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 403)

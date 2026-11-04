@@ -38,8 +38,9 @@ class ProductVersionTests(TestCase):
         batch = StockBatchFactory(product=self.product, quantity=0)
         Product.objects.filter(pk=self.product.pk).update(updated_at=self.long_ago)
         with transaction.atomic():
+            before = timezone.now()
             move(batch, 3, 'inbound', counterpart=virtual_location(self.company, Location.SUPPLIER))
-        self.assertGreater(self.version(), self.long_ago)
+        self.assertGreaterEqual(self.version(), before)  # the time of the move, not of the transaction's start
 
     def test_deleting_leaves_a_removal_marker(self):
         pk = self.product.pk

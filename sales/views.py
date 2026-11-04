@@ -3,11 +3,12 @@
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from common.tenancy import TenantScopedMixin
+from common.tenancy import HasCompany, TenantScopedMixin
 
 from .catalogue import catalogue, read_cursor
 from .models import Sale, TillSession
@@ -149,10 +150,10 @@ class CatalogueView(APIView):
     what changed.
     """
 
+    permission_classes = [IsAuthenticated, HasCompany]
+
     @extend_schema(parameters=[OpenApiParameter('since', str, description='The cursor of the last refresh.')],
                    responses=CatalogueSerializer)
     def get(self, request):
-        if request.user.company is None:
-            raise ValidationError({'detail': ['Your account is not linked to a company.']})
         since = read_cursor(request.query_params.get('since'))
         return Response(CatalogueSerializer(catalogue(request.user, since)).data)

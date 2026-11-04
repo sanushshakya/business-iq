@@ -2,7 +2,7 @@ from django.contrib import admin
 
 from common.tenancy import TenantAdminMixin
 
-from .models import Sale, SaleAllocation, SaleItem, TillSession
+from .models import Sale, SaleAllocation, SaleException, SaleItem, TillSession
 
 
 class ReadOnlyAdmin(TenantAdminMixin, admin.ModelAdmin):
@@ -26,8 +26,9 @@ class TillSessionAdmin(ReadOnlyAdmin):
 
 @admin.register(Sale)
 class SaleAdmin(ReadOnlyAdmin):
-    list_display = ('id', 'session', 'cashier', 'payment_method', 'total', 'status', 'created_at')
+    list_display = ('id', 'session', 'cashier', 'payment_method', 'total', 'status', 'created_at', 'offline_number')
     list_filter = ['status', 'payment_method']
+    search_fields = ['offline_number']
     list_select_related = ('session__till', 'cashier')
 
 
@@ -43,3 +44,13 @@ class SaleItemAdmin(ReadOnlyAdmin):
 @admin.register(SaleAllocation)
 class SaleAllocationAdmin(ReadOnlyAdmin):
     list_display = ('item', 'batch', 'quantity')
+
+
+@admin.register(SaleException)
+class SaleExceptionAdmin(ReadOnlyAdmin):
+    """Offline sales that didn't match the server when they were synced (G28); the review screen is G29."""
+
+    list_display = ('sale', 'kind', 'product', 'expected', 'charged', 'quantity', 'weight_kg', 'created_at',
+                    'resolved_at')
+    list_filter = ['kind']
+    list_select_related = ('sale', 'product')

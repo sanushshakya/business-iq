@@ -193,6 +193,27 @@ def take_weighed(product, *, quantity, weight_kg, locations, destination, today=
     return allocations
 
 
+def take_short(product, *, quantity, weight_kg, location, destination, reference, expiry):
+    """
+    Sell what the shop no longer had (an offline sale synced later, G28): book ``quantity`` units (pieces for
+    catch-weight) and ``weight_kg`` (weighed products) in from ADJUSTMENT to the ``SHORT-<reference>`` batch at
+    ``location`` (created empty if missing, expiring ``expiry``), then out to ``destination``. The batch ends where it
+    started, so nothing goes below 0 and both movements balance. Inside ``transaction.atomic()``. Returns
+    ``(batch, pieces, kg)`` like ``take_weighed``'s entries (``kg`` None for each products).
+    """
+    weighed = product.is_weighed
+    batch, _ = StockBatch.objects.get_or_create(
+        product=product, batch_number=f'SHORT-{reference}', location=location,
+        defaults={'quantity': 0, 'weight_kg': Decimal('0.000'), 'expiration_date': expiry},
+    )
+    batch = StockBatch.objects.select_for_update(of=('self',)).select_related('location').get(pk=batch.pk)
+    kg = weight_kg if weighed else None
+    adjustment = virtual_location(product.company_id, Location.ADJUSTMENT)
+    move(batch, quantity, 'inbound', counterpart=adjustment, weight_kg=kg)
+    move(batch, quantity, 'outbound', counterpart=destination, weight_kg=kg)
+    return batch, quantity, kg
+
+
 def _kg(value):
     return value.quantize(KG, rounding=ROUND_HALF_UP)
 

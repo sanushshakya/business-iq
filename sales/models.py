@@ -70,6 +70,11 @@ class Sale(models.Model):
     client_ref = models.UUIDField(null=True, blank=True)
     # The customer's storefront loyalty card, if scanned; the points are awarded (and reversed on a void) in m18.
     loyalty_barcode = models.CharField(max_length=32, blank=True)
+    # A sale made while the till was offline (G27/G28): its offline receipt number and when the till made it.
+    offline_number = models.CharField(max_length=32, blank=True, db_index=True)
+    sold_at = models.DateTimeField(null=True, blank=True)
+    # The standalone card terminal's auth code (offline card sales now; G36 adds it online).
+    card_auth_code = models.CharField(max_length=12, blank=True)
 
     class Meta:
         ordering = ['-created_at', '-id']
@@ -77,6 +82,10 @@ class Sale(models.Model):
             models.UniqueConstraint(
                 fields=['session', 'client_ref'], condition=Q(client_ref__isnull=False),
                 name='one_sale_per_client_ref',
+            ),
+            models.UniqueConstraint(
+                fields=['session', 'offline_number'], condition=~Q(offline_number=''),
+                name='one_sale_per_offline_number',
             ),
         ]
 
@@ -135,3 +144,37 @@ class SaleAllocation(models.Model):
 
     def __str__(self):
         return f'{self.quantity} from {self.batch}'
+
+
+class SaleException(models.Model):
+    """
+    Something about an offline sale that didn't match the server when it was synced (G28, ADR 0001). The sale stands
+    (it was paid); a manager reviews these (G29).
+    """
+
+    PRICE, STOCK, LABEL, WEIGHT_LIMIT, SESSION_CLOSED, CASHIER = (
+        'price', 'stock', 'label', 'weight_limit', 'session_closed', 'cashier')
+    KINDS = [(PRICE, 'Price differs'), (STOCK, 'Not enough stock'), (LABEL, 'Label not readable'),
+             (WEIGHT_LIMIT, 'Typed weight over the limit'), (SESSION_CLOSED, 'Session already closed'),
+             (CASHIER, 'Cashier not found')]
+
+    sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name='exceptions')
+    item = models.ForeignKey(SaleItem, null=True, blank=True, on_delete=models.CASCADE, related_name='exceptions')
+    kind = models.CharField(max_length=20, choices=KINDS)
+    product = models.ForeignKey('inventory.Product', null=True, blank=True, on_delete=models.PROTECT, related_name='+')
+    expected = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)  # the server's price
+    charged = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)  # what the till charged
+    quantity = models.IntegerField(null=True, blank=True)  # units or pieces short
+    weight_kg = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)  # kg short
+    detail = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name='+'
+    )
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+
+    def __str__(self):
+        return f'{self.sale.receipt_number}: {self.kind}'

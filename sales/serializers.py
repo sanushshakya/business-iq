@@ -284,3 +284,26 @@ class OfflineSaleResultSerializer(serializers.Serializer):
 
 class OfflineSaleResultsSerializer(serializers.Serializer):
     results = OfflineSaleResultSerializer(many=True)
+
+
+class SaleExceptionSerializer(serializers.ModelSerializer):
+    """Something an offline sale did that didn't match the server when it was synced (G28), for a manager (G29)."""
+
+    kind_label = serializers.CharField(source='get_kind_display', read_only=True)
+    receipt_number = serializers.CharField(source='sale.receipt_number', read_only=True)
+    offline_number = serializers.CharField(source='sale.offline_number', read_only=True)
+    sold_at = serializers.DateTimeField(source='sale.sold_at', read_only=True)
+    session = serializers.IntegerField(source='sale.session_id', read_only=True)
+    product_name = serializers.CharField(source='product.name', read_only=True, default='')
+    resolved_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SaleException
+        fields = ['id', 'kind', 'kind_label', 'sale', 'receipt_number', 'offline_number', 'sold_at', 'session',
+                  'item', 'product', 'product_name', 'expected', 'charged', 'quantity', 'weight_kg', 'detail',
+                  'created_at', 'resolved_at', 'resolved_by', 'resolved_by_name']
+        read_only_fields = fields
+
+    def get_resolved_by_name(self, exception) -> str:
+        user = exception.resolved_by
+        return (user.name or user.email) if user else ''

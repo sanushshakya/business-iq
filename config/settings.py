@@ -143,6 +143,8 @@ SPECTACULAR_SETTINGS = {
         "VatCodeEnum": "vat.models.VAT_CODES",
         "BreakdownStatusEnum": "inventory.models.Breakdown.STATUSES",
         "WriteOffStatusEnum": "inventory.models.WriteOff.STATUSES",
+        "SaleExceptionKindEnum": "sales.models.SaleException.KINDS",
+        "YieldOutputKindEnum": "inventory.models.YieldTemplateOutput.KINDS",
     },
 }
 

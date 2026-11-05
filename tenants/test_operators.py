@@ -286,6 +286,7 @@ class RoleAccessTests(OperatorTestCase):
         '/inventory/suppliers/': {SUPPLIER, STOCK},  # G24: the Receive form picks a supplier
         '/inventory/reports/yield/': {STOCK},
         '/sales/catalogue/': {TILL},
+        '/sales/exceptions/': set(),  # G29: staff only
         '/inventory/reports/waste/': {STOCK},
         '/logistics/suppliers/': {SUPPLIER},
         '/logistics/alternative-suppliers/': {SUPPLIER},

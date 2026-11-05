@@ -1,21 +1,23 @@
 # sales/views.py
 
-from drf_spectacular.utils import OpenApiParameter, extend_schema
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.tenancy import HasCompany, TenantScopedMixin
+from django.utils import timezone
+from tenants.views import IsCompanyStaff
 
 from .catalogue import catalogue, read_cursor
 from .offline_sync import sync_offline_sales
-from .models import Sale, TillSession
+from .models import Sale, SaleException, TillSession
 from .serializers import (
     CatalogueSerializer, CloseSessionSerializer, CreateSaleSerializer, OfflineSaleBatchSerializer,
-    OfflineSaleResultsSerializer, OpenSessionSerializer, SaleSerializer,
+    OfflineSaleResultsSerializer, SaleExceptionSerializer, OpenSessionSerializer, SaleSerializer,
     TillSessionSerializer, VoidSaleSerializer,
 )
 from .services import close_session, open_session, record_sale, void_sale
@@ -177,3 +179,40 @@ class OfflineSalesView(APIView):
         serializer.is_valid(raise_exception=True)
         results = sync_offline_sales(request.user, serializer.validated_data['sales'])
         return Response(OfflineSaleResultsSerializer({'results': results}).data)
+
+
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter('resolved', bool, description='true: handled ones; default: the open ones.'),
+    OpenApiParameter('kind', str, enum=[kind for kind, _ in SaleException.KINDS]),
+]))
+class SaleExceptionViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin,
+                           viewsets.GenericViewSet):
+    """
+    Differences offline sales showed when they were synced (G28): price, stock, labels, a closed session...
+    The sales stand (they were paid); a manager looks at each and marks it handled. Staff only.
+    """
+
+    queryset = SaleException.objects.select_related('sale', 'product', 'resolved_by')
+    serializer_class = SaleExceptionSerializer
+    permission_classes = [IsCompanyStaff]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self.action != 'list':
+            return queryset
+        params = self.request.query_params
+        queryset = queryset.filter(resolved_at__isnull=params.get('resolved') != 'true')
+        if params.get('kind'):
+            queryset = queryset.filter(kind=params['kind'])
+        return queryset
+
+    @extend_schema(request=None, responses=SaleExceptionSerializer)
+    @action(detail=True, methods=['post'])
+    def resolve(self, request, pk=None):
+        """Mark it handled (who and when are recorded)."""
+        exception = self.get_object()
+        if exception.resolved_at is not None:
+            raise ValidationError({'detail': ['This one is already handled.']})
+        exception.resolved_at, exception.resolved_by = timezone.now(), request.user
+        exception.save(update_fields=['resolved_at', 'resolved_by'])
+        return Response(self.get_serializer(exception).data)

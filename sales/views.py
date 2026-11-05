@@ -211,8 +211,10 @@ class SaleExceptionViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retr
     def resolve(self, request, pk=None):
         """Mark it handled (who and when are recorded)."""
         exception = self.get_object()
-        if exception.resolved_at is not None:
+        # Only an open one changes: two managers pressing at once can't overwrite each other.
+        changed = SaleException.objects.filter(pk=exception.pk, resolved_at__isnull=True).update(
+            resolved_at=timezone.now(), resolved_by=request.user)
+        if not changed:
             raise ValidationError({'detail': ['This one is already handled.']})
-        exception.resolved_at, exception.resolved_by = timezone.now(), request.user
-        exception.save(update_fields=['resolved_at', 'resolved_by'])
+        exception.refresh_from_db()
         return Response(self.get_serializer(exception).data)

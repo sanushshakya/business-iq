@@ -124,6 +124,10 @@ class ReplayTests(OfflineSyncTestCase):
         first, second = Sale.objects.get(pk=good['sale']), Sale.objects.get(pk=odd['sale'])
         self.assertEqual((first.card_auth_code, first.card_last4), ('A1B2C3', '4242'))
         self.assertEqual((second.card_auth_code, second.card_last4), ('', ''))  # a paid sale is never refused (G28)
+        [long] = self.send(self.offline([self.rice_line()], method='card', card_auth_code='A1B2C3',
+                                        card_last4='4242424242424242'))
+        self.assertEqual(long['status'], 'recorded')  # too long is dropped, never stored, never a refusal
+        self.assertEqual(Sale.objects.get(pk=long['sale']).card_last4, '')
 
 
 class ExceptionTests(OfflineSyncTestCase):

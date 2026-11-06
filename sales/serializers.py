@@ -314,7 +314,9 @@ class OfflineSaleSerializer(serializers.Serializer):
     amount_tendered = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal('0'), required=False,
                                                allow_null=True)
     card_auth_code = serializers.CharField(max_length=12, required=False, allow_blank=True, default='')
-    card_last4 = serializers.CharField(max_length=4, required=False, allow_blank=True, default='')
+    # Longer than 4 on purpose: whatever the till kept is checked in offline_sync, where a value that isn't 4 digits
+    # is dropped (never stored), because a paid sale is never refused (G28).
+    card_last4 = serializers.CharField(max_length=32, required=False, allow_blank=True, default='')
     loyalty_barcode = serializers.CharField(max_length=32, required=False, allow_blank=True, default='')
     confirmed_at = serializers.DateTimeField(required=False, allow_null=True)
     items = OfflineSaleLineSerializer(many=True, allow_empty=False, max_length=200)

@@ -78,6 +78,7 @@ INSTALLED_APPS = [
     "demand_calendar",
     "sales",
     "vat",
+    "wholesale",
 ]
 
 MIDDLEWARE = [
@@ -145,6 +146,7 @@ SPECTACULAR_SETTINGS = {
         "WriteOffStatusEnum": "inventory.models.WriteOff.STATUSES",
         "SaleExceptionKindEnum": "sales.models.SaleException.KINDS",
         "YieldOutputKindEnum": "inventory.models.YieldTemplateOutput.KINDS",
+        "TradeCustomerStatusEnum": "wholesale.models.TradeCustomer.STATUSES",
     },
 }
 

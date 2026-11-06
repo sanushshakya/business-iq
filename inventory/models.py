@@ -74,6 +74,12 @@ class Product(models.Model):
         max_digits=10, decimal_places=3, null=True, blank=True, help_text='A typical piece (catch-weight).'
     )
     price_per_kg = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    # The trade (B2B) base price ex VAT, per unit or per kg for weighed products (G39): used when no price list
+    # prices the product. Commercial: staff only, never on till or storefront payloads.
+    wholesale_price = models.DecimalField(
+        max_digits=12, decimal_places=4, null=True, blank=True, validators=[MinValueValidator(Decimal('0'))],
+        help_text='Trade price ex VAT (per kg when sold by weight), when no price list applies.',
+    )
     # The item number a scale prints on its labels (G18): digits, stored without leading zeros, unique per company.
     plu = models.CharField(max_length=8, blank=True, default='', help_text='Scale PLU (item number on labels).')
     # The till catalogue's version (G26): moves on every save and every stock movement, so tills fetch only changes.

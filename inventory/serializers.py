@@ -39,6 +39,13 @@ class ProductSerializer(TenantModelSerializer):
             'nominal_weight_kg': {'min_value': Decimal('0.001')},
         }
 
+    def get_fields(self):
+        fields = super().get_fields()
+        user = getattr(self.context.get('request'), 'user', None)
+        if not (user and (user.is_staff or user.is_superuser)):
+            fields.pop('wholesale_price')  # trade prices are commercial (G39): staff only, not tills or members
+        return fields
+
     def validate_plu(self, plu):
         if not plu:
             return ''

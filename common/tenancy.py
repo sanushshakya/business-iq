@@ -74,6 +74,9 @@ TENANT_LOOKUPS = {
     'wholesale.TradeCustomer': 'company',
     'wholesale.TradeCustomerAddress': 'customer__company',
     'wholesale.TradeCustomerContact': 'customer__company',
+    'wholesale.CustomerGroup': 'company',
+    'wholesale.PriceList': 'company',
+    'wholesale.PriceListEntry': 'price_list__company',
 }
 
 

@@ -2,15 +2,21 @@ from django.db import transaction
 from rest_framework import serializers
 
 from common.tenancy import TenantModelSerializer
+from inventory.models import Product
 
 from .models import (
     WEEKDAYS,
+    CustomerGroup,
+    PriceList,
+    PriceListEntry,
     TradeCustomer,
     TradeCustomerAddress,
     TradeCustomerContact,
     account_code_problem,
+    dates_problem,
     delivery_days_problem,
     in_week_order,
+    min_quantity_problem,
     normalise_account_code,
     normalise_postcode,
     normalise_vat_number,
@@ -64,7 +70,7 @@ class TradeCustomerSerializer(TenantModelSerializer):
         model = TradeCustomer
         fields = [
             'id', 'account_code', 'legal_name', 'trading_name', 'vat_number', 'status', 'delivery_days', 'note',
-            'addresses', 'contacts', 'created_at', 'updated_at',
+            'group', 'addresses', 'contacts', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
@@ -135,3 +141,141 @@ class TradeCustomerSerializer(TenantModelSerializer):
             customer = super().update(instance, validated_data)
             self._replace(customer, addresses, contacts)
         return customer
+
+
+class CustomerGroupSerializer(TenantModelSerializer):
+    """Trade customers priced alike (G39). Deleting a group leaves its customers with no group."""
+
+    class Meta:
+        model = CustomerGroup
+        fields = ['id', 'name', 'note']
+        read_only_fields = ['id']
+
+
+class PriceListEntrySerializer(TenantModelSerializer):
+    """A price break: from ``min_quantity`` (units, or kg for weighed products) the whole line costs ``unit_price``
+    ex VAT (per kg for weighed products)."""
+
+    product_name = serializers.CharField(source='product.name', read_only=True)
+
+    class Meta:
+        model = PriceListEntry
+        fields = ['id', 'product', 'product_name', 'min_quantity', 'unit_price']
+        read_only_fields = ['id']
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        problem = min_quantity_problem(attrs['product'], attrs.get('min_quantity', PriceListEntry._meta.get_field(
+            'min_quantity').get_default()))
+        if problem:
+            raise serializers.ValidationError({'min_quantity': problem})
+        return attrs
+
+
+class PriceListSerializer(TenantModelSerializer):
+    """
+    A price list (G39), ex VAT, for the customers and groups it is assigned to (none: a draft). Sending
+    ``entries`` replaces them all; leaving it out keeps them. Valid on UK dates, inclusive; blank is open-ended.
+    """
+
+    entries = PriceListEntrySerializer(many=True, required=False)
+
+    class Meta:
+        model = PriceList
+        fields = ['id', 'name', 'priority', 'is_active', 'valid_from', 'valid_to', 'customers', 'groups', 'note',
+                  'entries', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_entries(self, value):
+        seen = set()
+        for entry in value:
+            key = (entry['product'].pk, entry.get('min_quantity', PriceListEntry._meta.get_field(
+                'min_quantity').get_default()))
+            if key in seen:
+                raise serializers.ValidationError('Each product has one price per minimum quantity.')
+            seen.add(key)
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        def value(name):
+            return attrs[name] if name in attrs else getattr(self.instance, name, None)
+
+        problem = dates_problem(value('valid_from'), value('valid_to'))
+        if problem:
+            raise serializers.ValidationError({'valid_to': problem})
+        return attrs
+
+    @staticmethod
+    def _replace(price_list, entries):
+        if entries is not None:
+            price_list.entries.all().delete()
+            PriceListEntry.objects.bulk_create(PriceListEntry(price_list=price_list, **e) for e in entries)
+
+    def create(self, validated_data):
+        entries = validated_data.pop('entries', [])
+        with transaction.atomic():
+            price_list = super().create(validated_data)
+            self._replace(price_list, entries)
+        return price_list
+
+    def update(self, instance, validated_data):
+        entries = validated_data.pop('entries', None)
+        with transaction.atomic():
+            price_list = super().update(instance, validated_data)
+            self._replace(price_list, entries)
+        return price_list
+
+
+MAX_RESOLVE_LINES = 500
+
+
+class _OwnCompanyPrimaryKey(serializers.PrimaryKeyRelatedField):
+    """Only the requesting user's company's rows, superusers included (another company's id "does not exist")."""
+
+    def get_queryset(self):
+        return super().get_queryset().filter(company_id=self.context['request'].user.company_id)
+
+
+class ResolveLineSerializer(serializers.Serializer):
+    product = _OwnCompanyPrimaryKey(queryset=Product.objects.all())
+    quantity = serializers.DecimalField(max_digits=12, decimal_places=3, help_text='Units, or kg when sold by weight.')
+
+    def validate(self, attrs):
+        problem = min_quantity_problem(attrs['product'], attrs['quantity'])
+        if problem:
+            raise serializers.ValidationError({'quantity': problem})
+        return attrs
+
+
+class ResolveRequestSerializer(serializers.Serializer):
+    customer = _OwnCompanyPrimaryKey(queryset=TradeCustomer.objects.all())
+    on = serializers.DateField(required=False, help_text='UK date; today when left out.')
+    lines = ResolveLineSerializer(many=True, allow_empty=False, max_length=MAX_RESOLVE_LINES)
+
+
+class ResolvedLineSerializer(serializers.Serializer):
+    """A priced line; or, with no trade price, just ``product``, ``quantity`` and ``error`` "no_price"."""
+
+    product = serializers.IntegerField()
+    quantity = serializers.DecimalField(max_digits=12, decimal_places=3)
+    unit_price = serializers.DecimalField(max_digits=12, decimal_places=4, required=False,
+                                          help_text='Ex VAT, per unit (per kg when sold by weight).')
+    source = serializers.ChoiceField(choices=['customer_list', 'group_list', 'base'], required=False)
+    price_list = serializers.IntegerField(allow_null=True, required=False)
+    price_list_name = serializers.CharField(allow_null=True, required=False)
+    min_quantity = serializers.DecimalField(max_digits=12, decimal_places=3, allow_null=True, required=False)
+    error = serializers.ChoiceField(choices=['no_price'], required=False)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if 'error' in instance:  # nothing priced it: only what was asked, and why
+            return {name: data[name] for name in ('product', 'quantity', 'error')}
+        return data
+
+
+class ResolveResponseSerializer(serializers.Serializer):
+    customer = serializers.IntegerField()
+    on = serializers.DateField()
+    lines = ResolvedLineSerializer(many=True)

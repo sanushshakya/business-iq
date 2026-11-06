@@ -6,9 +6,13 @@ from common.tenancy import TenantAdminMixin
 from inventory.admin import ViewOnlyAdmin
 
 from .models import (
+    CustomerGroup,
+    PriceList,
+    PriceListEntry,
     TradeCustomer,
     TradeCustomerAddress,
     TradeCustomerContact,
+    min_quantity_problem,
     normalise_account_code,
     normalise_postcode,
     normalise_vat_number,
@@ -109,3 +113,51 @@ class TradeCustomerAddressAdmin(TenantAdminMixin, ViewOnlyAdmin):
 @admin.register(TradeCustomerContact)
 class TradeCustomerContactAdmin(TenantAdminMixin, ViewOnlyAdmin):
     """Changed on the customer's page only (one primary per customer)."""
+
+
+@admin.register(CustomerGroup)
+class CustomerGroupAdmin(TenantAdminMixin, admin.ModelAdmin):
+    """Customer groups (G39). Deleting one leaves its customers with no group."""
+
+    list_display = ('name',)
+    search_fields = ('name',)
+
+
+class PriceListEntryForm(forms.ModelForm):
+    def clean(self):
+        cleaned = super().clean()
+        product, min_quantity = cleaned.get('product'), cleaned.get('min_quantity')
+        if product is not None and min_quantity is not None:
+            problem = min_quantity_problem(product, min_quantity)
+            if problem:
+                self.add_error('min_quantity', problem)
+        return cleaned
+
+
+class PriceListEntryInline(admin.TabularInline):
+    model = PriceListEntry
+    form = PriceListEntryForm
+    extra = 0
+    raw_id_fields = ('product',)  # catalogues are large
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        field = super().formfield_for_foreignkey(db_field, request, **kwargs)
+        if db_field.name == 'product' and request.user.company_id:
+            field.queryset = field.queryset.filter(company_id=request.user.company_id)
+        return field
+
+
+@admin.register(PriceList)
+class PriceListAdmin(TenantAdminMixin, admin.ModelAdmin):
+    """Price lists (G39), ex VAT. Highest priority wins where lists overlap, then the newest."""
+
+    list_display = ('name', 'priority', 'is_active', 'valid_from', 'valid_to')
+    list_filter = ('is_active',)
+    search_fields = ('name',)
+    filter_horizontal = ('customers', 'groups')
+    inlines = [PriceListEntryInline]
+
+
+@admin.register(PriceListEntry)
+class PriceListEntryAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """Changed on the price list's page only."""

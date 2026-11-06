@@ -15,14 +15,18 @@ earliest expiry first. ``transfer_batch`` and ``transfer_fefo`` move units betwe
 Products sold by weight also move kg (``weight_kg``): ``take_weighed`` takes kg FEFO for loose products and
 pieces FEFO (with their kg) for catch-weight ones. Recorded kg drifts from real kg, so a gap between what is sold and
 what the record holds is booked to (or from) ADJUSTMENT; no batch goes below 0 pieces or 0 kg.
+
+Reservations (G41, ``StockReservation``) hold stock at a batch for a trade order without moving it. The FEFO takes
+here use only a batch's free part (what it holds minus what is reserved); a ``move`` out of a batch that leaves it
+holding less than its reservations trims them, newest first, so reserved never exceeds held.
 """
 
 from decimal import ROUND_HALF_UP, Decimal
 
-from django.db.models import F
+from django.db.models import F, Sum
 from django.utils import timezone
 
-from .models import Location, Product, StockBatch, StockMovement
+from .models import Location, Product, StockBatch, StockMovement, StockReservation
 
 
 # What makes a location count online: web orders take from it and online stock counts it (one definition for both).
@@ -80,7 +84,7 @@ def move(batch, quantity, movement_type, *, counterpart, weight_kg=None, transfe
     Products sold by weight need ``weight_kg`` (kg moved, may be 0 for a count-only entry); each products never send it.
     """
     location = batch.location
-    product = Product.objects.filter(pk=batch.product_id).values('company_id', 'sold_by').first()
+    product = Product.objects.filter(pk=batch.product_id).values('company_id', 'sold_by', 'is_catch_weight').first()
     if location.company_id != product['company_id']:
         raise LedgerError("A batch's location must belong to its product's company.")
     if counterpart.company_id != location.company_id:
@@ -103,6 +107,9 @@ def move(batch, quantity, movement_type, *, counterpart, weight_kg=None, transfe
     if changes['quantity'] < 0 or changes.get('weight_kg', 0) < 0:
         raise LedgerError(f'Batch {batch.batch_number} holds {pieces} unit(s) and {kg} kg; that would go below 0.')
     StockBatch.objects.filter(pk=batch.pk).update(**changes)
+    if sign < 0:
+        loose = weighed and not product['is_catch_weight']
+        _trim_reservations(batch.pk, changes['weight_kg'] if loose else changes['quantity'], loose)
     Product.objects.filter(pk=batch.product_id).update(  # updated_at: tills see stock change (G26 catalogue)
         stock_quantity=F('stock_quantity') + sign * quantity, updated_at=timezone.now())  # the app clock, like save()
     return StockMovement.objects.create(
@@ -128,7 +135,7 @@ def take_fefo(product, quantity, *, locations, destination, today=None):
     for batch in _fefo_batches(product, locations, today):
         if remaining <= 0:
             break
-        take = min(batch.quantity, remaining)
+        take = min(batch.free, remaining)
         move(batch, take, 'outbound', counterpart=destination)
         allocations.append((batch, take))
         remaining -= take
@@ -156,7 +163,7 @@ def take_weighed(product, *, quantity, weight_kg, locations, destination, today=
         for index, batch in enumerate(batches):
             if remaining <= 0:
                 break
-            held = batch.weight_kg
+            held = batch.free  # reserved kg stays in the batch
             if index == len(batches) - 1 and held < remaining:
                 move(batch, 0, 'inbound', counterpart=adjustment, weight_kg=remaining - held)
                 held = remaining
@@ -167,15 +174,15 @@ def take_weighed(product, *, quantity, weight_kg, locations, destination, today=
         return allocations
 
     batches = list(_fefo_batches(product, locations, today))
-    available = sum(batch.quantity for batch in batches)
+    available = sum(batch.free for batch in batches)
     if available < quantity:
         raise LedgerError(f'Only {available} of {product} in date here.', available=available)
     allocations, pieces_left, kg_taken = [], quantity, Decimal('0')
     for batch in batches:
         if pieces_left <= 0:
             break
-        pieces = min(batch.quantity, pieces_left)
-        last_of_batch = pieces == batch.quantity
+        pieces = min(batch.free, pieces_left)
+        last_of_batch = pieces == batch.quantity  # the real count: never while pieces are reserved
         if weight_kg is None:
             kg = batch.weight_kg if last_of_batch else _kg(batch.weight_kg * pieces / batch.quantity)
         else:  # cumulative rounding: the shares sum to the line's kg exactly and are never negative
@@ -220,16 +227,50 @@ def _kg(value):
 
 def _fefo_batches(product, locations, today=None, by='quantity'):
     """
-    The product's in-date batches holding stock (``by``: pieces, or ``weight_kg`` for loose products) at
-    ``locations``, in FEFO order, locked (inside a transaction).
+    The product's in-date batches with free stock (``by``: pieces, or ``weight_kg`` for loose products) at
+    ``locations``, in FEFO order, locked (inside a transaction). Each has ``free``: what it holds minus what is
+    reserved (G41).
     """
     today = today or timezone.localdate()
-    return (
+    batches = list(
         StockBatch.objects.select_for_update(of=('self',))  # lock the batches, not the joined locations
         .select_related('location')
         .filter(product=product, location__in=locations, expiration_date__gte=today, **{f'{by}__gt': 0})
         .order_by('expiration_date', 'receive_date', 'pk')
     )
+    # Read after the locks are held (a new statement), so a reservation committed while we waited is seen.
+    reserved = reserved_by_batch([batch.pk for batch in batches], loose=by == 'weight_kg')
+    for batch in batches:
+        batch.free = getattr(batch, by) - reserved.get(batch.pk, 0)
+    return [batch for batch in batches if batch.free > 0]
+
+
+def reserved_by_batch(batch_ids, *, loose):
+    """``{batch id: reserved amount}`` (kg for loose products, else units) of the active reservations."""
+    if not batch_ids:
+        return {}
+    field = 'weight_kg' if loose else 'quantity'
+    return dict(
+        StockReservation.objects.filter(batch_id__in=batch_ids, released_at__isnull=True)
+        .values('batch_id').annotate(total=Sum(field)).values_list('batch_id', 'total')
+    )
+
+
+def _trim_reservations(batch_id, holding, loose):
+    """After stock left a (locked) batch: cut its active reservations, newest first, to what it now holds."""
+    field = 'weight_kg' if loose else 'quantity'
+    rows = list(StockReservation.objects.filter(batch_id=batch_id, released_at__isnull=True)
+                .order_by('-created_at', '-id'))
+    excess = sum((getattr(row, field) or 0) for row in rows) - holding
+    for row in rows:
+        if excess <= 0:
+            break
+        cut = min(getattr(row, field) or 0, excess)
+        setattr(row, field, getattr(row, field) - cut)
+        if not getattr(row, field):
+            row.released_at = timezone.now()
+        row.save(update_fields=[field, 'released_at'])
+        excess -= cut
 
 
 def transfer_batch(batch, quantity, to, *, transfer=None):
@@ -259,15 +300,15 @@ def transfer_fefo(product, quantity, *, source, to, transfer=None, today=None):
     each into the same lot at ``to``). Returns ``[(source batch, batch at to, taken), ...]``. If ``source`` has fewer
     in-date units, raises ``LedgerError`` (with ``available``) before moving anything. Inside ``transaction.atomic()``.
     """
-    batches = list(_fefo_batches(product, [source], today))
-    available = sum(batch.quantity for batch in batches)
+    batches = _fefo_batches(product, [source], today)
+    available = sum(batch.free for batch in batches)
     if available < quantity:
         raise LedgerError(f'Only {available} unit(s) of {product} available at {source.code}.', available=available)
     allocations, remaining = [], quantity
     for batch in batches:
         if remaining <= 0:
             break
-        take = min(batch.quantity, remaining)
+        take = min(batch.free, remaining)
         allocations.append((batch, transfer_batch(batch, take, to, transfer=transfer), take))
         remaining -= take
     return allocations

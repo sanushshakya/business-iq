@@ -4,8 +4,8 @@
 Online stock for the m18 storefront.
 
 A product linked to the storefront (``external_id`` set, company connected) is offered online with its in-date
-batch stock at active, online-sellable locations (the same ones web orders take from) minus ``online_buffer``
-("keep for shop"), never below zero. Any stock change marks the product's
+batch stock at active, online-sellable locations (the same ones web orders take from), less what is reserved for trade
+orders there (G41), minus ``online_buffer`` ("keep for shop"), never below zero. Any stock change marks the product's
 ``StockSyncState`` pending; ``sync.tasks.push_storefront_stock`` sends the pending ones every 15 s.
 """
 
@@ -16,7 +16,7 @@ from django.db.models import Sum
 from django.utils import timezone
 
 from inventory.ledger import ONLINE_LOCATION
-from inventory.models import Product, StockBatch
+from inventory.models import Product, StockBatch, StockReservation
 
 from .models import StockSyncState, StorefrontConnection
 
@@ -35,7 +35,20 @@ def online_available(products):
         .annotate(total=Sum('quantity'))
         .values_list('product', 'total')
     )
-    return {p.pk: max((totals.get(p.pk) or 0) - p.online_buffer, 0) for p in products}
+    # Stock reserved for trade orders (G41) stays in its batch until picked, but is not for sale online.
+    reserved = dict(
+        StockReservation.objects.filter(
+            batch__product__in=[p.pk for p in products], released_at__isnull=True, batch__quantity__gt=0,
+            batch__expiration_date__gte=today,
+            **{f'batch__location__{field}': value for field, value in ONLINE_LOCATION.items()},
+        )
+        .values('batch__product')
+        .annotate(total=Sum('quantity'))
+        .values_list('batch__product', 'total')
+    )
+    return {
+        p.pk: max((totals.get(p.pk) or 0) - (reserved.get(p.pk) or 0) - p.online_buffer, 0) for p in products
+    }
 
 
 def linked_products():

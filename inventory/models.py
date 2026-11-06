@@ -239,6 +239,30 @@ class StockMovement(models.Model):
     def __str__(self):
         return f"{self.batch.product.name} - {self.movement_type.capitalize()} - {self.quantity}"
 
+class StockReservation(models.Model):
+    """
+    Stock held at a batch for a trade order line (G41) until it is picked: not a movement, so the batch keeps it.
+    ``quantity`` is units (pieces for catch-weight; 0 for loose products) and ``weight_kg`` kg for loose products.
+    Other FEFO takes skip reserved stock; a take of this very batch that leaves it holding less than its
+    reservations trims them, newest first (``ledger.move``). Released and trimmed rows stay for the record.
+    """
+
+    batch = models.ForeignKey(StockBatch, on_delete=models.CASCADE, related_name='reservations')
+    order_line = models.ForeignKey('wholesale.SalesOrderLine', on_delete=models.CASCADE, related_name='reservations')
+    quantity = models.PositiveIntegerField(default=0)
+    weight_kg = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    released_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['batch', 'created_at', 'id']
+        indexes = [models.Index(fields=['batch', 'released_at'], name='reservation_batch_active')]
+
+    def __str__(self):
+        amount = self.quantity if self.weight_kg is None else f'{self.weight_kg} kg'
+        return f'{amount} of {self.batch} reserved'
+
+
 # Places outside the business, so every movement balances; one of each per company.
 VIRTUAL_LOCATION_TYPES = ('in_transit', 'supplier', 'customer', 'waste', 'adjustment')
 

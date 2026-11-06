@@ -6,7 +6,7 @@ from django.db import transaction
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 
-from inventory.models import Location, Product, StockBatch, StockMovement
+from inventory.models import Location, Product, StockBatch, StockMovement, StockReservation
 
 from .stock import mark_changed, mark_location_changed
 
@@ -39,3 +39,10 @@ def location_saved(sender, instance, created, raw=False, **kwargs):
     # Turning online_sellable or is_active on or off changes what is offered online for everything stocked there.
     if not created and not raw:
         mark_location_changed(instance.pk)
+
+
+@receiver(post_save, sender=StockReservation)
+def reservation_saved(sender, instance, raw=False, **kwargs):
+    # Reserving or releasing (G41) changes what can be offered online at an online-sellable warehouse.
+    if not raw:
+        mark_changed(instance.batch.product_id)

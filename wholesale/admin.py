@@ -5,7 +5,14 @@ from django.forms.models import BaseInlineFormSet
 from common.tenancy import TenantAdminMixin
 from inventory.admin import ViewOnlyAdmin
 
-from .models import TradeCustomer, TradeCustomerAddress, TradeCustomerContact, normalise_account_code
+from .models import (
+    TradeCustomer,
+    TradeCustomerAddress,
+    TradeCustomerContact,
+    normalise_account_code,
+    normalise_postcode,
+    normalise_vat_number,
+)
 
 
 class _OneFlagged(BaseInlineFormSet):
@@ -28,14 +35,32 @@ class ContactFormSet(_OneFlagged):
     flag, message = 'is_primary', 'Only one primary contact.'
 
 
+class OneFlaggedForm(forms.ModelForm):
+    """The models' only constraints are "one default address" / "one primary contact". Each form would check them
+    against the rows as saved, so moving the flag from A to B could never pass in one save; the formset checks them
+    across all rows instead, and the rows are saved in order (the old default first)."""
+
+    def validate_constraints(self):
+        pass
+
+
+class AddressForm(OneFlaggedForm):
+    postcode = forms.CharField(max_length=12)  # wider than stored: spaces go before the length counts
+
+    def clean_postcode(self):
+        return normalise_postcode(self.cleaned_data['postcode'])
+
+
 class AddressInline(admin.StackedInline):
     model = TradeCustomerAddress
+    form = AddressForm
     formset = AddressFormSet
     extra = 0
 
 
 class ContactInline(admin.TabularInline):
     model = TradeCustomerContact
+    form = OneFlaggedForm
     formset = ContactFormSet
     extra = 0
 
@@ -51,11 +76,19 @@ class TradeCustomerAdmin(TenantAdminMixin, admin.ModelAdmin):
 
     def get_form(self, request, obj=None, **kwargs):
         form = super().get_form(request, obj, **kwargs)
-        company_id = getattr(obj, 'company_id', None) or request.user.company_id
 
         class ScopedForm(form):
+            # Wider than stored: people type spaces, which go before the length counts.
+            vat_number = forms.CharField(max_length=24, required=False)
+
+            def clean_vat_number(self):
+                return normalise_vat_number(self.cleaned_data['vat_number'])
+
             def clean(self):
                 cleaned = super().clean()
+                # The company the row will belong to: chosen in the form (superusers), kept, or the user's own.
+                company = cleaned.get('company')
+                company_id = company.pk if company else (obj.company_id if obj else request.user.company_id)
                 code = normalise_account_code(cleaned.get('account_code'))  # as the model will store it
                 taken = TradeCustomer.objects.filter(company_id=company_id, account_code=code)
                 if code and taken.exclude(pk=self.instance.pk).exists():

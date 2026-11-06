@@ -46,11 +46,17 @@ class TradeCustomerViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retr
         self._save_once(super().perform_create, serializer)
 
     def perform_update(self, serializer):
-        self._save_once(super().perform_update, serializer)
+        self._save_once(super().perform_update, serializer, lock=serializer.instance.pk)
 
-    def _save_once(self, save, serializer):
-        try:  # two saves of one code at once: the loser hits the unique constraint
+    def _save_once(self, save, serializer, lock=None):
+        try:
             with transaction.atomic():
+                if lock is not None:  # two edits replacing addresses at once take turns
+                    TradeCustomer.objects.select_for_update().filter(pk=lock).first()
                 save(serializer)
-        except IntegrityError:
-            raise ValidationError({'account_code': 'Another customer already has this account code.'}) from None
+        except IntegrityError as error:
+            # Two saves of one code at once: the loser hits the unique constraint (named on Postgres; SQLite
+            # names the columns instead).
+            if any(mark in str(error) for mark in ('unique_trade_customer_code', 'tradecustomer.account_code')):
+                raise ValidationError({'account_code': 'Another customer already has this account code.'}) from None
+            raise ValidationError({'detail': 'This customer was changed at the same time; try again.'}) from None

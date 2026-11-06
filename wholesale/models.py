@@ -147,4 +147,5 @@ class TradeCustomerContact(models.Model):
         ]
 
     def __str__(self):
-        return self.name
+        # Not the person's name: this string is kept in the admin's change history.
+        return self.role or f'Contact #{self.pk}'

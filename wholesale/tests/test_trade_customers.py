@@ -228,3 +228,108 @@ class TradeCustomerAdminTests(TestCase):
         self.assertEqual(response.status_code, 200)  # the form again, with the error
         self.assertContains(response, 'Another customer already has this account code.')
         self.assertEqual(TradeCustomer.objects.filter(account_code='MINE-1').count(), 1)
+
+
+class ReviewFollowUpTests(TestCase):
+    """The G38 review's cases: one-save default switch, lengths before normalising, scoping, races, superusers."""
+
+    def setUp(self):
+        self.company = CompanyFactory()
+        self.staff_user = UserFactory(company=self.company, is_staff=True)
+        self.staff_user.user_permissions.set(Permission.objects.filter(content_type__app_label='wholesale'))
+        self.client.force_login(self.staff_user)
+        self.customer = TradeCustomer.objects.create(company=self.company, account_code='MINE-1',
+                                                     legal_name='E2E Fake Mine Ltd')
+        self.a = TradeCustomerAddress.objects.create(customer=self.customer, label='A', line1='1 Fake St', town='T',
+                                                     postcode='TT1 1TT', is_default=True)
+        self.b = TradeCustomerAddress.objects.create(customer=self.customer, label='B', line1='2 Fake St', town='T',
+                                                     postcode='TT2 2TT')
+        self.api = APIClient()
+        self.api.force_authenticate(self.staff_user)
+
+    def change_post(self, a_default, b_default, **extra):
+        data = {
+            'account_code': 'MINE-1', 'legal_name': 'E2E Fake Mine Ltd', 'trading_name': '', 'vat_number': '',
+            'status': 'active', 'delivery_days': '[]', 'note': '',
+            'addresses-TOTAL_FORMS': '2', 'addresses-INITIAL_FORMS': '2',
+            'contacts-TOTAL_FORMS': '0', 'contacts-INITIAL_FORMS': '0',
+        }
+        for i, (address, default) in enumerate(((self.a, a_default), (self.b, b_default))):
+            data.update({f'addresses-{i}-id': address.pk, f'addresses-{i}-customer': self.customer.pk,
+                         f'addresses-{i}-label': address.label, f'addresses-{i}-line1': address.line1,
+                         f'addresses-{i}-line2': '', f'addresses-{i}-town': address.town,
+                         f'addresses-{i}-postcode': address.postcode, f'addresses-{i}-instructions': ''})
+            if default:
+                data[f'addresses-{i}-is_default'] = 'on'
+        data.update(extra)
+        return self.client.post(reverse('admin:wholesale_tradecustomer_change', args=[self.customer.pk]), data)
+
+    def test_admin_moves_the_default_in_one_save(self):
+        response = self.change_post(False, True)
+        self.assertEqual(response.status_code, 302, response.content[:3000])
+        self.assertEqual(TradeCustomerAddress.objects.get(is_default=True), self.b)
+
+    def test_admin_refuses_two_defaults(self):
+        response = self.change_post(True, True)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Only one default address.')
+
+    def test_admin_normalises_before_length_checks(self):
+        response = self.change_post(True, False, vat_number='GB 123 456 789 012', **{'addresses-1-postcode': 'tt2  2tt'})
+        self.assertEqual(response.status_code, 302, response.content[:3000])
+        self.customer.refresh_from_db()
+        self.b.refresh_from_db()
+        self.assertEqual((self.customer.vat_number, self.b.postcode), ('GB123456789012', 'TT2 2TT'))
+
+    def test_admin_address_and_contact_pages_are_scoped(self):
+        theirs = TradeCustomer.objects.create(company=CompanyFactory(), account_code='T-1', legal_name='E2E Fake T')
+        address = TradeCustomerAddress.objects.create(customer=theirs, label='X', line1='9 Fake St', town='T',
+                                                      postcode='TT9 9TT')
+        contact = TradeCustomerContact.objects.create(customer=theirs, name='E2E Fake Person')
+        for url in (reverse('admin:wholesale_tradecustomeraddress_change', args=[address.pk]),
+                    reverse('admin:wholesale_tradecustomercontact_change', args=[contact.pk])):
+            self.assertIn(self.client.get(url).status_code, (302, 404), url)
+
+    def test_superuser_duplicate_check_uses_the_chosen_company(self):
+        superuser = UserFactory(company=self.company, is_staff=True, is_superuser=True)
+        self.client.force_login(superuser)
+        other = CompanyFactory()
+        response = self.client.post(reverse('admin:wholesale_tradecustomer_add'), {
+            'company': other.pk, 'account_code': 'MINE-1', 'legal_name': 'E2E Fake Other Ltd', 'trading_name': '',
+            'vat_number': '', 'status': 'active', 'delivery_days': '[]', 'note': '',
+            'addresses-TOTAL_FORMS': '0', 'addresses-INITIAL_FORMS': '0',
+            'contacts-TOTAL_FORMS': '0', 'contacts-INITIAL_FORMS': '0',
+        })
+        self.assertEqual(response.status_code, 302, response.content[:3000])
+        self.assertTrue(TradeCustomer.objects.filter(company=other, account_code='MINE-1').exists())
+
+    def test_api_postcode_with_extra_spaces(self):
+        detail = reverse('tradecustomer-detail', args=[self.customer.pk])
+        response = self.api.patch(detail, {'addresses': [{'label': 'C', 'line1': '3 Fake St', 'town': 'T',
+                                                          'postcode': 'sw1a  1aa'}]}, format='json')
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()['addresses'][0]['postcode'], 'SW1A 1AA')
+
+    def test_patch_with_two_defaults_changes_nothing(self):
+        detail = reverse('tradecustomer-detail', args=[self.customer.pk])
+        two = [{'label': n, 'line1': '1 Fake St', 'town': 'T', 'postcode': 'TT1 1TT', 'is_default': True}
+               for n in 'XY']
+        self.assertEqual(self.api.patch(detail, {'addresses': two}, format='json').status_code, 400)
+        self.assertEqual(sorted(self.customer.addresses.values_list('label', flat=True)), ['A', 'B'])
+
+    def test_a_lost_race_on_the_code_is_a_400_on_the_code(self):
+        from unittest import mock
+
+        from common.tenancy import TenantModelSerializer
+
+        with mock.patch.object(TenantModelSerializer, '_check_company_unique_constraints', lambda *a, **k: None):
+            response = self.api.post(reverse('tradecustomer-list'), {'account_code': 'mine-1',
+                                                                      'legal_name': 'E2E Fake Race Ltd'}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(list(response.json()), ['account_code'])
+
+    def test_contact_names_stay_out_of_admin_history(self):
+        contact = TradeCustomerContact.objects.create(customer=self.customer, name='E2E Fake Person', role='Accounts')
+        self.assertEqual(str(contact), 'Accounts')
+        nameless = TradeCustomerContact.objects.create(customer=self.customer, name='E2E Fake Other')
+        self.assertEqual(str(nameless), f'Contact #{nameless.pk}')

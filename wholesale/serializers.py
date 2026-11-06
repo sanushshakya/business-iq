@@ -4,6 +4,7 @@ from rest_framework import serializers
 from common.tenancy import TenantModelSerializer
 
 from .models import (
+    WEEKDAYS,
     TradeCustomer,
     TradeCustomerAddress,
     TradeCustomerContact,
@@ -23,6 +24,12 @@ class TradeCustomerAddressSerializer(serializers.ModelSerializer):
         model = TradeCustomerAddress
         fields = ['id', 'label', 'line1', 'line2', 'town', 'postcode', 'instructions', 'is_default']
         read_only_fields = ['id']
+
+    def to_internal_value(self, data):
+        if hasattr(data, 'copy') and isinstance(data.get('postcode'), str):  # before the length check
+            data = data.copy()
+            data['postcode'] = normalise_postcode(data['postcode'])
+        return super().to_internal_value(data)
 
     def validate_postcode(self, value):
         value = normalise_postcode(value)
@@ -47,7 +54,8 @@ class TradeCustomerSerializer(TenantModelSerializer):
     """
 
     delivery_days = serializers.ListField(
-        child=serializers.CharField(), required=False, help_text='Days it takes deliveries: mon, tue, ... sun.'
+        child=serializers.ChoiceField(choices=WEEKDAYS), required=False,
+        help_text='Days it takes deliveries: mon, tue, ... sun, each once.',
     )
     addresses = TradeCustomerAddressSerializer(many=True, required=False)
     contacts = TradeCustomerContactSerializer(many=True, required=False)

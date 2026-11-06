@@ -117,6 +117,15 @@ class ReplayTests(OfflineSyncTestCase):
                          ('A1B2C3', '9900012345', D('2.50')))
 
 
+    def test_card_last4_kept_when_four_digits_and_never_refused(self):
+        [good] = self.send(self.offline([self.rice_line()], method='card', card_auth_code='a1b2c3', card_last4='4242'))
+        [odd] = self.send(self.offline([self.rice_line()], method='card', card_auth_code='', card_last4='42x2'))
+        self.assertEqual((good['status'], odd['status']), ('recorded', 'recorded'))
+        first, second = Sale.objects.get(pk=good['sale']), Sale.objects.get(pk=odd['sale'])
+        self.assertEqual((first.card_auth_code, first.card_last4), ('A1B2C3', '4242'))
+        self.assertEqual((second.card_auth_code, second.card_last4), ('', ''))  # a paid sale is never refused (G28)
+
+
 class ExceptionTests(OfflineSyncTestCase):
     def test_shortfall_creates_exception(self):
         [result] = self.send(self.offline([self.rice_line(8)]))  # 5 in stock
@@ -301,7 +310,7 @@ class ReviewFixTests(OfflineSyncTestCase):
 
     def test_void_of_an_online_sale_with_loyalty_reverses_its_points(self):
         ref = str(uuid.uuid4())
-        body = {'session': self.session, 'payment_method': 'card', 'client_ref': ref, 'loyalty_barcode': '9900012345',
+        body = {'session': self.session, 'payment_method': 'card', 'card_auth_code': 'AUTH01', 'client_ref': ref, 'loyalty_barcode': '9900012345',
                 'items': [{'product': self.rice.pk, 'quantity': 1}]}
         with self.captureOnCommitCallbacks(execute=True):
             self.assertEqual(self.client.post(reverse('sale-list'), body, format='json').status_code, 201)

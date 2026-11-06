@@ -37,7 +37,7 @@ class LabelSaleTests(SalesTestCase):
         self.cake = self.stocked(price='2.00', batches=((5, 30),), name='Fake Cake', plu='77')
 
     def charge(self, items, client_ref=None):
-        body = {'session': self.session, 'payment_method': 'card', 'items': items}
+        body = {'session': self.session, 'payment_method': 'card', 'card_auth_code': 'AUTH01', 'items': items}
         if client_ref:
             body['client_ref'] = client_ref
         return self.client.post(reverse('sale-list'), body, format='json')
@@ -207,12 +207,12 @@ class SuperuserLabelSaleTests(SalesTestCase):
         admin = UserFactory(company=None, is_superuser=True, is_staff=True)
         session = self.open()['id']
         api = self.as_user(admin)
-        response = api.post(reverse('sale-list'), {'session': session, 'payment_method': 'card',
+        response = api.post(reverse('sale-list'), {'session': session, 'payment_method': 'card', 'card_auth_code': 'AUTH01',
                                                    'items': [{'barcode': scale_code('20', '00078', '00150')}]},
                             format='json')
         self.assertEqual(response.status_code, 400)
         self.assertIn('PLU 78', str(response.json()['items']))
-        response = api.post(reverse('sale-list'), {'session': session, 'payment_method': 'card',
+        response = api.post(reverse('sale-list'), {'session': session, 'payment_method': 'card', 'card_auth_code': 'AUTH01',
                                                    'items': [{'barcode': scale_code('20', '00077', '00150')}]},
                             format='json')
         self.assertEqual(response.status_code, 201, response.content)

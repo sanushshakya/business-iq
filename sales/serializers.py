@@ -1,5 +1,6 @@
 # sales/serializers.py
 
+import re
 from decimal import Decimal
 
 from drf_spectacular.utils import extend_schema_field
@@ -39,6 +40,13 @@ class SessionSummarySerializer(serializers.Serializer):
     voided_total = serializers.DecimalField(max_digits=12, decimal_places=2)
     expected_cash = serializers.DecimalField(max_digits=12, decimal_places=2)
     variance = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
+    expected_card = serializers.DecimalField(
+        max_digits=12, decimal_places=2, help_text='Completed card sales (frozen when the session closes).'
+    )
+    card_variance = serializers.DecimalField(
+        max_digits=12, decimal_places=2, allow_null=True,
+        help_text="The card terminal's end-of-day total minus expected_card; null until that total is entered.",
+    )
     vat_by_rate = VatRateTotalSerializer(many=True, help_text='Completed sales only.')
     vat_not_recorded_total = serializers.DecimalField(
         max_digits=12, decimal_places=2, help_text='Gross of lines sold before VAT was recorded.'
@@ -58,7 +66,8 @@ class TillSessionSerializer(serializers.ModelSerializer):
         model = TillSession
         fields = [
             'id', 'till', 'till_number', 'branch_name', 'opened_by_email', 'opened_by_name', 'opened_at', 'opening_float',
-            'closed_by_email', 'closed_at', 'expected_cash', 'counted_cash', 'note', 'is_open', 'summary',
+            'closed_by_email', 'closed_at', 'expected_cash', 'counted_cash', 'expected_card', 'counted_card', 'note',
+            'is_open', 'summary',
         ]
         read_only_fields = fields
 
@@ -79,6 +88,10 @@ class OpenSessionSerializer(serializers.Serializer):
 
 class CloseSessionSerializer(serializers.Serializer):
     counted_cash = serializers.DecimalField(**MONEY)
+    counted_card = serializers.DecimalField(
+        required=False, allow_null=True, default=None, **MONEY,
+        help_text="The card terminal's end-of-day total (G36); leave it out when there is none to enter.",
+    )
     note = serializers.CharField(required=False, allow_blank=True, max_length=255, default='')
 
 
@@ -109,7 +122,8 @@ class SaleSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'receipt_number', 'session', 'till', 'till_number', 'branch_name', 'cashier_email', 'cashier_name',
             'payment_method', 'total', 'amount_tendered', 'change_due', 'status', 'created_at',
-            'voided_at', 'void_reason', 'client_ref', 'items', 'vat_summary', 'vat_recorded',
+            'voided_at', 'void_reason', 'client_ref', 'card_auth_code', 'card_last4', 'items', 'vat_summary',
+            'vat_recorded',
         ]
         read_only_fields = fields
 
@@ -158,6 +172,35 @@ class SaleLineSerializer(serializers.Serializer):
         return {**line, 'quantity': quantity or 1}
 
 
+AUTH_CODE = re.compile(r'[A-Z0-9]{4,12}', re.ASCII)
+LAST4 = re.compile(r'[0-9]{4}', re.ASCII)
+
+
+def card_details(payment_method, auth_code, last4):
+    """Check a sale's card terminal details (G36): ``{card_auth_code, card_last4}``, the code in capitals.
+
+    A card sale needs the terminal's auth code; the last 4 digits are optional and only ever 4 digits. A cash sale
+    carries neither. (Offline sales are checked more gently in ``offline_sync``: a paid sale is never refused, G28.)
+    """
+    auth_code, last4 = auth_code.strip().upper(), last4.strip()
+    if payment_method != Sale.CARD:
+        errors = {key: 'Only for card sales.' for key, value in (('card_auth_code', auth_code), ('card_last4', last4))
+                  if value}
+        if errors:
+            raise serializers.ValidationError(errors)
+        return {'card_auth_code': '', 'card_last4': ''}
+    errors = {}
+    if not auth_code:
+        errors['card_auth_code'] = "A card sale needs the card terminal's auth code from its slip."
+    elif not AUTH_CODE.fullmatch(auth_code):
+        errors['card_auth_code'] = "The terminal's auth code is 4-12 letters or digits."
+    if last4 and not LAST4.fullmatch(last4):
+        errors['card_last4'] = "The card's last 4 digits, or nothing."
+    if errors:
+        raise serializers.ValidationError(errors)
+    return {'card_auth_code': auth_code, 'card_last4': last4}
+
+
 class CreateSaleSerializer(serializers.Serializer):
     session = serializers.PrimaryKeyRelatedField(queryset=TillSession.objects.select_related('till__branch'))
     payment_method = serializers.ChoiceField(choices=Sale.PAYMENT_METHODS)
@@ -165,6 +208,13 @@ class CreateSaleSerializer(serializers.Serializer):
     items = SaleLineSerializer(many=True, allow_empty=False, max_length=200)
     client_ref = serializers.UUIDField(required=False, allow_null=True, default=None)
     loyalty_barcode = serializers.CharField(required=False, allow_blank=True, max_length=32, default='')
+    card_auth_code = serializers.CharField(
+        required=False, allow_blank=True, max_length=12, default='',
+        help_text="Card sales: the standalone terminal's auth code from its slip (4-12 letters or digits).",
+    )
+    card_last4 = serializers.CharField(
+        required=False, allow_blank=True, max_length=4, default='', help_text="Card sales, optional: the card's last 4 digits."
+    )
 
     def validate_session(self, session):
         user = self.context['request'].user
@@ -173,6 +223,7 @@ class CreateSaleSerializer(serializers.Serializer):
         return session
 
     def validate(self, attrs):
+        attrs.update(card_details(attrs['payment_method'], attrs['card_auth_code'], attrs['card_last4']))
         # Products must belong to the till's company (this also guards superusers, who are not scoped).
         company = attrs['session'].till.branch.company
         problems, today = [], uk_date()
@@ -263,6 +314,7 @@ class OfflineSaleSerializer(serializers.Serializer):
     amount_tendered = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal('0'), required=False,
                                                allow_null=True)
     card_auth_code = serializers.CharField(max_length=12, required=False, allow_blank=True, default='')
+    card_last4 = serializers.CharField(max_length=4, required=False, allow_blank=True, default='')
     loyalty_barcode = serializers.CharField(max_length=32, required=False, allow_blank=True, default='')
     confirmed_at = serializers.DateTimeField(required=False, allow_null=True)
     items = OfflineSaleLineSerializer(many=True, allow_empty=False, max_length=200)

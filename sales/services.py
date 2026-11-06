@@ -67,6 +67,9 @@ def session_summary(session):
     if expected is None:
         expected = session.opening_float + cash_total
     variance = None if session.counted_cash is None else session.counted_cash - expected
+    # The card terminal (G36): what it should have taken (frozen at close) against its own end-of-day total.
+    expected_card = card_total if session.expected_card is None else session.expected_card
+    card_variance = None if session.counted_card is None else session.counted_card - expected_card
     return {
         'sales_count': completed.count(),
         'sales_total': cash_total + card_total,
@@ -76,6 +79,8 @@ def session_summary(session):
         'voided_total': total(voided),
         'expected_cash': expected,
         'variance': variance,
+        'expected_card': expected_card,
+        'card_variance': card_variance,
         'vat_by_rate': vat_by_rate(SaleItem.objects.filter(sale__in=completed)),
         'vat_not_recorded_total': SaleItem.objects.filter(sale__in=completed, vat_rate__isnull=True)
         .aggregate(t=Sum('line_total'))['t'] or Decimal('0.00'),
@@ -92,7 +97,9 @@ def open_session(*, till, user, opening_float):
 
 
 @transaction.atomic
-def close_session(*, session, user, counted_cash, note=''):
+def close_session(*, session, user, counted_cash, note='', counted_card=None):
+    """Cash up: freeze what the drawer and the card terminal should hold, and record what was counted (the terminal's
+    end-of-day card total is optional: ``None`` means it was not entered, so there is no card variance)."""
     session = TillSession.objects.select_for_update().get(pk=session.pk)
     if not session.is_open:
         raise serializers.ValidationError({'detail': 'This session is already closed.'})
@@ -101,6 +108,11 @@ def close_session(*, session, user, counted_cash, note=''):
         or Decimal('0.00')
     )
     session.counted_cash = counted_cash
+    session.expected_card = (
+        session.sales.filter(status=Sale.COMPLETED, payment_method=Sale.CARD).aggregate(t=Sum('total'))['t']
+        or Decimal('0.00')
+    )
+    session.counted_card = counted_card
     session.closed_by = user
     session.closed_at = timezone.now()
     session.note = note
@@ -117,7 +129,8 @@ def manual_weight_limit(company_id):
 
 
 @transaction.atomic
-def record_sale(*, session, cashier, payment_method, amount_tendered, lines, client_ref=None, loyalty_barcode=''):
+def record_sale(*, session, cashier, payment_method, amount_tendered, lines, client_ref=None, loyalty_barcode='',
+                card_auth_code='', card_last4=''):
     """
     ``lines`` is a list of ``(Product, quantity)`` or ``(Product, quantity, weight_kg)`` (products sold by weight:
     one line per weighing, priced ``weight_kg × price_per_kg``). Prices come from the product, never from the client.
@@ -227,7 +240,7 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
     sale = Sale.objects.create(
         session=session, cashier=cashier, payment_method=payment_method,
         total=total, amount_tendered=amount_tendered, change_due=change, client_ref=client_ref,
-        loyalty_barcode=loyalty_barcode,
+        loyalty_barcode=loyalty_barcode, card_auth_code=card_auth_code, card_last4=card_last4,
     )
     for line in plan:
         product, quantity, weight = line.product, line.quantity, line.weight

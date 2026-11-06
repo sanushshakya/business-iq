@@ -33,7 +33,7 @@ class SaleTransactionTests(TransactionTestCase):
         self.session = self.api.post(reverse('tillsession-list'), {'till': till.pk, 'opening_float': '10.00'}).json()['id']
 
     def sell(self):
-        return self.api.post(reverse('sale-list'), {'session': self.session, 'payment_method': 'card',
+        return self.api.post(reverse('sale-list'), {'session': self.session, 'payment_method': 'card', 'card_auth_code': 'AUTH01',
                                                     'items': [{'product': self.rice.pk, 'quantity': 2}]}, format='json')
 
     def stock(self):

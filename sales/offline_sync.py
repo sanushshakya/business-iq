@@ -35,6 +35,7 @@ from vat.services import UK, NoVatRate, rate_for, split_inclusive
 
 from .labels import read_label
 from .models import Sale, SaleAllocation, SaleException, SaleItem, TillSession
+from .serializers import LAST4
 from .services import (
     DEFAULT_LABEL_TOLERANCE, LABEL_TOLERANCE_KEY, _loyalty_reference, manual_weight_limit, reverse_sale,
 )
@@ -195,11 +196,18 @@ def record_offline_sale(user, data):
     if cash and tendered < total:
         exceptions.append((None, SaleException.TENDER, {'charged': total, 'expected': tendered,
                                                         'detail': f'Cash tendered {tendered} is below {total}.'}))
+    # Card details as the till kept them (never a reason to refuse a paid sale): the code in capitals, a last 4 only
+    # when it is 4 digits.
+    last4 = data.get('card_last4', '').strip()
+    card = {
+        'card_auth_code': data.get('card_auth_code', '').strip().upper() if not cash else '',
+        'card_last4': last4 if not cash and LAST4.fullmatch(last4) else '',
+    }
     sale = Sale.objects.create(
         session=session, cashier=cashier, payment_method=data['payment_method'], total=total,
         amount_tendered=tendered, change_due=max(tendered - total, Decimal('0.00')) if cash else Decimal('0.00'),
         client_ref=data['client_ref'], loyalty_barcode=data.get('loyalty_barcode', ''),
-        offline_number=data.get('offline_number', ''), sold_at=sold_at, card_auth_code=data.get('card_auth_code', ''),
+        offline_number=data.get('offline_number', ''), sold_at=sold_at, **card,
     )
     if not session.is_open:
         exceptions.append((None, SaleException.SESSION_CLOSED,

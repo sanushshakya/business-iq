@@ -41,7 +41,7 @@ class LoyaltyTestCase(SalesTestCase):
 
     def sell_with_card(self, session_id, product, card=CARD, client_ref=None):
         body = {
-            'session': session_id, 'payment_method': 'card',
+            'session': session_id, 'payment_method': 'card', 'card_auth_code': 'AUTH01',
             'items': [{'product': product.pk, 'quantity': 2}],
             'loyalty_barcode': card, 'client_ref': client_ref,
         }

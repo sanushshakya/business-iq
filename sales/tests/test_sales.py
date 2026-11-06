@@ -50,12 +50,14 @@ class SalesTestCase(TestCase):
         self.assertEqual(response.status_code, 201, response.content)
         return response.json()
 
-    def sell(self, session_id, items, method='cash', tendered=None, client=None, client_ref=None):
+    def sell(self, session_id, items, method='cash', tendered=None, client=None, client_ref=None, auth='AUTH01'):
         body = {
             'session': session_id,
             'payment_method': method,
             'items': [{'product': p.pk, 'quantity': q} for p, q in items],
         }
+        if method == 'card' and auth is not None:  # a card sale carries the terminal's auth code (G36)
+            body['card_auth_code'] = auth
         if tendered is not None:
             body['amount_tendered'] = tendered
         if client_ref is not None:
@@ -250,7 +252,7 @@ class SaleTests(SalesTestCase):
         product = self.stocked(price='3.00')
         response = self.client.post(
             reverse('sale-list'),
-            {'session': self.session['id'], 'payment_method': 'card',
+            {'session': self.session['id'], 'payment_method': 'card', 'card_auth_code': 'AUTH01',
              'items': [{'product': product.pk, 'quantity': 1, 'unit_price': '0.01'}]},
             format='json',
         )

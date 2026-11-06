@@ -29,7 +29,7 @@ class ManualWeightTests(SalesTestCase):
         self.session = self.open()['id']
 
     def charge(self, items):
-        body = {'session': self.session, 'payment_method': 'card', 'items': items}
+        body = {'session': self.session, 'payment_method': 'card', 'card_auth_code': 'AUTH01', 'items': items}
         return self.client.post(reverse('sale-list'), body, format='json')
 
     def test_typed_weight_is_marked_manual(self):

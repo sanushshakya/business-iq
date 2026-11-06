@@ -125,7 +125,7 @@ class SaleViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveModel
         sale, created = record_sale(
             session=data['session'], cashier=request.user, payment_method=data['payment_method'],
             amount_tendered=data.get('amount_tendered'), client_ref=data['client_ref'],
-            loyalty_barcode=data['loyalty_barcode'],
+            loyalty_barcode=data['loyalty_barcode'], card_auth_code=data['card_auth_code'], card_last4=data['card_last4'],
             lines=[(line['product'], line['quantity'], line.get('weight_kg'), line.get('label'))
                    for line in data['items']],
         )

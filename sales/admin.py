@@ -20,7 +20,8 @@ class ReadOnlyAdmin(TenantAdminMixin, admin.ModelAdmin):
 
 @admin.register(TillSession)
 class TillSessionAdmin(ReadOnlyAdmin):
-    list_display = ('id', 'till', 'opened_by', 'opened_at', 'closed_at', 'expected_cash', 'counted_cash')
+    list_display = ('id', 'till', 'opened_by', 'opened_at', 'closed_at', 'expected_cash', 'counted_cash', 'expected_card',
+                    'counted_card')
     list_select_related = ('till__branch', 'opened_by')
 
 

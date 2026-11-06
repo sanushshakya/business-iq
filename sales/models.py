@@ -26,6 +26,10 @@ class TillSession(models.Model):
     # Set when the session is closed, so the figures stay as they were at cash-up.
     expected_cash = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     counted_cash = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    # The standalone card terminal (G36): card sales at close, and the terminal's own end-of-day total (null when it
+    # was not entered). Their difference is the card variance, kept next to the cash one.
+    expected_card = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    counted_card = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     note = models.CharField(max_length=255, blank=True)
 
     class Meta:
@@ -73,8 +77,10 @@ class Sale(models.Model):
     # A sale made while the till was offline (G27/G28): its offline receipt number and when the till made it.
     offline_number = models.CharField(max_length=32, blank=True, db_index=True)
     sold_at = models.DateTimeField(null=True, blank=True)
-    # The standalone card terminal's auth code (offline card sales now; G36 adds it online).
+    # The standalone card terminal's auth code, from its slip (G27 offline, G36 online), and optionally the card's last
+    # 4 digits. Never more of the card number than that.
     card_auth_code = models.CharField(max_length=12, blank=True)
+    card_last4 = models.CharField(max_length=4, blank=True)
 
     class Meta:
         ordering = ['-created_at', '-id']

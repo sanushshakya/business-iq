@@ -33,6 +33,8 @@ class WeighedSaleTests(SalesTestCase):
             body['client_ref'] = client_ref
         if tendered:
             body['amount_tendered'] = tendered
+        if method == 'card':
+            body['card_auth_code'] = 'AUTH01'  # the terminal's slip (G36)
         return self.client.post(reverse('sale-list'), body, format='json')
 
     def kg(self, product):

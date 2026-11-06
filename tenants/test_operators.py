@@ -233,7 +233,7 @@ class TillRoleAccessTests(OperatorTestCase):
         self.assertEqual(session.json()['opened_by_name'], 'Amy')
         sale = self.client.post(
             reverse('sale-list'),
-            {'session': session.json()['id'], 'payment_method': 'card', 'items': [{'product': product.pk, 'quantity': 2}]},
+            {'session': session.json()['id'], 'payment_method': 'card', 'card_auth_code': 'AUTH01', 'items': [{'product': product.pk, 'quantity': 2}]},
             format='json',
         )
         self.assertEqual(sale.status_code, 201, sale.content)
@@ -254,7 +254,7 @@ class TillRoleAccessTests(OperatorTestCase):
         theirs = self.admin_client.post(reverse('tillsession-list'), {'till': till_b.pk}).json()
         their_sale = self.admin_client.post(
             reverse('sale-list'),
-            {'session': theirs['id'], 'payment_method': 'card', 'items': [{'product': product.pk, 'quantity': 1}]},
+            {'session': theirs['id'], 'payment_method': 'card', 'card_auth_code': 'AUTH01', 'items': [{'product': product.pk, 'quantity': 1}]},
             format='json',
         ).json()
 

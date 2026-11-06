@@ -177,7 +177,7 @@ class BreakdownApiTests(BreakdownTestCase):
         self.assertLess(made.expiration_date, older.expiration_date)
         till = Till.objects.create(branch=self.branch, number=1)
         session = TillSession.objects.create(till=till, opened_by=self.user, opening_float=D('0.00'))
-        response = self.api.post(reverse('sale-list'), {'session': session.pk, 'payment_method': 'card', 'items': [
+        response = self.api.post(reverse('sale-list'), {'session': session.pk, 'payment_method': 'card', 'card_auth_code': 'AUTH01', 'items': [
             {'product': self.mince.pk, 'weight_kg': '1.000'}]}, format='json')
         self.assertEqual(response.status_code, 201, response.content)
         allocation = SaleAllocation.objects.get()

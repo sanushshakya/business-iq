@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.db import transaction
 from rest_framework import serializers
 
@@ -9,6 +11,8 @@ from .models import (
     CustomerGroup,
     PriceList,
     PriceListEntry,
+    SalesOrder,
+    SalesOrderLine,
     TradeCustomer,
     TradeCustomerAddress,
     TradeCustomerContact,
@@ -303,3 +307,151 @@ class ResolveResponseSerializer(serializers.Serializer):
     customer = serializers.IntegerField()
     on = serializers.DateField()
     lines = ResolvedLineSerializer(many=True)
+
+
+ORDER_SNAPSHOT_FIELDS = ['unit_price', 'price_source', 'price_list', 'price_list_name', 'min_quantity', 'vat_code',
+                         'vat_rate', 'estimated_net', 'estimated_vat']
+
+
+class SalesOrderLineSerializer(TenantModelSerializer):
+    """
+    A product on an order: ``quantity`` units for each products and pieces for catch-weight ones, or ``weight_kg``
+    for loose weighed products. The price fields are filled when the order is confirmed (ex VAT, per unit or per
+    kg); for catch-weight, ``weight_kg`` is then the estimate (pieces x nominal weight).
+    """
+
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    quantity = serializers.IntegerField(min_value=1, required=False, allow_null=True)
+    weight_kg = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=Decimal('0.001'),
+                                         required=False, allow_null=True)
+
+    class Meta:
+        model = SalesOrderLine
+        fields = ['id', 'product', 'product_name', 'quantity', 'weight_kg', 'note', *ORDER_SNAPSHOT_FIELDS]
+        read_only_fields = ['id', *ORDER_SNAPSHOT_FIELDS]
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        product, quantity, weight = attrs['product'], attrs.get('quantity'), attrs.get('weight_kg')
+        if product.is_weighed and not product.is_catch_weight:
+            if weight is None:
+                raise serializers.ValidationError({'weight_kg': 'Sold loose by weight: give the kg.'})
+            if quantity is not None:
+                raise serializers.ValidationError({'quantity': 'Sold loose by weight: kg only.'})
+        else:
+            if quantity is None:
+                raise serializers.ValidationError({'quantity': 'Give the number of pieces.' if product.is_weighed
+                                                   else 'Give the number of units.'})
+            if weight is not None:
+                raise serializers.ValidationError({'weight_kg': 'Ordered by count; the kg is worked out later.'})
+        return attrs
+
+
+class SalesOrderSerializer(TenantModelSerializer):
+    """
+    A trade sales order (G40). On create, ``address`` picks one of the customer's addresses (the default when left
+    out); it is copied onto the order. Only a draft can be changed; sending ``lines`` replaces them all, and sending
+    ``address`` copies it again. Prices and estimated totals are fixed when the order is confirmed.
+    """
+
+    number_display = serializers.CharField(read_only=True)
+    customer_code = serializers.CharField(source='customer.account_code', read_only=True)
+    customer_name = serializers.SerializerMethodField()
+    off_delivery_day = serializers.BooleanField(read_only=True,
+                                                help_text="Delivered on a day the customer doesn't take deliveries.")
+    address = serializers.PrimaryKeyRelatedField(queryset=TradeCustomerAddress.objects.all(), write_only=True,
+                                                 required=False, help_text="One of the customer's addresses.")
+    lines = SalesOrderLineSerializer(many=True, allow_empty=False)
+
+    class Meta:
+        model = SalesOrder
+        fields = [
+            'id', 'number', 'number_display', 'customer', 'customer_code', 'customer_name', 'delivery_date',
+            'off_delivery_day', 'customer_ref', 'note', 'status', 'address', 'delivery_label', 'line1', 'line2',
+            'town', 'postcode', 'instructions', 'lines', 'estimated_net', 'estimated_vat', 'estimated_gross',
+            'created_by', 'confirmed_by', 'confirmed_at', 'cancelled_at', 'cancel_reason', 'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'number', 'status', 'delivery_label', 'line1', 'line2', 'town', 'postcode', 'instructions',
+            'estimated_net', 'estimated_vat', 'estimated_gross', 'created_by', 'confirmed_by', 'confirmed_at',
+            'cancelled_at', 'cancel_reason', 'created_at', 'updated_at',
+        ]
+
+    def get_fields(self):
+        fields = super().get_fields()
+        if self.instance is not None:
+            fields['customer'].read_only = True  # its address and prices belong to it
+            fields['lines'].required = False
+        return fields
+
+    def get_customer_name(self, order) -> str:
+        return order.customer.trading_name or order.customer.legal_name
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        company_id = self._company_id_for(attrs)
+        customer = attrs.get('customer') or getattr(self.instance, 'customer', None)
+        # Superusers' choices are not scoped: still, an order only links rows of its own company.
+        if customer.company_id != company_id:
+            raise serializers.ValidationError({'customer': 'This customer belongs to another company.'})
+        if self.instance is None and customer.status == TradeCustomer.CLOSED:
+            raise serializers.ValidationError({'customer': "A closed customer can't get new orders."})
+        address = attrs.get('address')
+        if address is not None and address.customer_id != customer.pk:
+            raise serializers.ValidationError({'address': "Not one of this customer's addresses."})
+        if address is None and self.instance is None:
+            address = customer.addresses.filter(is_default=True).first()
+            if address is None:
+                raise serializers.ValidationError({'address': 'The customer has no default address; choose one.'})
+            attrs['address'] = address
+        lines = attrs.get('lines', [])
+        if any(line['product'].company_id != company_id for line in lines):
+            raise serializers.ValidationError({'lines': "Another company's products can't be ordered."})
+        products = [line['product'].pk for line in lines]
+        if len(set(products)) != len(products):
+            raise serializers.ValidationError({'lines': 'Each product once per order.'})
+        return attrs
+
+    @staticmethod
+    def _copy_address(order, address):
+        order.delivery_label, order.line1, order.line2 = address.label, address.line1, address.line2
+        order.town, order.postcode, order.instructions = address.town, address.postcode, address.instructions
+
+    @staticmethod
+    def _replace_lines(order, lines):
+        order.lines.all().delete()
+        SalesOrderLine.objects.bulk_create(SalesOrderLine(order=order, **line) for line in lines)
+
+    def create(self, validated_data):
+        from .orders import next_order_number
+
+        lines = validated_data.pop('lines')
+        address = validated_data.pop('address')
+        request = self.context['request']
+        with transaction.atomic():
+            order = SalesOrder(**validated_data, company_id=self._company_id_for(validated_data),
+                               created_by=request.user)
+            order.number = next_order_number(order.company)
+            self._copy_address(order, address)
+            order.save()
+            self._replace_lines(order, lines)
+        return order
+
+    def update(self, instance, validated_data):
+        lines = validated_data.pop('lines', None)
+        address = validated_data.pop('address', None)
+        with transaction.atomic():
+            status = SalesOrder.objects.select_for_update().values_list('status', flat=True).get(pk=instance.pk)
+            if status != SalesOrder.DRAFT:
+                raise serializers.ValidationError({'detail': 'Only a draft order can be changed.'})
+            if address is not None:
+                self._copy_address(instance, address)
+            order = super().update(instance, validated_data)
+            if lines is not None:
+                self._replace_lines(order, lines)
+        return order
+
+
+class CancelOrderSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=255, help_text='Why the order is cancelled.')

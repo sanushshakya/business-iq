@@ -77,6 +77,8 @@ TENANT_LOOKUPS = {
     'wholesale.CustomerGroup': 'company',
     'wholesale.PriceList': 'company',
     'wholesale.PriceListEntry': 'price_list__company',
+    'wholesale.SalesOrder': 'company',
+    'wholesale.SalesOrderLine': 'order__company',
 }
 
 

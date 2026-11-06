@@ -10,10 +10,13 @@ tests.
 import re
 from decimal import Decimal
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import F, Q
+
+from vat.models import VAT_CODES
 
 WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
 ACCOUNT_CODE = re.compile(r'[A-Z0-9][A-Z0-9-]{0,19}', re.ASCII)
@@ -261,3 +264,94 @@ class PriceListEntry(models.Model):
             problem = min_quantity_problem(self.product, self.min_quantity)
             if problem:
                 raise ValidationError({'min_quantity': problem})
+
+
+class SalesOrder(models.Model):
+    """
+    A trade customer's order (G40), entered by staff. Lines are priced when the order is confirmed (from the price
+    lists valid on the delivery date) and never re-priced; the delivery address is copied, since the customer's
+    addresses are recreated when edited. Status moves only through ``wholesale.orders``.
+    """
+
+    DRAFT, CONFIRMED, PICKING, PICKED = 'draft', 'confirmed', 'picking', 'picked'
+    DISPATCHED, DELIVERED, INVOICED, CANCELLED = 'dispatched', 'delivered', 'invoiced', 'cancelled'
+    STATUSES = [(DRAFT, 'Draft'), (CONFIRMED, 'Confirmed'), (PICKING, 'Picking'), (PICKED, 'Picked'),
+                (DISPATCHED, 'Dispatched'), (DELIVERED, 'Delivered'), (INVOICED, 'Invoiced'),
+                (CANCELLED, 'Cancelled')]
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='sales_orders')
+    number = models.PositiveIntegerField()  # per company: 1, 2, 3...
+    customer = models.ForeignKey(TradeCustomer, on_delete=models.PROTECT, related_name='orders')
+    delivery_date = models.DateField()
+    customer_ref = models.CharField(max_length=40, blank=True, help_text="The customer's own order number.")
+    note = models.TextField(blank=True)
+    status = models.CharField(max_length=12, choices=STATUSES, default=DRAFT)
+    # The delivery address as it was chosen (a copy).
+    delivery_label = models.CharField(max_length=60, blank=True)
+    line1 = models.CharField(max_length=120)
+    line2 = models.CharField(max_length=120, blank=True)
+    town = models.CharField(max_length=80)
+    postcode = models.CharField(max_length=8)
+    instructions = models.CharField(max_length=255, blank=True)
+    # Set at confirmation, ex VAT / VAT / with VAT; estimates where weighed lines are billed on actual weight (G43).
+    estimated_net = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    estimated_vat = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    estimated_gross = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                   related_name='+')
+    confirmed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                     related_name='+')
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                     related_name='+')
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancel_reason = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-number']
+        constraints = [models.UniqueConstraint(fields=['company', 'number'], name='unique_sales_order_number')]
+
+    def __str__(self):
+        return self.number_display
+
+    @property
+    def number_display(self):
+        return f'SO-{self.number:06d}'
+
+    @property
+    def off_delivery_day(self):
+        """Delivered on a day the customer doesn't take deliveries (allowed, but worth a look)."""
+        days = self.customer.delivery_days
+        return bool(days) and WEEKDAYS[self.delivery_date.weekday()] not in days
+
+
+class SalesOrderLine(models.Model):
+    """
+    A product on an order: ``quantity`` units (each) or pieces (catch-weight), or ``weight_kg`` (loose). For
+    catch-weight, ``weight_kg`` is the estimate (pieces x nominal) filled at confirmation. The price fields are a
+    snapshot taken at confirmation, ex VAT; the net and VAT are rounded half up to the penny.
+    """
+
+    order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='lines')
+    product = models.ForeignKey('inventory.Product', on_delete=models.PROTECT, related_name='sales_order_lines')
+    quantity = models.PositiveIntegerField(null=True, blank=True)
+    weight_kg = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
+    note = models.CharField(max_length=255, blank=True)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    price_source = models.CharField(max_length=20, blank=True)
+    price_list = models.ForeignKey(PriceList, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    price_list_name = models.CharField(max_length=100, blank=True)
+    min_quantity = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
+    vat_code = models.CharField(max_length=10, choices=VAT_CODES, blank=True)
+    vat_rate = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    estimated_net = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    estimated_vat = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+
+    class Meta:
+        ordering = ['order', 'id']
+        constraints = [models.UniqueConstraint(fields=['order', 'product'], name='one_line_per_product_per_order')]
+
+    def __str__(self):
+        return f'{self.product} x {self.weight_kg if self.quantity is None else self.quantity}'

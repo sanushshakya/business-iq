@@ -7,6 +7,7 @@ router = DefaultRouter()
 router.register(r'customers', views.TradeCustomerViewSet, basename='tradecustomer')
 router.register(r'groups', views.CustomerGroupViewSet, basename='customergroup')
 router.register(r'price-lists', views.PriceListViewSet, basename='pricelist')
+router.register(r'orders', views.SalesOrderViewSet, basename='salesorder')
 
 urlpatterns = [
     path('prices/resolve/', views.PriceResolveView.as_view(), name='price-resolve'),

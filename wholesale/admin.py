@@ -9,6 +9,8 @@ from .models import (
     CustomerGroup,
     PriceList,
     PriceListEntry,
+    SalesOrder,
+    SalesOrderLine,
     TradeCustomer,
     TradeCustomerAddress,
     TradeCustomerContact,
@@ -201,3 +203,31 @@ class PriceListAdmin(TenantAdminMixin, admin.ModelAdmin):
 @admin.register(PriceListEntry)
 class PriceListEntryAdmin(TenantAdminMixin, ViewOnlyAdmin):
     """Changed on the price list's page only."""
+
+
+class SalesOrderLineInline(admin.TabularInline):
+    model = SalesOrderLine
+    extra = 0
+    can_delete = False
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(SalesOrder)
+class SalesOrderAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """View only: orders change through the API, which keeps the status machine and the price snapshot (G40)."""
+
+    list_display = ('number_display', 'customer', 'delivery_date', 'status', 'estimated_gross')
+    list_filter = ('status', 'delivery_date')
+    search_fields = ('number', 'customer__account_code', 'customer__legal_name', 'customer_ref')
+    list_select_related = ('customer',)
+    inlines = [SalesOrderLineInline]
+
+
+@admin.register(SalesOrderLine)
+class SalesOrderLineAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """Changed through the order only."""

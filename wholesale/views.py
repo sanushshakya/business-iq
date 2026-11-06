@@ -1,7 +1,11 @@
+from datetime import date
+
 from django.db import IntegrityError, transaction
 from django.db.models import Prefetch, Q
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import mixins, viewsets
+from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
@@ -11,13 +15,16 @@ from common.tenancy import TenantScopedMixin
 from inventory.views import CompanyMemberReadsStaffWrites
 from vat.services import uk_date
 
-from .models import CustomerGroup, PriceList, PriceListEntry, TradeCustomer
+from . import orders
+from .models import CustomerGroup, PriceList, PriceListEntry, SalesOrder, TradeCustomer
 from .pricing import resolve_prices
 from .serializers import (
+    CancelOrderSerializer,
     CustomerGroupSerializer,
     PriceListSerializer,
     ResolveRequestSerializer,
     ResolveResponseSerializer,
+    SalesOrderSerializer,
     TradeCustomerSerializer,
 )
 
@@ -199,3 +206,83 @@ class PriceResolveView(APIView):
                            min_quantity=price.min_quantity)
             rows.append(row)
         return Response(ResolveResponseSerializer({'customer': customer.pk, 'on': on, 'lines': rows}).data)
+
+
+ORDER_STATUSES = {value for value, _label in SalesOrder.STATUSES}
+
+
+def _date_param(params, name):
+    raw = params.get(name)
+    if raw is None:
+        return None
+    try:
+        if len(raw) != 10:  # fromisoformat also takes forms such as 20261113
+            raise ValueError(raw)
+        return date.fromisoformat(raw)
+    except ValueError:
+        raise ValidationError({name: 'A date as YYYY-MM-DD.'}) from None
+
+
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter('status', str, enum=sorted(ORDER_STATUSES), description='Only orders in this status.'),
+    OpenApiParameter('customer', int, description='Only this trade customer\'s orders.'),
+    OpenApiParameter('delivery_date', OpenApiTypes.DATE, description='Only orders delivered on this day.'),
+    OpenApiParameter('from', OpenApiTypes.DATE, description='Delivered on or after this day.'),
+    OpenApiParameter('to', OpenApiTypes.DATE, description='Delivered on or before this day.'),
+]))
+class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin,
+                        mixins.CreateModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
+    """
+    Trade sales orders (G40), entered by staff: draft -> confirmed -> picking -> picked -> dispatched -> delivered
+    -> invoiced, or cancelled up to picking. Only a draft can be edited; ``confirm`` fixes the prices (from the
+    price lists valid on the delivery date) and ``cancel`` needs a reason. Picking onwards come with G41-G44.
+    Members read; staff change. There is no delete: cancel instead.
+    """
+
+    queryset = SalesOrder.objects.select_related('customer').prefetch_related('lines__product')
+    serializer_class = SalesOrderSerializer
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        status = params.get('status')
+        if status is not None:
+            if status not in ORDER_STATUSES:
+                raise ValidationError({'status': f'One of {", ".join(sorted(ORDER_STATUSES))}.'})
+            queryset = queryset.filter(status=status)
+        customer = _id_param(params, 'customer')
+        if customer is not None:
+            queryset = queryset.filter(customer_id=customer)
+        for name, lookup in (('delivery_date', 'delivery_date'), ('from', 'delivery_date__gte'),
+                             ('to', 'delivery_date__lte')):
+            value = _date_param(params, name)
+            if value is not None:
+                queryset = queryset.filter(**{lookup: value})
+        return queryset
+
+    def perform_update(self, serializer):
+        with transaction.atomic():  # the draft check and the edit happen under the order's lock
+            super().perform_update(serializer)
+
+    def _moved(self, step, *args):
+        try:
+            order = step(self.get_object(), self.request.user, *args)
+        except orders.OrderStateError as error:
+            raise ValidationError({'detail': error.detail}) from None
+        return Response(self.get_serializer(self.get_queryset().get(pk=order.pk)).data)
+
+    @extend_schema(request=None, responses=SalesOrderSerializer)
+    @action(detail=True, methods=['post'])
+    def confirm(self, request, pk=None):
+        """Fix each line's price (lists valid on the delivery date, then the wholesale price) and confirm. Refused
+        when a line has no trade price or the customer is on hold or closed."""
+        return self._moved(orders.confirm)
+
+    @extend_schema(request=CancelOrderSerializer, responses=SalesOrderSerializer)
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """Cancel a draft, confirmed or picking order, with a reason."""
+        serializer = CancelOrderSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return self._moved(orders.cancel, serializer.validated_data['reason'])

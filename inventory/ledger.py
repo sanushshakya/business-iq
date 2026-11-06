@@ -238,11 +238,17 @@ def _fefo_batches(product, locations, today=None, by='quantity'):
         .filter(product=product, location__in=locations, expiration_date__gte=today, **{f'{by}__gt': 0})
         .order_by('expiration_date', 'receive_date', 'pk')
     )
-    # Read after the locks are held (a new statement), so a reservation committed while we waited is seen.
+    # Read after the locks are held (a new statement), so a reservation committed while we waited is seen. Loose
+    # products reserve kg; everything else reserves units (pieces), whichever column ``by`` checks.
     reserved = reserved_by_batch([batch.pk for batch in batches], loose=by == 'weight_kg')
     for batch in batches:
         batch.free = getattr(batch, by) - reserved.get(batch.pk, 0)
     return [batch for batch in batches if batch.free > 0]
+
+
+def free_batches(product, locations, today=None, *, by='quantity'):
+    """What the FEFO takes would use: in-date batches with free stock, locked, each with ``free`` (G41)."""
+    return _fefo_batches(product, locations, today, by)
 
 
 def reserved_by_batch(batch_ids, *, loose):
@@ -259,7 +265,8 @@ def reserved_by_batch(batch_ids, *, loose):
 def _trim_reservations(batch_id, holding, loose):
     """After stock left a (locked) batch: cut its active reservations, newest first, to what it now holds."""
     field = 'weight_kg' if loose else 'quantity'
-    rows = list(StockReservation.objects.filter(batch_id=batch_id, released_at__isnull=True)
+    # Locked, so a release committed meanwhile (a cancel holds the order, not the batch) is re-read and left alone.
+    rows = list(StockReservation.objects.select_for_update().filter(batch_id=batch_id, released_at__isnull=True)
                 .order_by('-created_at', '-id'))
     excess = sum((getattr(row, field) or 0) for row in rows) - holding
     for row in rows:

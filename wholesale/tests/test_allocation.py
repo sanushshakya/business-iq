@@ -93,6 +93,31 @@ class AllocationApiTests(TestCase):
         self.post(order_id, 'cancel', reason='x')
         self.assertEqual(self.post(order_id, 'allocate').status_code, 400)
 
+    def test_allocate_tenancy_and_operators(self):
+        from django.contrib.auth import get_user_model
+
+        from authentication import refresh_tokens
+        from tenants.roles import STOCK
+
+        theirs = SalesOrder.objects.create(company=CompanyFactory(), number=1, customer=TradeCustomer.objects.create(
+            company=CompanyFactory(), account_code='T-1', legal_name='E2E Fake Theirs'), delivery_date=self.today,
+            line1='9 Fake Lane', town='Elsewhere', postcode='TT9 9TT', status=SalesOrder.CONFIRMED)
+        self.assertEqual(self.post(theirs.pk, 'allocate').status_code, 404)
+        operator, _code = get_user_model().objects.create_operator(self.company, 'Fake Operator', STOCK)
+        api = APIClient()
+        api.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh_tokens.issue_token_pair(operator)['access_token']}")
+        order_id = self.create().json()['id']
+        self.post(order_id, 'confirm')
+        self.assertEqual(api.post(reverse('salesorder-allocate', args=[order_id])).status_code, 403)
+
+    def test_lots_expiring_before_delivery_are_not_reserved(self):
+        StockReservation.objects.all().delete()
+        early = self.stock(self.each, 10, days=1)  # gone off before the delivery in 3 days
+        order_id = self.create(lines=[{'product': self.each.pk, 'quantity': 8}]).json()['id']
+        line = self.post(order_id, 'confirm').json()['lines'][0]
+        self.assertEqual((line['reserved'], line['short']), ('6', '2'))
+        self.assertFalse(StockReservation.objects.filter(batch=early).exists())
+
     def test_source_location_rules(self):
         second = Location.objects.create(company=self.company, code='WH-2', name='Fake warehouse two',
                                          type=Location.WAREHOUSE)

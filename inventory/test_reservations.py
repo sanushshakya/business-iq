@@ -192,6 +192,17 @@ class OtherTakesSkipReservedTests(Base):
         self.assertEqual(older.quantity, 3)
         self.assertTrue(StockReservation.objects.get(order_line=newer_line).released_at)
 
+    def test_a_trim_never_revives_a_released_reservation(self):
+        # The trim locks the active rows and re-reads them, so one released meanwhile (a cancel) stays released.
+        reservation = StockReservation.objects.get(batch=self.reserved)
+        with transaction.atomic():
+            release(reservation.order_line.order)
+            move(StockBatch.objects.select_for_update().get(pk=self.reserved.pk), 4, 'outbound',
+                 counterpart=virtual_location(self.company, 'waste'))
+        reservation.refresh_from_db()
+        self.assertIsNotNone(reservation.released_at)
+        self.assertEqual(reservation.quantity, 4)  # released, not trimmed
+
     def test_movements_still_balance(self):
         with transaction.atomic():
             take_fefo(self.each, 1, locations=[self.warehouse], destination=virtual_location(self.company, 'customer'))

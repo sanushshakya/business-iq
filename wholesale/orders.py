@@ -113,16 +113,23 @@ def confirm(order, user):
     order.estimated_gross = order.estimated_net + order.estimated_vat
     order.status, order.confirmed_by, order.confirmed_at = S.CONFIRMED, user, timezone.now()
     order.save()
-    for line in lines:  # what the warehouse can't cover stays short
-        reserve(line, source)
+    _reserve_all(order, lines, source)  # what the warehouse can't cover stays short
     return order
+
+
+def _reserve_all(order, lines, source):
+    # In product order, like the till locks products, so two orders (or an order and a sale) can't deadlock.
+    # Only lots still in date on the delivery day are held.
+    on = max(order.delivery_date, timezone.localdate())
+    for line in sorted(lines, key=lambda line: (line.product_id, line.pk)):
+        reserve(line, source, today=on)
 
 
 def _source(order):
     source = Location.objects.filter(pk=order.source_location_id).first()
     if source is None:
         raise OrderStateError('Choose the warehouse the order is picked from.')
-    if source.type != Location.WAREHOUSE or not source.is_active:
+    if source.company_id != order.company_id or source.type != Location.WAREHOUSE or not source.is_active:
         raise OrderStateError(f'{source.code} is not an active warehouse.')
     return source
 
@@ -134,8 +141,7 @@ def allocate(order, user):
     if order.status not in (S.CONFIRMED, S.PICKING):
         raise OrderStateError(f'A {order.get_status_display().lower()} order holds no stock to top up.')
     source = _source(order)
-    for line in order.lines.select_related('product').order_by('id'):
-        reserve(line, source)
+    _reserve_all(order, list(order.lines.select_related('product')), source)
     return order
 
 

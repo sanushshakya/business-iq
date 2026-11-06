@@ -18,7 +18,9 @@ from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import serializers
 
-from inventory.ledger import LedgerError, move, sellable_locations, take_fefo, take_weighed, virtual_location
+from inventory.ledger import (
+    LedgerError, free_batches, move, sellable_locations, take_fefo, take_weighed, virtual_location,
+)
 from inventory.models import Location, Product, StockBatch
 from common.services.settings_service import get_company_setting
 from sync.outbox import active_connection, emit
@@ -187,7 +189,7 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
             continue
         if not product.is_weighed:
             quantity = units.get(pk, 0) + len(labelled.get(pk, []))
-            available = sum(b.quantity for b in batches)
+            available = sum(b.free for b in batches)
             if quantity > available:
                 problems.append(f'{product.name}: only {available} in date, {quantity} requested.')
                 continue
@@ -207,7 +209,7 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
             problems.append(f'{product.name}: none in date here.')
             continue
         pieces = sum(quantity for quantity, _, _ in weighings[pk])
-        available = sum(b.quantity for b in batches)
+        available = sum(b.free for b in batches)
         if product.is_catch_weight and pieces > available:
             problems.append(f'{product.name}: only {available} in date, {pieces} requested.')
             continue
@@ -308,13 +310,12 @@ def _labelled_line(product, quantity, weight, label, rate, expected, tolerance, 
 
 
 def _sellable_batches(product, locations, today):
-    """In-date batches holding stock (kg for loose products, pieces otherwise) at ``locations``, locked, FEFO order."""
-    held = {'weight_kg__gt': 0} if product.is_weighed and not product.is_catch_weight else {'quantity__gt': 0}
-    return list(
-        StockBatch.objects.select_for_update()
-        .filter(product=product, location__in=locations, expiration_date__gte=today, **held)
-        .order_by('expiration_date', 'receive_date', 'pk')
-    )
+    """
+    In-date batches with free stock (kg for loose products, pieces otherwise) at ``locations``, locked, FEFO order;
+    each has ``free``: what is not reserved for a trade order (G41), which is all the till may sell.
+    """
+    loose = product.is_weighed and not product.is_catch_weight
+    return free_batches(product, locations, today, by='weight_kg' if loose else 'quantity')
 
 
 def _loyalty_reference(sale):

@@ -28,8 +28,8 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from common.services.settings_service import get_company_setting
-from inventory.ledger import sellable_locations, take_fefo, take_short, take_weighed, virtual_location
-from inventory.models import Location, Product, StockBatch
+from inventory.ledger import free_batches, sellable_locations, take_fefo, take_short, take_weighed, virtual_location
+from inventory.models import Location, Product
 from sync.outbox import active_connection, emit
 from vat.services import UK, NoVatRate, rate_for, split_inclusive
 
@@ -282,9 +282,9 @@ def _short(product, quantity, weight, locations, customer, day, sale):
                       reference=sale.receipt_number, expiry=day)
 
 
-def _locked(product, locations, day, held):
-    return list(StockBatch.objects.select_for_update(of=('self',))
-                .filter(product=product, location__in=locations, expiration_date__gte=day, **{f'{held}__gt': 0}))
+def _free(product, locations, day, by):
+    """Free stock (not reserved for trade orders, G41) in the in-date batches at ``locations``; locks them."""
+    return sum(batch.free for batch in free_batches(product, locations, day, by=by))
 
 
 def _take(product, quantity, weight, locations, customer, day, sale):
@@ -296,14 +296,14 @@ def _take(product, quantity, weight, locations, customer, day, sale):
             allocations.append(_short(product, short, None, locations, customer, day, sale))
         return allocations, short, Decimal('0')
     if not product.is_catch_weight:
-        held = sum((b.weight_kg for b in _locked(product, locations, day, 'weight_kg')), Decimal('0.000'))
+        held = Decimal(_free(product, locations, day, 'weight_kg'))
         if held <= 0:
             return [_short(product, 0, weight, locations, customer, day, sale)], 0, weight
         # take_weighed books a gap from ADJUSTMENT into the last batch itself; it is reported the same way.
         allocations = take_weighed(product, quantity=0, weight_kg=weight, locations=locations, destination=customer,
                                    today=day)
         return allocations, 0, max(weight - held, Decimal('0.000'))
-    pieces = sum(b.quantity for b in _locked(product, locations, day, 'quantity'))
+    pieces = int(_free(product, locations, day, 'quantity'))
     if pieces >= quantity:
         return take_weighed(product, quantity=quantity, weight_kg=weight, locations=locations, destination=customer,
                             today=day), 0, Decimal('0')

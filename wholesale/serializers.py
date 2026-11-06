@@ -103,6 +103,13 @@ class TradeCustomerSerializer(TenantModelSerializer):
             raise serializers.ValidationError(problem)
         return in_week_order(value)
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        group, company_id = attrs.get('group'), self._company_id_for(attrs)
+        if group is not None and company_id is not None and group.company_id != company_id:
+            raise serializers.ValidationError({'group': 'This group belongs to another company.'})
+        return attrs
+
     def validate_addresses(self, value):
         if sum(bool(a.get('is_default')) for a in value) > 1:
             raise serializers.ValidationError('Only one default address.')
@@ -205,6 +212,12 @@ class PriceListSerializer(TenantModelSerializer):
         problem = dates_problem(value('valid_from'), value('valid_to'))
         if problem:
             raise serializers.ValidationError({'valid_to': problem})
+        # Superusers' choices are not scoped: still, a list only links rows of its own company.
+        company_id = self._company_id_for(attrs)
+        for name, rows in (('customers', attrs.get('customers', [])), ('groups', attrs.get('groups', [])),
+                           ('entries', [e['product'] for e in attrs.get('entries', [])])):
+            if company_id is not None and any(row.company_id != company_id for row in rows):
+                raise serializers.ValidationError({name: "Another company's rows can't be on this list."})
         return attrs
 
     @staticmethod
@@ -239,20 +252,31 @@ class _OwnCompanyPrimaryKey(serializers.PrimaryKeyRelatedField):
 
 
 class ResolveLineSerializer(serializers.Serializer):
-    product = _OwnCompanyPrimaryKey(queryset=Product.objects.all())
+    product = serializers.IntegerField(min_value=1, help_text='A product of your company.')
     quantity = serializers.DecimalField(max_digits=12, decimal_places=3, help_text='Units, or kg when sold by weight.')
-
-    def validate(self, attrs):
-        problem = min_quantity_problem(attrs['product'], attrs['quantity'])
-        if problem:
-            raise serializers.ValidationError({'quantity': problem})
-        return attrs
 
 
 class ResolveRequestSerializer(serializers.Serializer):
     customer = _OwnCompanyPrimaryKey(queryset=TradeCustomer.objects.all())
     on = serializers.DateField(required=False, help_text='UK date; today when left out.')
     lines = ResolveLineSerializer(many=True, allow_empty=False, max_length=MAX_RESOLVE_LINES)
+
+    def validate_lines(self, lines):
+        # One query for all the products (not one per line), the user's own company's only.
+        products = Product.objects.filter(company_id=self.context['request'].user.company_id).in_bulk(
+            {line['product'] for line in lines})
+        errors, found = [], []
+        for line in lines:
+            product = products.get(line['product'])
+            if product is None:
+                errors.append({'product': f'Invalid pk "{line["product"]}" - object does not exist.'})
+                continue
+            problem = min_quantity_problem(product, line['quantity'])
+            errors.append({'quantity': problem} if problem else {})
+            found.append({'product': product, 'quantity': line['quantity']})
+        if any(errors):
+            raise serializers.ValidationError(errors)
+        return found
 
 
 class ResolvedLineSerializer(serializers.Serializer):

@@ -137,6 +137,18 @@ class PriceListApiTests(Base):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(PriceList.objects.get(pk=response.json()['id']).company, self.company)
 
+    def test_superuser_cannot_link_another_companys_rows(self):
+        admin = APIClient()
+        admin.force_authenticate(UserFactory(company=self.company, is_staff=True, is_superuser=True))
+        for fields in ({'customers': [self.foreign_customer.pk]}, {'groups': [self.foreign_group.pk]},
+                       {'entries': [{'product': self.foreign_product.pk, 'unit_price': '1'}]}):
+            with self.subTest(fields=list(fields)):
+                self.assertEqual(self.create_list(admin, **fields).status_code, 400)
+        customer = admin.patch(reverse('tradecustomer-detail', args=[self.customer.pk]),
+                               {'group': self.foreign_group.pk}, format='json')
+        self.assertEqual(customer.status_code, 400)
+        self.assertFalse(PriceList.objects.exists())
+
     def test_name_unique_per_company(self):
         PriceList.objects.create(company=self.other_company, name='Restaurants 2026')
         self.assertEqual(self.create_list().status_code, 201)
@@ -238,6 +250,34 @@ class ResolveApiTests(Base):
                 self.assertEqual(self.resolve([{'product': self.each.pk, 'quantity': quantity}]).status_code, 400)
         self.assertEqual(self.resolve([{'product': self.weighed.pk, 'quantity': '0.0005'}]).status_code, 400)
 
+    def test_query_count_does_not_grow_with_the_lines(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        products = [ProductFactory(company=self.company, wholesale_price=D('1')) for _ in range(200)]
+
+        def count(n):
+            with CaptureQueriesContext(connection) as queries:
+                response = self.resolve([{'product': p.pk, 'quantity': '1'} for p in products[:n]])
+            self.assertEqual(response.status_code, 200, response.content)
+            return len(queries)
+
+        self.assertEqual(count(3), count(200))
+
+    def test_unknown_product_is_reported_on_its_line(self):
+        response = self.resolve([{'product': self.each.pk, 'quantity': '1'},
+                                 {'product': self.foreign_product.pk, 'quantity': '1'}])
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['lines'][0], {})
+        self.assertIn('product', response.json()['lines'][1])
+
+    def test_superuser_resolves_for_their_own_company_only(self):
+        admin = APIClient()
+        admin.force_authenticate(UserFactory(company=self.company, is_staff=True, is_superuser=True))
+        line = {'product': self.each.pk, 'quantity': '1'}
+        self.assertEqual(self.resolve([line], client=admin).status_code, 200)
+        self.assertEqual(self.resolve([line], client=admin, customer=self.foreign_customer.pk).status_code, 400)
+
     def test_on_defaults_to_today(self):
         response = self.member.post(self.url, {'customer': self.customer.pk,
                                                'lines': [{'product': self.each.pk, 'quantity': '1'}]}, format='json')
@@ -309,6 +349,32 @@ class PriceListAdminTests(Base):
         })
         self.assertEqual(response.status_code, 200)
         self.assertFalse(PriceList.objects.filter(name='Bad list').exists())
+
+    def test_superuser_admin_cannot_mix_companies(self):
+        self.client.force_login(UserFactory(company=self.company, is_staff=True, is_superuser=True))
+        prefix = 'entries'
+
+        def post(name, **fields):
+            return self.client.post(reverse('admin:wholesale_pricelist_add'), {
+                'company': self.company.pk, 'name': name, 'priority': '0',
+                f'{prefix}-TOTAL_FORMS': '0', f'{prefix}-INITIAL_FORMS': '0', **fields})
+
+        self.assertEqual(post('Customers', customers=[self.foreign_customer.pk]).status_code, 200)
+        self.assertEqual(post('Groups', groups=[self.foreign_group.pk]).status_code, 200)
+        entry = {f'{prefix}-TOTAL_FORMS': '1', f'{prefix}-0-product': self.foreign_product.pk,
+                 f'{prefix}-0-min_quantity': '1', f'{prefix}-0-unit_price': '1'}
+        self.assertEqual(post('Entries', **entry).status_code, 200)
+        self.assertEqual(post('Fine', customers=[self.customer.pk]).status_code, 302)
+        self.assertEqual(list(PriceList.objects.filter(company=self.company).values_list('name', flat=True)
+                              .order_by('name')), ['Fine', 'Mine'])
+        change = self.client.post(reverse('admin:wholesale_tradecustomer_change', args=[self.customer.pk]), {
+            'company': self.company.pk, 'account_code': 'C-1', 'legal_name': 'E2E Fake Bistro Ltd',
+            'status': 'active', 'delivery_days': '[]', 'group': self.foreign_group.pk,
+            'addresses-TOTAL_FORMS': '0', 'addresses-INITIAL_FORMS': '0',
+            'contacts-TOTAL_FORMS': '0', 'contacts-INITIAL_FORMS': '0'})
+        self.assertEqual(change.status_code, 200)
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.group, self.group)
 
     def test_product_admin_shows_the_wholesale_price(self):
         page = self.client.get(reverse('admin:inventory_product_change', args=[self.each.pk]))

@@ -179,7 +179,7 @@ class ResolveRulesTests(TestCase):
             resolve_prices(self.s.customer, [(self.s.each, 1), (foreign, 1)], on=ON)
 
     def test_another_companys_list_never_applies(self):
-        # Assigned through the M2M directly, bypassing the API's same-company checks.
+        # Assigned through the M2M directly, as no API or admin form allows.
         other = PriceList.objects.create(company=CompanyFactory(), name='Theirs')
         other.customers.add(self.s.customer)
         PriceListEntry.objects.create(price_list=other, product=self.s.each, unit_price=D('1'))
@@ -189,8 +189,9 @@ class ResolveRulesTests(TestCase):
         for quantity in (0, -1, D('0'), D('1.5'), 1.0, True, '2'):
             with self.subTest(quantity=quantity), self.assertRaises(ValueError):
                 resolve_prices(self.s.customer, [(self.s.each, quantity)], on=ON)
-        with self.assertRaises(ValueError):
-            resolve_prices(self.s.customer, [(self.s.weighed, D('0.0005'))], on=ON)  # kg to 3 dp
+        for kg in (D('0.0005'), D('1E+30'), D('NaN'), D('Infinity')):  # kg to 3 dp; huge or odd
+            with self.subTest(kg=kg), self.assertRaises(ValueError):
+                resolve_prices(self.s.customer, [(self.s.weighed, kg)], on=ON)
         self.assertEqual(len(resolve_prices(self.s.customer, [(self.s.weighed, D('0.001'))], on=ON)), 1)
 
     def test_the_same_product_on_several_lines(self):

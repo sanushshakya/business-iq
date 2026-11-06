@@ -18,10 +18,11 @@ from django.db.models import Q
 
 from vat.services import uk_date
 
-from .models import KG, PriceList, PriceListEntry, min_quantity_problem
+from .models import PriceList, PriceListEntry, min_quantity_problem
 
 CUSTOMER_LIST, GROUP_LIST, BASE = 'customer_list', 'group_list', 'base'
 SOURCES = [CUSTOMER_LIST, GROUP_LIST, BASE]
+MAX_DIGITS = 9  # whole digits a quantity may have (the API's 12 digits, 3 of them decimals)
 
 
 @dataclass(frozen=True)
@@ -42,8 +43,8 @@ def _quantity(product, quantity):
     quantity = Decimal(quantity)
     if not quantity.is_finite() or quantity <= 0:
         raise ValueError('A quantity is above 0.')
-    if product.is_weighed and quantity != quantity.quantize(KG):
-        raise ValueError('Kg to 3 decimal places.')
+    if quantity.adjusted() >= MAX_DIGITS:
+        raise ValueError('Too large.')
     problem = min_quantity_problem(product, quantity)
     if problem:
         raise ValueError(problem)
@@ -54,8 +55,7 @@ def _lists(company_id, on, **assigned):
     valid = (Q(valid_from__isnull=True) | Q(valid_from__lte=on)) & (Q(valid_to__isnull=True) | Q(valid_to__gte=on))
     return {
         price_list.pk: price_list
-        for price_list in PriceList.objects.filter(valid, company_id=company_id, is_active=True, **assigned)
-        .only('id', 'name', 'priority').distinct()
+        for price_list in PriceList.objects.filter(valid, company_id=company_id, is_active=True, **assigned).distinct()
     }
 
 

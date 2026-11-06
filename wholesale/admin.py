@@ -93,6 +93,9 @@ class TradeCustomerAdmin(TenantAdminMixin, admin.ModelAdmin):
                 # The company the row will belong to: chosen in the form (superusers), kept, or the user's own.
                 company = cleaned.get('company')
                 company_id = company.pk if company else (obj.company_id if obj else request.user.company_id)
+                group = cleaned.get('group')
+                if group is not None and group.company_id != company_id:  # superusers' choices are not scoped
+                    self.add_error('group', 'This group belongs to another company.')
                 code = normalise_account_code(cleaned.get('account_code'))  # as the model will store it
                 taken = TradeCustomer.objects.filter(company_id=company_id, account_code=code)
                 if code and taken.exclude(pk=self.instance.pk).exists():
@@ -134,17 +137,40 @@ class PriceListEntryForm(forms.ModelForm):
         return cleaned
 
 
+def _list_company_id(request, form):
+    """The company a price list will belong to: chosen in the form (superusers), kept, or the user's own."""
+    company = form.cleaned_data.get('company') if hasattr(form, 'cleaned_data') else None
+    return company.pk if company else (form.instance.company_id or request.user.company_id)
+
+
+class PriceListEntryFormSet(BaseInlineFormSet):
+    company_id = None  # set per request by the inline
+
+    def clean(self):
+        super().clean()
+        company_id = self.instance.company_id or self.company_id
+        for form in self.forms:
+            product = form.cleaned_data.get('product') if form.cleaned_data else None
+            if product is not None and not form.cleaned_data.get('DELETE') and product.company_id != company_id:
+                form.add_error('product', 'This product belongs to another company.')
+
+
 class PriceListEntryInline(admin.TabularInline):
     model = PriceListEntry
     form = PriceListEntryForm
+    formset = PriceListEntryFormSet
     extra = 0
     raw_id_fields = ('product',)  # catalogues are large
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         field = super().formfield_for_foreignkey(db_field, request, **kwargs)
-        if db_field.name == 'product' and request.user.company_id:
+        if db_field.name == 'product' and not request.user.is_superuser and request.user.company_id:
             field.queryset = field.queryset.filter(company_id=request.user.company_id)
         return field
+
+    def get_formset(self, request, obj=None, **kwargs):
+        formset = super().get_formset(request, obj, **kwargs)
+        return type('ScopedEntryFormSet', (formset,), {'company_id': request.user.company_id})
 
 
 @admin.register(PriceList)
@@ -156,6 +182,20 @@ class PriceListAdmin(TenantAdminMixin, admin.ModelAdmin):
     search_fields = ('name',)
     filter_horizontal = ('customers', 'groups')
     inlines = [PriceListEntryInline]
+
+    def get_form(self, request, obj=None, **kwargs):
+        form = super().get_form(request, obj, **kwargs)
+
+        class ScopedForm(form):
+            def clean(self):
+                cleaned = super().clean()
+                company_id = _list_company_id(request, self)
+                for name in ('customers', 'groups'):  # superusers' choices are not scoped
+                    if any(row.company_id != company_id for row in cleaned.get(name) or []):
+                        self.add_error(name, "Another company's rows can't be on this list.")
+                return cleaned
+
+        return ScopedForm
 
 
 @admin.register(PriceListEntry)

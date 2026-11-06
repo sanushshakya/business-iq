@@ -286,6 +286,9 @@ class SalesOrder(models.Model):
     customer_ref = models.CharField(max_length=40, blank=True, help_text="The customer's own order number.")
     note = models.TextField(blank=True)
     status = models.CharField(max_length=12, choices=STATUSES, default=DRAFT)
+    # The warehouse it is reserved and picked from (G41): needed to confirm.
+    source_location = models.ForeignKey('inventory.Location', on_delete=models.PROTECT, null=True, blank=True,
+                                        related_name='sales_orders')
     # The delivery address as it was chosen (a copy).
     delivery_label = models.CharField(max_length=60, blank=True)
     line1 = models.CharField(max_length=120)

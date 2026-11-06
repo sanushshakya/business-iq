@@ -223,3 +223,14 @@ class OnlineTests(Base):
         StockSyncState.objects.all().delete()
         self.reserve(self.line(self.each, quantity=4))
         self.assertTrue(StockSyncState.objects.get(product=self.each).pending)
+
+
+class ReservationAdminTests(Base):
+    def test_view_only(self):
+        from django.contrib import admin
+
+        model_admin = admin.site._registry[StockReservation]
+        request = type('Request', (), {'user': UserFactory(is_staff=True, is_superuser=True)})()
+        self.assertFalse(model_admin.has_add_permission(request))
+        self.assertFalse(model_admin.has_change_permission(request))
+        self.assertFalse(model_admin.has_delete_permission(request))

@@ -6,7 +6,7 @@ from common.tenancy import TenantAdminMixin
 
 from .models import (
     BarcodeRule, Location, Product, ProductCategory, StockBatch, StockMovement, Transfer, TransferLine, TransferPick,
-    Requisition, RequisitionLine, Breakdown, BreakdownLine, WriteOff, YieldTemplate, YieldTemplateOutput, other_company_problem, weighed_product_problem,
+    Requisition, RequisitionLine, StockReservation, Breakdown, BreakdownLine, WriteOff, YieldTemplate, YieldTemplateOutput, other_company_problem, weighed_product_problem,
     yield_output_problems,
 )
 
@@ -93,6 +93,14 @@ class ViewOnlyAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.register(StockReservation)
+class StockReservationAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """View only: reservations change only through the order (confirm, allocate, cancel) and the ledger (G41)."""
+
+    list_display = ('batch', 'order_line', 'quantity', 'weight_kg', 'created_at', 'released_at')
+    list_select_related = ('batch__product', 'order_line__order')
 
 
 @admin.register(TransferLine, TransferPick, RequisitionLine)

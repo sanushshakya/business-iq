@@ -4,8 +4,10 @@ Sales orders (G40): the status machine and confirmation.
 draft -> confirmed -> picking -> picked -> dispatched -> delivered -> invoiced; cancelled from draft, confirmed or
 picking (a reason is required). Confirming fixes each line's trade price from ``pricing.resolve_prices`` on the
 delivery date, with the VAT rate in force that day, and the estimated net and VAT (half up to the penny); it is
-never re-done. picking onwards are moved by allocation, picking, delivery and invoicing (G41-G44) through
-``advance``.
+never re-done. picking onwards are moved by picking, delivery and invoicing (G42-G44) through ``advance``.
+
+G41: confirming also reserves each line at the order's warehouse (``source_location``), FEFO, without moving
+stock; a line that can't be covered stays short (``allocate`` tops it up later). Cancelling releases.
 """
 
 from decimal import ROUND_HALF_UP, Decimal
@@ -13,6 +15,8 @@ from decimal import ROUND_HALF_UP, Decimal
 from django.db import transaction
 from django.utils import timezone
 
+from inventory.models import Location
+from inventory.reservations import release, reserve
 from tenants.models import Company
 from vat.services import HUNDRED, PENNY, NoVatRate, rate_for
 
@@ -78,6 +82,7 @@ def confirm(order, user):
     lines = list(order.lines.select_related('product').order_by('id'))
     if not lines:
         raise OrderStateError('An order needs at least one line.')
+    source = _source(order)
     amounts = [_ordered_amount(line) for line in lines]
     prices = resolve_prices(customer, [(line.product, amount) for line, amount in zip(lines, amounts, strict=True)],
                             on=order.delivery_date)
@@ -108,6 +113,29 @@ def confirm(order, user):
     order.estimated_gross = order.estimated_net + order.estimated_vat
     order.status, order.confirmed_by, order.confirmed_at = S.CONFIRMED, user, timezone.now()
     order.save()
+    for line in lines:  # what the warehouse can't cover stays short
+        reserve(line, source)
+    return order
+
+
+def _source(order):
+    source = Location.objects.filter(pk=order.source_location_id).first()
+    if source is None:
+        raise OrderStateError('Choose the warehouse the order is picked from.')
+    if source.type != Location.WAREHOUSE or not source.is_active:
+        raise OrderStateError(f'{source.code} is not an active warehouse.')
+    return source
+
+
+@transaction.atomic
+def allocate(order, user):
+    """Top up a confirmed (or picking) order's short lines from free stock at its warehouse, FEFO."""
+    order = SalesOrder.objects.select_for_update().get(pk=order.pk)
+    if order.status not in (S.CONFIRMED, S.PICKING):
+        raise OrderStateError(f'A {order.get_status_display().lower()} order holds no stock to top up.')
+    source = _source(order)
+    for line in order.lines.select_related('product').order_by('id'):
+        reserve(line, source)
     return order
 
 
@@ -120,6 +148,7 @@ def cancel(order, user, reason):
     order.status, order.cancelled_by, order.cancelled_at = S.CANCELLED, user, timezone.now()
     order.cancel_reason = reason[:255]
     order.save()
+    release(order)
     return order
 
 

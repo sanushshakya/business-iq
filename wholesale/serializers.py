@@ -4,7 +4,7 @@ from django.db import transaction
 from rest_framework import serializers
 
 from common.tenancy import TenantModelSerializer
-from inventory.models import Product
+from inventory.models import Location, Product
 
 from .models import (
     WEEKDAYS,
@@ -311,6 +311,7 @@ class ResolveResponseSerializer(serializers.Serializer):
 
 MAX_ORDER_UNITS = 100_000
 MAX_ORDER_KG = Decimal('10000')
+HOLDING_STATUSES = (SalesOrder.CONFIRMED, SalesOrder.PICKING)
 ORDER_SNAPSHOT_FIELDS = ['unit_price', 'price_source', 'price_list', 'price_list_name', 'min_quantity', 'vat_code',
                          'vat_rate', 'estimated_net', 'estimated_vat']
 
@@ -323,6 +324,9 @@ class SalesOrderLineSerializer(TenantModelSerializer):
     """
 
     product_name = serializers.CharField(source='product.name', read_only=True)
+    reserved = serializers.SerializerMethodField(
+        help_text='Held at the warehouse (G41): units, or kg for loose products; null unless confirmed or picking.')
+    short = serializers.SerializerMethodField(help_text='Still to reserve; null unless confirmed or picking.')
     # Trade-sized caps, well inside the columns (and the 12-digit estimated totals).
     quantity = serializers.IntegerField(min_value=1, max_value=MAX_ORDER_UNITS, required=False, allow_null=True)
     weight_kg = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=Decimal('0.001'),
@@ -330,8 +334,32 @@ class SalesOrderLineSerializer(TenantModelSerializer):
 
     class Meta:
         model = SalesOrderLine
-        fields = ['id', 'product', 'product_name', 'quantity', 'weight_kg', 'note', *ORDER_SNAPSHOT_FIELDS]
+        fields = ['id', 'product', 'product_name', 'quantity', 'weight_kg', 'note', 'reserved', 'short',
+                  *ORDER_SNAPSHOT_FIELDS]
         read_only_fields = ['id', *ORDER_SNAPSHOT_FIELDS]
+
+    @staticmethod
+    def amounts(line):
+        """``(reserved, short)`` while the order holds stock, else ``(None, None)``."""
+        if line.order.status not in HOLDING_STATUSES:
+            return None, None
+        loose = line.product.is_weighed and not line.product.is_catch_weight
+        rows = getattr(line, 'active_reservations', None)
+        if rows is None:
+            rows = line.reservations.filter(released_at__isnull=True)
+        if loose:
+            reserved = sum((row.weight_kg or Decimal('0') for row in rows), Decimal('0')).quantize(Decimal('0.001'))
+            return reserved, max(line.weight_kg - reserved, Decimal('0.000'))
+        reserved = sum(row.quantity for row in rows)
+        return reserved, max(line.quantity - reserved, 0)
+
+    def get_reserved(self, line) -> str | None:
+        reserved, _short = self.amounts(line)
+        return None if reserved is None else str(reserved)
+
+    def get_short(self, line) -> str | None:
+        _reserved, short = self.amounts(line)
+        return None if short is None else str(short)
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
@@ -364,6 +392,7 @@ class SalesOrderSerializer(TenantModelSerializer):
     customer_name = serializers.SerializerMethodField()
     off_delivery_day = serializers.BooleanField(read_only=True,
                                                 help_text="Delivered on a day the customer doesn't take deliveries.")
+    is_short = serializers.SerializerMethodField(help_text='A line could not be fully reserved (G41).')
     address = serializers.PrimaryKeyRelatedField(queryset=TradeCustomerAddress.objects.all(), write_only=True,
                                                  required=False, help_text="One of the customer's addresses.")
     lines = SalesOrderLineSerializer(many=True, allow_empty=False)
@@ -372,7 +401,7 @@ class SalesOrderSerializer(TenantModelSerializer):
         model = SalesOrder
         fields = [
             'id', 'number', 'number_display', 'customer', 'customer_code', 'customer_name', 'delivery_date',
-            'off_delivery_day', 'customer_ref', 'note', 'status', 'address', 'delivery_label', 'line1', 'line2',
+            'off_delivery_day', 'customer_ref', 'note', 'status', 'source_location', 'is_short', 'address', 'delivery_label', 'line1', 'line2',
             'town', 'postcode', 'instructions', 'lines', 'estimated_net', 'estimated_vat', 'estimated_gross',
             'created_by', 'confirmed_by', 'confirmed_at', 'cancelled_at', 'cancel_reason', 'created_at',
             'updated_at',
@@ -393,6 +422,14 @@ class SalesOrderSerializer(TenantModelSerializer):
     def get_customer_name(self, order) -> str:
         return order.customer.trading_name or order.customer.legal_name
 
+    def get_is_short(self, order) -> bool:
+        return any((SalesOrderLineSerializer.amounts(line)[1] or 0) > 0 for line in order.lines.all())
+
+    def validate_source_location(self, location):
+        if location is not None and (location.type != Location.WAREHOUSE or not location.is_active):
+            raise serializers.ValidationError('Choose an active warehouse.')
+        return location
+
     def validate(self, attrs):
         attrs = super().validate(attrs)
         company_id = self._company_id_for(attrs)
@@ -402,6 +439,15 @@ class SalesOrderSerializer(TenantModelSerializer):
             raise serializers.ValidationError({'customer': 'This customer belongs to another company.'})
         if self.instance is None and customer.status == TradeCustomer.CLOSED:
             raise serializers.ValidationError({'customer': "A closed customer can't get new orders."})
+        source = attrs.get('source_location')
+        if source is not None and source.company_id != company_id:
+            raise serializers.ValidationError({'source_location': 'This location belongs to another company.'})
+        if self.instance is None and 'source_location' not in attrs:
+            warehouses = list(Location.objects.filter(company_id=company_id, type=Location.WAREHOUSE,
+                                                      is_active=True).values_list('pk', flat=True)[:2])
+            if len(warehouses) > 1:
+                raise serializers.ValidationError({'source_location': 'Choose the warehouse it is picked from.'})
+            attrs['source_location_id'] = warehouses[0] if warehouses else None
         address = attrs.get('address')
         if address is not None and address.customer_id != customer.pk:
             raise serializers.ValidationError({'address': "Not one of this customer's addresses."})

@@ -12,11 +12,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.tenancy import TenantScopedMixin
+from inventory.models import StockReservation
 from inventory.views import CompanyMemberReadsStaffWrites
 from vat.services import uk_date
 
 from . import orders
-from .models import CustomerGroup, PriceList, PriceListEntry, SalesOrder, TradeCustomer
+from .models import CustomerGroup, PriceList, PriceListEntry, SalesOrder, SalesOrderLine, TradeCustomer
 from .pricing import resolve_prices
 from .serializers import (
     CancelOrderSerializer,
@@ -239,7 +240,11 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
     Members read; staff change. There is no delete: cancel instead.
     """
 
-    queryset = SalesOrder.objects.select_related('customer').prefetch_related('lines__product')
+    queryset = SalesOrder.objects.select_related('customer').prefetch_related(Prefetch(
+        'lines', queryset=SalesOrderLine.objects.select_related('product').prefetch_related(Prefetch(
+            'reservations', queryset=StockReservation.objects.filter(released_at__isnull=True),
+            to_attr='active_reservations')),
+    ))
     serializer_class = SalesOrderSerializer
     permission_classes = [CompanyMemberReadsStaffWrites]
 
@@ -279,10 +284,16 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
         when a line has no trade price or the customer is on hold or closed."""
         return self._moved(orders.confirm)
 
+    @extend_schema(request=None, responses=SalesOrderSerializer)
+    @action(detail=True, methods=['post'])
+    def allocate(self, request, pk=None):
+        """Top up the short lines of a confirmed (or picking) order from free warehouse stock, FEFO (G41)."""
+        return self._moved(orders.allocate)
+
     @extend_schema(request=CancelOrderSerializer, responses=SalesOrderSerializer)
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
-        """Cancel a draft, confirmed or picking order, with a reason."""
+        """Cancel a draft, confirmed or picking order, with a reason; its reserved stock is released."""
         serializer = CancelOrderSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         return self._moved(orders.cancel, serializer.validated_data['reason'])

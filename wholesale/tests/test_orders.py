@@ -6,7 +6,7 @@ from decimal import Decimal
 from django.test import TestCase
 
 from common.tests.factories import CompanyFactory, ProductFactory, UserFactory
-from inventory.models import Product
+from inventory.models import Location, Product
 from vat.models import VatRate
 from wholesale.models import PriceList, PriceListEntry, SalesOrder, SalesOrderLine, TradeCustomer
 from wholesale.orders import (
@@ -27,6 +27,8 @@ class Base(TestCase):
     def setUp(self):
         self.company = CompanyFactory()
         self.staff = UserFactory(company=self.company, is_staff=True)
+        self.warehouse = Location.objects.create(company=self.company, code='WH-1', name='Fake warehouse',
+                                                 type=Location.WAREHOUSE)  # G41: orders are picked from here
         self.customer = TradeCustomer.objects.create(company=self.company, account_code='C-1',
                                                      legal_name='E2E Fake Bistro Ltd', delivery_days=['mon', 'fri'])
         self.each = ProductFactory(company=self.company, wholesale_price=D('1.0050'), vat_code='standard')
@@ -39,7 +41,7 @@ class Base(TestCase):
     def order(self, lines=None, **fields):
         fields = {'company': self.company, 'customer': self.customer, 'delivery_date': DELIVERY,
                   'number': next_order_number(self.company), 'created_by': self.staff, 'line1': '1 Fake Street',
-                  'town': 'Testtown', 'postcode': 'TT1 1TT', **fields}
+                  'town': 'Testtown', 'postcode': 'TT1 1TT', 'source_location': self.warehouse, **fields}
         order = SalesOrder.objects.create(**fields)
         for product, quantity, weight in (lines if lines is not None else [(self.each, 3, None)]):
             SalesOrderLine.objects.create(order=order, product=product, quantity=quantity, weight_kg=weight)

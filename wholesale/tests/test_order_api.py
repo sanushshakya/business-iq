@@ -10,7 +10,7 @@ from rest_framework.test import APIClient
 
 from authentication import refresh_tokens
 from common.tests.factories import CompanyFactory, ProductFactory, UserFactory
-from inventory.models import Product
+from inventory.models import Location, Product
 from tenants.roles import STOCK, TILL
 from wholesale.models import SalesOrder, TradeCustomer, TradeCustomerAddress
 
@@ -25,6 +25,8 @@ class Base(TestCase):
         self.staff.force_authenticate(self.staff_user)
         self.member = APIClient()
         self.member.force_authenticate(UserFactory(company=self.company))
+        self.warehouse = Location.objects.create(company=self.company, code='WH-1', name='Fake warehouse',
+                                                 type=Location.WAREHOUSE)  # G41: orders are picked from here
         self.customer = TradeCustomer.objects.create(company=self.company, account_code='C-1',
                                                      legal_name='E2E Fake Bistro Ltd', trading_name='Fake Bistro',
                                                      delivery_days=['fri'])

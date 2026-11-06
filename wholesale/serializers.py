@@ -309,6 +309,8 @@ class ResolveResponseSerializer(serializers.Serializer):
     lines = ResolvedLineSerializer(many=True)
 
 
+MAX_ORDER_UNITS = 100_000
+MAX_ORDER_KG = Decimal('10000')
 ORDER_SNAPSHOT_FIELDS = ['unit_price', 'price_source', 'price_list', 'price_list_name', 'min_quantity', 'vat_code',
                          'vat_rate', 'estimated_net', 'estimated_vat']
 
@@ -321,9 +323,10 @@ class SalesOrderLineSerializer(TenantModelSerializer):
     """
 
     product_name = serializers.CharField(source='product.name', read_only=True)
-    quantity = serializers.IntegerField(min_value=1, required=False, allow_null=True)
+    # Trade-sized caps, well inside the columns (and the 12-digit estimated totals).
+    quantity = serializers.IntegerField(min_value=1, max_value=MAX_ORDER_UNITS, required=False, allow_null=True)
     weight_kg = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=Decimal('0.001'),
-                                         required=False, allow_null=True)
+                                         max_value=MAX_ORDER_KG, required=False, allow_null=True)
 
     class Meta:
         model = SalesOrderLine
@@ -332,6 +335,8 @@ class SalesOrderLineSerializer(TenantModelSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
+        if 'product' not in attrs:  # a PATCH passes "partial" down, but a sent line is always a whole line
+            raise serializers.ValidationError({'product': 'This field is required.'})
         product, quantity, weight = attrs['product'], attrs.get('quantity'), attrs.get('weight_kg')
         if product.is_weighed and not product.is_catch_weight:
             if weight is None:

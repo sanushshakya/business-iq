@@ -71,7 +71,8 @@ def _ordered_amount(line):
 def confirm(order, user):
     """Price the lines (once) and confirm. Refused for a customer on hold or closed, or a line with no price."""
     order = _locked(order, S.CONFIRMED)
-    customer = TradeCustomer.objects.get(pk=order.customer_id)
+    # Locked like a customer edit, so a hold put on at the same moment is seen (or waits for this).
+    customer = TradeCustomer.objects.select_for_update().get(pk=order.customer_id)
     if customer.status != TradeCustomer.ACTIVE:
         raise OrderStateError(f'The customer is {customer.get_status_display().lower()}; it can\'t be confirmed.')
     lines = list(order.lines.select_related('product').order_by('id'))

@@ -134,6 +134,21 @@ class OrderApiTests(Base):
                 self.assertEqual(self.create(lines=lines).status_code, 400)
         self.assertFalse(SalesOrder.objects.exists())
 
+    def test_patched_lines_are_whole_lines(self):
+        order_id = self.create().json()['id']
+        response = self.staff.patch(self.detail(order_id), {'lines': [{'quantity': 3}]}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('product', response.json()['lines'][0])
+
+    def test_trade_sized_caps(self):
+        for line in ({'product': self.each.pk, 'quantity': 3_000_000_000},
+                     {'product': self.each.pk, 'quantity': 100_001},
+                     {'product': self.loose.pk, 'weight_kg': '10000.001'}):
+            with self.subTest(line=line):
+                self.assertEqual(self.create(lines=[line]).status_code, 400)
+        self.assertEqual(self.create(lines=[{'product': self.each.pk, 'quantity': 100_000},
+                                            {'product': self.loose.pk, 'weight_kg': '10000.000'}]).status_code, 201)
+
     def test_draft_edits_replace_lines_then_no_edits_after_confirm(self):
         order_id = self.create().json()['id']
         url = self.detail(order_id)

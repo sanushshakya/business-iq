@@ -255,3 +255,61 @@ class ProofOfDeliveryTests(Base):
     def test_numbers_are_per_company(self):
         self.assertEqual([self.plan(self.picked_order()).number, self.plan(self.picked_order()).number], [1, 2])
         self.assertEqual(DeliveryRun.objects.filter(company=self.company).count(), 2)
+
+
+class ReviewFixTests(Base):
+    def test_a_shortage_in_a_shared_dispatch_lot_stops_every_run_that_needs_it(self):
+        first, second = self.picked_order(rice=3), self.picked_order(rice=3)  # both from RICE-1 at DISPATCH
+        lot = StockBatch.objects.get(location=dispatch_location(self.company), product=self.rice)
+        with transaction.atomic():
+            move(StockBatch.objects.select_for_update().get(pk=lot.pk), 2, 'outbound',
+                 counterpart=virtual_location(self.company, 'waste'))
+        run = self.plan(first)
+        with self.assertRaises(RunError) as caught:
+            start_run(run, self.staff)  # 4 left for 6 picked: not taken from the other order
+        self.assertIn('RICE-1', str(caught.exception))
+        with self.assertRaises(RunError):
+            start_run(self.plan(second), self.staff)  # nor the other's: each sees the shortage
+
+    def test_a_short_van_still_completes_and_brings_back_what_is_there(self):
+        order = self.picked_order(rice=3)
+        run = self.plan(order)
+        start_run(run, self.staff)
+        lot = StockBatch.objects.get(location=self.van, product=self.rice)
+        with transaction.atomic():
+            move(StockBatch.objects.select_for_update().get(pk=lot.pk), 1, 'outbound',
+                 counterpart=virtual_location(self.company, 'waste'))
+        fail_stop(run.stops.get(), self.driver, 'Damaged in the van')
+        complete_run(run, self.staff)
+        dispatch = dispatch_location(self.company)
+        self.assertEqual(self.held(dispatch, self.rice), (2, D('0')))
+        self.assertEqual(self.held(self.van, self.rice), (0, D('0')))
+        self.assertEqual(self.status(order), 'picked')
+        self.assert_balances()
+
+    def test_a_sellable_van_is_refused(self):
+        order = self.picked_order()
+        Location.objects.filter(pk=self.van.pk).update(sellable=True)
+        self.van.refresh_from_db()
+        with self.assertRaises(RunError):
+            self.plan(order)
+        Location.objects.filter(pk=self.van.pk).update(sellable=False)
+        self.van.refresh_from_db()
+        run = self.plan(order)
+        Location.objects.filter(pk=self.van.pk).update(sellable=True, online_sellable=True)
+        with self.assertRaises(RunError):
+            start_run(run, self.staff)  # checked again when it goes out
+
+    def test_a_deactivated_driver_cannot_take_a_run_out(self):
+        run = self.plan(self.picked_order())
+        type(self.driver).objects.filter(pk=self.driver.pk).update(is_active=False)
+        with self.assertRaises(RunError):
+            start_run(run, self.staff)
+
+    def test_delivery_time_is_between_the_start_and_now(self):
+        run = self.plan(self.picked_order())
+        start_run(run, self.staff)
+        stop = run.stops.get()
+        for when in (timezone.now() + timedelta(hours=1), timezone.now() - timedelta(days=2)):
+            with self.subTest(when=when), self.assertRaises(RunError):
+                deliver(stop, self.driver, received_by='Fake Chef', delivered_at=when)

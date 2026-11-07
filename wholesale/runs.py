@@ -8,8 +8,11 @@ delivery moves them van -> CUSTOMER with proof of delivery and the order becomes
 is already issued, G43); completing brings stops not delivered back van -> DISPATCH and their orders to picked.
 """
 
+from datetime import timedelta
+from decimal import Decimal
+
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Sum
 from django.utils import timezone
 
 from inventory.ledger import LedgerError, dispatch_location, move, relocate, virtual_location
@@ -21,6 +24,7 @@ from .models import DeliveryRun, DeliveryStop, Invoice, SalesOrder, SalesOrderPi
 from .orders import OrderStateError, advance
 
 R, S = DeliveryRun, SalesOrder
+CLOCK_SLACK = timedelta(minutes=5)  # phones' clocks drift
 
 
 class RunError(ValueError):
@@ -34,6 +38,8 @@ def _is_staff(user):
 def _check_vehicle_and_driver(company_id, vehicle, driver):
     if vehicle.company_id != company_id or vehicle.type != Location.VAN or not vehicle.is_active:
         raise RunError(f'{vehicle.code} is not one of your active vans.')
+    if vehicle.sellable or vehicle.online_sellable:  # tills and the web would sell what is promised to the run
+        raise RunError(f'{vehicle.code} is sellable; a delivery van must not be.')
     if driver.company_id != company_id or not driver.is_operator or driver.role != DRIVER or not driver.is_active:
         raise RunError('The driver must be one of your operators with the driver role.')
 
@@ -120,17 +126,41 @@ def _order_lots(order, location):
     return moves
 
 
-def _relocate_order(order, source, to):
+def _relocate_order(order, source, to, *, what_is_there=False):
+    """Move the order's picks from ``source`` to ``to``. With ``what_is_there`` (bringing a van back), a lot
+    holding less than the picks moves what it holds: the rest was lost on the van, and is the van's to explain."""
     try:
         for lot, quantity, kg in _order_lots(order, source):
+            if what_is_there:
+                lot.refresh_from_db()
+                quantity = min(quantity, lot.quantity)
+                kg = None if kg is None else min(kg, lot.weight_kg)
+                if not quantity and not kg:
+                    continue
             relocate(lot, quantity=quantity, weight_kg=kg, to=to)
     except LedgerError as error:
         raise RunError(f'Order {order.number_display}: {error}') from None
 
 
+def _check_dispatch_covers_every_picked_order(order, dispatch):
+    """Orders share a lot at DISPATCH (same batch number). Before one order's run takes its share, the lot must
+    still cover every picked order's picks from it, so a shortage there stops each run that needs it instead of
+    being passed silently to the order that leaves last."""
+    for lot, _quantity, _kg in _order_lots(order, dispatch):
+        claims = SalesOrderPick.objects.filter(
+            line__order__status=S.PICKED, line__order__company_id=order.company_id,
+            batch__product_id=lot.product_id, batch__batch_number=lot.batch_number,
+        ).aggregate(units=Sum('quantity'), kg=Sum('weight_kg'))
+        units, kg = claims['units'] or 0, claims['kg'] or Decimal('0')
+        if lot.quantity < units or (lot.product.is_weighed and lot.weight_kg < kg):
+            raise RunError(f'Lot {lot.batch_number} at {dispatch.code} holds less than the picked orders need '
+                           f'({lot.quantity} of {units} units, {lot.weight_kg} of {kg} kg); check it first.')
+
+
 @transaction.atomic
 def start_run(run, user):
     run = _locked(run, R.PLANNED)
+    _check_vehicle_and_driver(run.company_id, run.vehicle, run.driver)  # still a van, still a driver
     stops = list(run.stops.select_related('order').order_by('order_id'))  # orders locked in id order
     if not stops:
         raise RunError('A run needs at least one stop.')
@@ -139,6 +169,7 @@ def start_run(run, user):
         order = S.objects.select_for_update().get(pk=stop.order_id)
         if order.status != S.PICKED:
             raise RunError(f'Order {order.number_display} is {order.get_status_display().lower()}, not picked.')
+        _check_dispatch_covers_every_picked_order(order, dispatch)
         _relocate_order(order, dispatch, run.vehicle)
         advance(order, S.DISPATCHED)
     run.status, run.started_at = R.OUT, timezone.now()
@@ -162,6 +193,9 @@ def deliver(stop, user, *, received_by, delivered_at=None, notes='', photo=None)
     if not received_by:
         raise RunError('Who received it?')
     run, stop = _stop(stop, user)
+    now = timezone.now()
+    if delivered_at is not None and not (run.started_at - CLOCK_SLACK <= delivered_at <= now + CLOCK_SLACK):
+        raise RunError('The delivery time must be between the start of the run and now.')
     order = S.objects.select_for_update().get(pk=stop.order_id)
     customer = virtual_location(run.company_id, Location.CUSTOMER)
     try:
@@ -202,7 +236,7 @@ def complete_run(run, user):
         if stop.status != DeliveryStop.FAILED:
             continue
         order = S.objects.select_for_update().get(pk=stop.order_id)
-        _relocate_order(order, run.vehicle, dispatch)  # back off the van
+        _relocate_order(order, run.vehicle, dispatch, what_is_there=True)  # back off the van
         advance(order, S.PICKED)
     run.status, run.completed_at = R.COMPLETED, timezone.now()
     run.save(update_fields=['status', 'completed_at'])

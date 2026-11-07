@@ -183,8 +183,8 @@ def send_invoice_email(invoice_id):
               f'{invoice.gross_total} GBP, due on {invoice.due_date:%d %B %Y}.\n\n{invoice.seller_name}'),
         from_email=settings.DEFAULT_FROM_EMAIL, to=[to],
     )
-    message.attach(f'{invoice.number_display}.pdf', build_invoice_pdf(invoice), 'application/pdf')
-    try:
+    try:  # building the PDF can fail too (e.g. odd text): staff see it as failed, not stuck on queued
+        message.attach(f'{invoice.number_display}.pdf', build_invoice_pdf(invoice), 'application/pdf')
         message.send(fail_silently=False)
     except Exception:  # noqa: BLE001 - SMTP errors are many and varied; the address is not logged
         logger.exception('Could not email invoice %s', invoice.number_display)
@@ -197,6 +197,15 @@ def _email_outcome(invoice, status, to):
     invoice.email_status, invoice.emailed_to = status, to
     invoice.emailed_at = timezone.now() if status == Invoice.SENT else invoice.emailed_at
     invoice.save(update_fields=['email_status', 'emailed_to', 'emailed_at'])
+
+
+@transaction.atomic
+def discard_draft(invoice):
+    """Delete a draft, re-checked under its row lock so an issue committed meanwhile is never deleted."""
+    locked = Invoice.objects.select_for_update().filter(pk=invoice.pk).first()
+    if locked is None or locked.status != Invoice.DRAFT:
+        raise InvoiceError('An issued invoice is kept; correct it with a credit note.')
+    locked.delete()
 
 
 def resend(invoice):

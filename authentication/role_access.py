@@ -103,6 +103,7 @@ ROLE_ROUTES = {
         + STOCK_ALERTS
         + _collection('pricing/price-changes', READ)
         # Picking trade orders (G42): read them, pick, propose swaps; approving swaps and the rest stay staff only.
+        # Trade invoices (G43, /wholesale/invoices/) are for staff and members only: no operator role has them.
         + _collection('wholesale/orders', READ)
         + _route(r'^/wholesale/orders/\d+/(start-pick|finish-pick|substitutions)/$', 'POST')
         + _route(r'^/wholesale/orders/\d+/picks/$', 'GET', 'POST')

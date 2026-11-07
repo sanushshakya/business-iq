@@ -478,9 +478,10 @@ class InvoiceViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveMo
         return response
 
     def perform_destroy(self, instance):
-        if instance.status != Invoice.DRAFT:
-            raise ValidationError({'detail': 'An issued invoice is kept; correct it with a credit note.'})
-        instance.delete()
+        try:
+            invoices.discard_draft(instance)
+        except invoices.InvoiceError as error:
+            raise ValidationError({'detail': str(error)}) from None
 
     @extend_schema(request=None, responses=InvoiceSerializer)
     @action(detail=True, methods=['post'])

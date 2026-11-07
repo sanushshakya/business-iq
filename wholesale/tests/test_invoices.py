@@ -262,3 +262,31 @@ class EmailTests(Base):
         invoice = create_invoice(self.mixed_order(), self.staff)
         self.assertEqual(self.send(invoice).email_status, 'not_sent')
         self.assertEqual(mail.outbox, [])
+
+
+class ReviewFixTests(Base):
+    def test_the_email_task_is_registered_through_wholesale_tasks(self):
+        from config.celery import app
+
+        import wholesale.tasks  # noqa: F401 - what the worker's autodiscovery imports
+
+        self.assertIn('wholesale.invoices.send_invoice_email', app.tasks)
+
+    def test_a_pdf_failure_is_recorded_not_raised(self):
+        invoice = self.issued()
+        with mock.patch('wholesale.invoice_pdf.build_invoice_pdf', side_effect=ValueError('bad text')):
+            invoices.send_invoice_email(invoice.pk)
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.email_status, 'failed')
+
+    def test_discarding_takes_drafts_only_and_rechecks_under_the_lock(self):
+        invoice = create_invoice(self.mixed_order(), self.staff)
+        stale = Invoice.objects.get(pk=invoice.pk)  # read as a draft...
+        with mock.patch.object(invoices.send_invoice_email, 'apply_async'):
+            issue(invoice, self.staff)  # ...then issued meanwhile
+        with self.assertRaises(InvoiceError):
+            invoices.discard_draft(stale)
+        self.assertTrue(Invoice.objects.filter(pk=invoice.pk, status='issued').exists())
+        draft = create_invoice(self.mixed_order(), self.staff)
+        invoices.discard_draft(draft)
+        self.assertFalse(Invoice.objects.filter(pk=draft.pk).exists())

@@ -7,6 +7,8 @@ from inventory.admin import ViewOnlyAdmin
 
 from .models import (
     CustomerGroup,
+    DeliveryRun,
+    DeliveryStop,
     Invoice,
     InvoiceLine,
     PriceList,
@@ -269,3 +271,32 @@ class InvoiceAdmin(TenantAdminMixin, ViewOnlyAdmin):
 @admin.register(InvoiceLine)
 class InvoiceLineAdmin(TenantAdminMixin, ViewOnlyAdmin):
     """Changed through the invoice only."""
+
+
+class DeliveryStopInline(admin.TabularInline):
+    model = DeliveryStop
+    extra = 0
+    can_delete = False
+    exclude = ('photo',)  # fetched through the run's endpoint only
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(DeliveryRun)
+class DeliveryRunAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """View only: runs move stock, so they change through the API (start, deliver, complete)."""
+
+    list_display = ('number_display', 'run_date', 'vehicle', 'driver', 'status')
+    list_filter = ('status', 'run_date')
+    inlines = [DeliveryStopInline]
+
+
+@admin.register(DeliveryStop)
+class DeliveryStopAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """Changed through the run only."""
+
+    exclude = ('photo',)

@@ -9,6 +9,8 @@ from inventory.models import Location, Product
 from .models import (
     WEEKDAYS,
     CustomerGroup,
+    DeliveryRun,
+    DeliveryStop,
     Invoice,
     InvoiceLine,
     PriceList,
@@ -601,3 +603,119 @@ class InvoiceSerializer(serializers.ModelSerializer):
         if order.company_id != self.context['request'].user.company_id:  # superusers included
             raise serializers.ValidationError("Another company's order can't be invoiced here.")
         return order
+
+
+PHOTO_SIGNATURES = {'png': (b'\x89PNG\r\n\x1a\n',), 'jpg': (b'\xff\xd8\xff',), 'jpeg': (b'\xff\xd8\xff',)}
+
+
+class DeliveryStopSerializer(serializers.ModelSerializer):
+    """A stop on a run, in driving order, with its proof of delivery. The photo is fetched from ``photo/``."""
+
+    order_number = serializers.CharField(source='order.number_display', read_only=True)
+    customer_code = serializers.CharField(source='order.customer.account_code', read_only=True)
+    customer_name = serializers.SerializerMethodField()
+    line1 = serializers.CharField(source='order.line1', read_only=True)
+    line2 = serializers.CharField(source='order.line2', read_only=True)
+    town = serializers.CharField(source='order.town', read_only=True)
+    postcode = serializers.CharField(source='order.postcode', read_only=True)
+    instructions = serializers.CharField(source='order.instructions', read_only=True)
+    has_photo = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DeliveryStop
+        fields = ['id', 'position', 'order', 'order_number', 'customer_code', 'customer_name', 'line1', 'line2',
+                  'town', 'postcode', 'instructions', 'status', 'received_by', 'delivered_at', 'notes', 'has_photo',
+                  'failed_reason', 'recorded_by']
+        read_only_fields = fields
+
+    def get_customer_name(self, stop) -> str:
+        customer = stop.order.customer
+        return customer.trading_name or customer.legal_name
+
+    def get_has_photo(self, stop) -> bool:
+        return bool(stop.photo)
+
+
+class DeliveryRunSerializer(TenantModelSerializer):
+    """
+    A delivery run (G44). ``orders`` (picked orders, in driving order) sets the stops on create and re-plans them
+    while the run is planned. Status moves through the actions: start, deliver/fail each stop, complete or cancel.
+    """
+
+    number_display = serializers.CharField(read_only=True)
+    vehicle_code = serializers.CharField(source='vehicle.code', read_only=True)
+    driver_name = serializers.CharField(source='driver.name', read_only=True)
+    orders = serializers.ListField(child=serializers.IntegerField(min_value=1), write_only=True, required=False,
+                                   max_length=200, help_text='Picked orders, in the order they are delivered.')
+    stops = DeliveryStopSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = DeliveryRun
+        fields = ['id', 'number', 'number_display', 'run_date', 'vehicle', 'vehicle_code', 'driver', 'driver_name',
+                  'status', 'note', 'orders', 'stops', 'created_by', 'created_at', 'started_at', 'completed_at']
+        read_only_fields = ['id', 'number', 'status', 'created_by', 'created_at', 'started_at', 'completed_at']
+
+    def get_fields(self):
+        fields = super().get_fields()
+        if self.instance is None:
+            fields['orders'].required = True
+        return fields
+
+    def _orders(self, ids):
+        company_id = self.context['request'].user.company_id
+        found = SalesOrder.objects.filter(company_id=company_id).in_bulk(ids)
+        missing = [order_id for order_id in ids if order_id not in found]
+        if missing:
+            raise serializers.ValidationError({'orders': f'Not your orders: {missing}.'})
+        return [found[order_id] for order_id in ids]
+
+    def create(self, validated_data):
+        from .runs import RunError, create_run
+
+        request = self.context['request']
+        try:
+            return create_run(request.user.company_id, request.user, run_date=validated_data['run_date'],
+                              vehicle=validated_data['vehicle'], driver=validated_data['driver'],
+                              orders=self._orders(validated_data['orders']), note=validated_data.get('note', ''))
+        except RunError as error:
+            raise serializers.ValidationError({'detail': str(error)}) from None
+
+    def update(self, instance, validated_data):
+        from .runs import RunError, update_run
+
+        orders = validated_data.get('orders')
+        try:
+            return update_run(instance, run_date=validated_data.get('run_date'),
+                              vehicle=validated_data.get('vehicle'), driver=validated_data.get('driver'),
+                              note=validated_data.get('note'),
+                              orders=None if orders is None else self._orders(orders))
+        except RunError as error:
+            raise serializers.ValidationError({'detail': str(error)}) from None
+
+
+class DeliverSerializer(serializers.Serializer):
+    """Proof of delivery: who received it, when (now if left out), notes, and an optional JPEG or PNG photo."""
+
+    received_by = serializers.CharField(max_length=120)
+    delivered_at = serializers.DateTimeField(required=False)
+    notes = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+    photo = serializers.FileField(required=False)
+
+    def validate_photo(self, upload):
+        from django.conf import settings
+
+        extension = upload.name.rsplit('.', 1)[-1].lower() if '.' in upload.name else ''
+        if extension not in PHOTO_SIGNATURES:
+            raise serializers.ValidationError('Upload a JPEG or PNG photo.')
+        if upload.size > settings.POD_MAX_UPLOAD_BYTES:
+            raise serializers.ValidationError(
+                f'The photo is larger than {settings.POD_MAX_UPLOAD_BYTES // (1024 * 1024)} MB.')
+        head = upload.read(8)
+        upload.seek(0)
+        if not any(head.startswith(signature) for signature in PHOTO_SIGNATURES[extension]):
+            raise serializers.ValidationError(f'This does not look like a real .{extension} photo.')
+        return upload
+
+
+class FailStopSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=255, help_text='Why it was not delivered.')

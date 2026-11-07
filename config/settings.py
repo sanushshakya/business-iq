@@ -262,6 +262,8 @@ USE_TZ = True
 # Uploaded files (supplier invoices). Never served publicly: downloads go through authenticated endpoints.
 MEDIA_ROOT = Path(config('MEDIA_ROOT', default=str(BASE_DIR / 'media')))
 INVOICE_MAX_UPLOAD_BYTES = config('INVOICE_MAX_UPLOAD_BYTES', default=10 * 1024 * 1024, cast=int)
+# Proof-of-delivery photos (G44): JPEG or PNG, served only through the run's endpoint.
+POD_MAX_UPLOAD_BYTES = config('POD_MAX_UPLOAD_BYTES', default=5 * 1024 * 1024, cast=int)
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/

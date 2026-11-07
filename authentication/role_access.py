@@ -10,7 +10,7 @@ permissions (for example staff-only writes to shared reference data) still say n
 
 import re
 
-from tenants.roles import DEMAND, FREIGHT, STOCK, SUPPLIER, TILL
+from tenants.roles import DEMAND, DRIVER, FREIGHT, STOCK, SUPPLIER, TILL
 
 READ = {'GET'}
 WRITE = {'GET', 'POST', 'PUT', 'PATCH', 'DELETE'}
@@ -109,6 +109,14 @@ ROLE_ROUTES = {
         + _route(r'^/wholesale/orders/\d+/picks/$', 'GET', 'POST')
         + _route(r'^/wholesale/orders/\d+/picks/\d+/$', 'DELETE')
         + _route(r'^/wholesale/orders/\d+/pick-list/$', 'GET')
+    ),
+    # Delivery runs (G44): a driver sees only their own runs (the viewset filters them), reads the manifest and
+    # records each stop; planning and moving runs is staff only.
+    DRIVER: (
+        _collection('wholesale/runs', READ)
+        + _route(r'^/wholesale/runs/\d+/manifest/$', 'GET')
+        + _route(r'^/wholesale/runs/\d+/stops/\d+/(deliver|fail)/$', 'POST')
+        + _route(r'^/wholesale/runs/\d+/stops/\d+/photo/$', 'GET')
     ),
 }
 

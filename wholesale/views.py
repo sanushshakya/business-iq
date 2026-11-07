@@ -1,13 +1,15 @@
 from datetime import date
 
 from django.db import IntegrityError, transaction
-from django.http import HttpResponse
+from django.http import FileResponse, Http404, HttpResponse
+from django.shortcuts import get_object_or_404
 from django.db.models import Prefetch, Q
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -15,14 +17,17 @@ from rest_framework.views import APIView
 from common.tenancy import TenantScopedMixin
 from inventory.models import StockReservation
 from inventory.views import CompanyMemberReadsStaffWrites
-from tenants.roles import STOCK
+from tenants.roles import DRIVER, STOCK
 from vat.services import uk_date
 
-from . import invoices, orders, picking
+from . import invoices, orders, picking, runs
+from .manifest_pdf import build_manifest_pdf
 from .invoice_pdf import build_invoice_pdf
 from .pick_list import build_pick_list
 from .models import (
     CustomerGroup,
+    DeliveryRun,
+    DeliveryStop,
     Invoice,
     PriceList,
     PriceListEntry,
@@ -35,6 +40,9 @@ from .pricing import resolve_prices
 from .serializers import (
     CancelOrderSerializer,
     CustomerGroupSerializer,
+    DeliverSerializer,
+    DeliveryRunSerializer,
+    FailStopSerializer,
     InvoiceSerializer,
     PickRequestSerializer,
     PriceListSerializer,
@@ -515,3 +523,130 @@ class InvoiceViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveMo
         response = HttpResponse(build_invoice_pdf(invoice), content_type='application/pdf')
         response['Content-Disposition'] = f'inline; filename="{invoice.number_display}.pdf"'
         return response
+
+
+RUN_STATUSES = {value for value, _label in DeliveryRun.STATUSES}
+
+
+def _is_driver(user):
+    return bool(getattr(user, 'is_operator', False)) and user.role == DRIVER
+
+
+class MayRecordDelivery(BasePermission):
+    """Staff, and drivers (only their own runs are in their queryset, so any other is a 404)."""
+
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(getattr(user, 'company_id', None)) and (user.is_staff or user.is_superuser or _is_driver(user))
+
+
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter('status', str, enum=sorted(RUN_STATUSES), description='Only runs in this status.'),
+    OpenApiParameter('date', OpenApiTypes.DATE, description='Only runs on this day.'),
+]))
+class DeliveryRunViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin,
+                         mixins.CreateModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
+    """
+    Delivery runs (G44): a date, a van, a driver and picked orders as stops in driving order. ``start`` moves the
+    orders from DISPATCH onto the van; each stop is delivered (proof of delivery) or failed; ``complete`` brings
+    stops not delivered back to DISPATCH. Staff plan and move runs; members read; a driver (operator role) sees only
+    their own runs and records their stops. No delete: cancel a planned run.
+    """
+
+    queryset = DeliveryRun.objects.select_related('vehicle', 'driver').prefetch_related('stops__order__customer')
+    serializer_class = DeliveryRunSerializer
+    permission_classes = [CompanyMemberReadsStaffWrites]
+    POD_ACTIONS = {'deliver', 'fail', 'photo'}
+
+    def get_permissions(self):
+        if self.action in self.POD_ACTIONS:
+            return [MayRecordDelivery()]
+        return super().get_permissions()
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if _is_driver(self.request.user):
+            queryset = queryset.filter(driver=self.request.user)
+        params = self.request.query_params
+        status = params.get('status')
+        if status is not None:
+            if status not in RUN_STATUSES:
+                raise ValidationError({'status': f'One of {", ".join(sorted(RUN_STATUSES))}.'})
+            queryset = queryset.filter(status=status)
+        day = _date_param(params, 'date')
+        if day is not None:
+            queryset = queryset.filter(run_date=day)
+        return queryset
+
+    def _done(self, step, *args, **kwargs):
+        try:
+            step(*args, **kwargs)
+        except runs.RunError as error:
+            raise ValidationError({'detail': str(error)}) from None
+        run = self.get_queryset().get(pk=self.kwargs['pk'])
+        return Response(self.get_serializer(run).data)
+
+    def _stop(self, stop_id):
+        return get_object_or_404(DeliveryStop, pk=stop_id, run=self.get_object())
+
+    @extend_schema(request=None, responses=DeliveryRunSerializer)
+    @action(detail=True, methods=['post'])
+    def start(self, request, pk=None):
+        """Take the run out: its orders move from DISPATCH onto the van and become dispatched."""
+        return self._done(runs.start_run, self.get_object(), request.user)
+
+    @extend_schema(request=None, responses=DeliveryRunSerializer)
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        """Close the run once every stop is recorded; stops not delivered go back to DISPATCH."""
+        return self._done(runs.complete_run, self.get_object(), request.user)
+
+    @extend_schema(request=None, responses=DeliveryRunSerializer)
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """Cancel a planned run; its orders can go on another."""
+        return self._done(runs.cancel_run, self.get_object(), request.user)
+
+    @extend_schema(request=DeliverSerializer, responses=DeliveryRunSerializer)
+    @action(detail=True, methods=['post'], url_path=r'stops/(?P<stop_id>\d+)/deliver', url_name='deliver',
+            parser_classes=[MultiPartParser, FormParser, JSONParser])
+    def deliver(self, request, pk=None, stop_id=None):
+        """Proof of delivery: who received it, when, notes, an optional photo. The order's stock goes to the
+        customer and the order is delivered (invoiced if its invoice is issued)."""
+        stop = self._stop(stop_id)
+        serializer = DeliverSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return self._done(runs.deliver, stop, request.user, **serializer.validated_data)
+
+    @extend_schema(request=FailStopSerializer, responses=DeliveryRunSerializer)
+    @action(detail=True, methods=['post'], url_path=r'stops/(?P<stop_id>\d+)/fail', url_name='fail')
+    def fail(self, request, pk=None, stop_id=None):
+        """Record a stop as not delivered, with the reason; its stock stays on the van until the run is completed."""
+        stop = self._stop(stop_id)
+        serializer = FailStopSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return self._done(runs.fail_stop, stop, request.user, serializer.validated_data['reason'])
+
+    @extend_schema(request=None, responses={(200, 'image/*'): OpenApiTypes.BINARY})
+    @action(detail=True, methods=['get'], url_path=r'stops/(?P<stop_id>\d+)/photo', url_name='photo')
+    def photo(self, request, pk=None, stop_id=None):
+        """A stop's proof-of-delivery photo (staff and the run's driver)."""
+        stop = self._stop(stop_id)
+        if not stop.photo:
+            raise Http404('No photo for this stop.')
+        extension = stop.photo.name.rsplit('.', 1)[-1].lower()
+        return FileResponse(stop.photo.open('rb'), content_type='image/png' if extension == 'png' else 'image/jpeg',
+                            filename=f'{run_label(stop)}.{extension}')
+
+    @extend_schema(request=None, responses={(200, 'application/pdf'): OpenApiTypes.BINARY})
+    @action(detail=True, methods=['get'])
+    def manifest(self, request, pk=None):
+        """The run's manifest (PDF): stops in driving order with addresses, goods and signature boxes."""
+        run = self.get_object()
+        response = HttpResponse(build_manifest_pdf(run), content_type='application/pdf')
+        response['Content-Disposition'] = f'inline; filename="manifest-{run.number_display}.pdf"'
+        return response
+
+
+def run_label(stop):
+    return f'pod-{stop.run.number_display}-stop-{stop.position}'

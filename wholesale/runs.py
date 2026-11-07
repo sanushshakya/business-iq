@@ -1,0 +1,217 @@
+"""
+Delivery runs (G44): planned -> out -> completed (or planned -> cancelled).
+
+A run takes picked orders (G42) on one of the company's vans, driven by an operator with the driver role, stops in
+the order given. The stock an order moves is its picks: each pick's lot has a twin with the same batch number at
+DISPATCH (and on the van), so starting moves those amounts DISPATCH -> van and the order becomes dispatched; a
+delivery moves them van -> CUSTOMER with proof of delivery and the order becomes delivered (invoiced if its invoice
+is already issued, G43); completing brings stops not delivered back van -> DISPATCH and their orders to picked.
+"""
+
+from django.db import transaction
+from django.db.models import Max
+from django.utils import timezone
+
+from inventory.ledger import LedgerError, dispatch_location, move, relocate, virtual_location
+from inventory.models import Location, StockBatch
+from tenants.models import Company
+from tenants.roles import DRIVER
+
+from .models import DeliveryRun, DeliveryStop, Invoice, SalesOrder, SalesOrderPick
+from .orders import OrderStateError, advance
+
+R, S = DeliveryRun, SalesOrder
+
+
+class RunError(ValueError):
+    """The run or stop can't make this move; the message is for the API."""
+
+
+def _is_staff(user):
+    return user.is_staff or user.is_superuser
+
+
+def _check_vehicle_and_driver(company_id, vehicle, driver):
+    if vehicle.company_id != company_id or vehicle.type != Location.VAN or not vehicle.is_active:
+        raise RunError(f'{vehicle.code} is not one of your active vans.')
+    if driver.company_id != company_id or not driver.is_operator or driver.role != DRIVER or not driver.is_active:
+        raise RunError('The driver must be one of your operators with the driver role.')
+
+
+def _lock_orders(company_id, orders, run=None):
+    """Lock the orders (in id order) and check each can go on ``run``: picked, ours, on no other active run."""
+    ids = [order.pk for order in orders]
+    if len(set(ids)) != len(ids):
+        raise RunError('Each order once per run.')
+    locked = {order.pk: order for order in S.objects.select_for_update().filter(pk__in=ids).order_by('pk')}
+    for order_id in ids:
+        order = locked.get(order_id)
+        if order is None or order.company_id != company_id:
+            raise RunError("Another company's order can't go on this run.")
+        if order.status != S.PICKED:
+            raise RunError(f'Order {order.number_display} is {order.get_status_display().lower()}, not picked.')
+        busy = DeliveryStop.objects.filter(order=order, run__status__in=[R.PLANNED, R.OUT])
+        if run is not None:
+            busy = busy.exclude(run=run)
+        if busy.exists():
+            raise RunError(f'Order {order.number_display} is already on another run.')
+    return [locked[order_id] for order_id in ids]
+
+
+def _write_stops(run, orders):
+    run.stops.all().delete()
+    DeliveryStop.objects.bulk_create(
+        DeliveryStop(run=run, order=order, position=position) for position, order in enumerate(orders, start=1))
+
+
+@transaction.atomic
+def create_run(company, user, *, run_date, vehicle, driver, orders, note=''):
+    company_id = getattr(company, 'pk', company)
+    _check_vehicle_and_driver(company_id, vehicle, driver)
+    Company.objects.select_for_update().get(pk=company_id)  # one number at a time per company
+    orders = _lock_orders(company_id, orders)
+    last = DeliveryRun.objects.filter(company_id=company_id).aggregate(last=Max('number'))['last']
+    run = DeliveryRun.objects.create(company_id=company_id, number=(last or 0) + 1, run_date=run_date,
+                                     vehicle=vehicle, driver=driver, note=note, created_by=user)
+    _write_stops(run, orders)
+    return run
+
+
+def _locked(run, *statuses):
+    run = DeliveryRun.objects.select_for_update().get(pk=run.pk)
+    if run.status not in statuses:
+        raise RunError(f'This run is {run.get_status_display().lower()}.')
+    return run
+
+
+@transaction.atomic
+def update_run(run, *, run_date=None, vehicle=None, driver=None, note=None, orders=None):
+    """Change a planned run; ``orders`` re-plans the stops in that order."""
+    run = _locked(run, R.PLANNED)
+    vehicle, driver = vehicle or run.vehicle, driver or run.driver
+    _check_vehicle_and_driver(run.company_id, vehicle, driver)
+    run.vehicle, run.driver = vehicle, driver
+    if run_date is not None:
+        run.run_date = run_date
+    if note is not None:
+        run.note = note
+    run.save()
+    if orders is not None:
+        _write_stops(run, _lock_orders(run.company_id, orders, run=run))
+    return run
+
+
+def set_stops(run, orders):
+    return update_run(run, orders=orders)
+
+
+def _order_lots(order, location):
+    """``[(lot at location, units, kg)]``: the order's picks, found at ``location`` by batch number."""
+    moves = []
+    picks = SalesOrderPick.objects.filter(line__order=order).select_related('batch', 'line__product').order_by(
+        'batch__product_id', 'batch__batch_number', 'pk')
+    for pick in picks:
+        lot = (StockBatch.objects.select_for_update(of=('self',)).select_related('location')
+               .filter(product_id=pick.batch.product_id, batch_number=pick.batch.batch_number, location=location)
+               .first())
+        if lot is None:
+            raise RunError(f'{pick.line.product.name} lot {pick.batch.batch_number} is not at {location.code}.')
+        moves.append((lot, pick.quantity, pick.weight_kg))
+    return moves
+
+
+def _relocate_order(order, source, to):
+    try:
+        for lot, quantity, kg in _order_lots(order, source):
+            relocate(lot, quantity=quantity, weight_kg=kg, to=to)
+    except LedgerError as error:
+        raise RunError(f'Order {order.number_display}: {error}') from None
+
+
+@transaction.atomic
+def start_run(run, user):
+    run = _locked(run, R.PLANNED)
+    stops = list(run.stops.select_related('order').order_by('order_id'))  # orders locked in id order
+    if not stops:
+        raise RunError('A run needs at least one stop.')
+    dispatch = dispatch_location(run.company_id)
+    for stop in stops:
+        order = S.objects.select_for_update().get(pk=stop.order_id)
+        if order.status != S.PICKED:
+            raise RunError(f'Order {order.number_display} is {order.get_status_display().lower()}, not picked.')
+        _relocate_order(order, dispatch, run.vehicle)
+        advance(order, S.DISPATCHED)
+    run.status, run.started_at = R.OUT, timezone.now()
+    run.save(update_fields=['status', 'started_at'])
+    return run
+
+
+def _stop(stop, user):
+    run = _locked(stop.run, R.OUT)
+    stop = DeliveryStop.objects.select_for_update().get(pk=stop.pk, run=run)
+    if stop.status != DeliveryStop.PENDING:
+        raise RunError(f'This stop is already {stop.get_status_display().lower()}.')
+    if not (_is_staff(user) or (user.pk == run.driver_id and user.company_id == run.company_id)):
+        raise RunError("Only staff or this run's driver record its deliveries.")
+    return run, stop
+
+
+@transaction.atomic
+def deliver(stop, user, *, received_by, delivered_at=None, notes='', photo=None):
+    received_by = (received_by or '').strip()
+    if not received_by:
+        raise RunError('Who received it?')
+    run, stop = _stop(stop, user)
+    order = S.objects.select_for_update().get(pk=stop.order_id)
+    customer = virtual_location(run.company_id, Location.CUSTOMER)
+    try:
+        for lot, quantity, kg in _order_lots(order, run.vehicle):
+            move(lot, quantity, 'outbound', counterpart=customer, weight_kg=kg if lot.product.is_weighed else None)
+        advance(order, S.DELIVERED)
+        if Invoice.objects.filter(order=order, status=Invoice.ISSUED).exists():
+            advance(order, S.INVOICED)
+    except (LedgerError, OrderStateError) as error:
+        raise RunError(str(error)) from None
+    stop.status, stop.received_by, stop.notes = DeliveryStop.DELIVERED, received_by[:120], notes or ''
+    stop.delivered_at, stop.recorded_by = delivered_at or timezone.now(), user
+    if photo is not None:
+        stop.photo = photo
+    stop.save()
+    return stop
+
+
+@transaction.atomic
+def fail_stop(stop, user, reason):
+    reason = (reason or '').strip()
+    if not reason:
+        raise RunError('Say why it was not delivered.')
+    _run, stop = _stop(stop, user)
+    stop.status, stop.failed_reason, stop.recorded_by = DeliveryStop.FAILED, reason[:255], user
+    stop.save(update_fields=['status', 'failed_reason', 'recorded_by'])
+    return stop
+
+
+@transaction.atomic
+def complete_run(run, user):
+    run = _locked(run, R.OUT)
+    stops = list(run.stops.order_by('order_id'))
+    if any(stop.status == DeliveryStop.PENDING for stop in stops):
+        raise RunError('Record every stop (delivered or not) before completing the run.')
+    dispatch = dispatch_location(run.company_id)
+    for stop in stops:
+        if stop.status != DeliveryStop.FAILED:
+            continue
+        order = S.objects.select_for_update().get(pk=stop.order_id)
+        _relocate_order(order, run.vehicle, dispatch)  # back off the van
+        advance(order, S.PICKED)
+    run.status, run.completed_at = R.COMPLETED, timezone.now()
+    run.save(update_fields=['status', 'completed_at'])
+    return run
+
+
+@transaction.atomic
+def cancel_run(run, user):
+    run = _locked(run, R.PLANNED)
+    run.status = R.CANCELLED
+    run.save(update_fields=['status'])
+    return run

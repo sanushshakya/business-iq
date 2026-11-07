@@ -29,7 +29,7 @@ TRANSITIONS = {
     S.CONFIRMED: {S.PICKING, S.CANCELLED},
     S.PICKING: {S.PICKED, S.CANCELLED},
     S.PICKED: {S.DISPATCHED},
-    S.DISPATCHED: {S.DELIVERED},
+    S.DISPATCHED: {S.DELIVERED, S.PICKED},  # back to picked: not delivered, returned to dispatch (G44)
     S.DELIVERED: {S.INVOICED},
     S.INVOICED: set(),
     S.CANCELLED: set(),

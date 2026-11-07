@@ -78,7 +78,7 @@ class StatusMachineTests(Base):
             'confirmed': {'picking', 'cancelled'},
             'picking': {'picked', 'cancelled'},
             'picked': {'dispatched'},
-            'dispatched': {'delivered'},
+            'dispatched': {'delivered', 'picked'},
             'delivered': {'invoiced'},
             'invoiced': set(),
             'cancelled': set(),

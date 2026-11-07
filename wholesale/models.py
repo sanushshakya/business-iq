@@ -8,6 +8,7 @@ tests.
 """
 
 import re
+import uuid
 from decimal import Decimal
 
 from django.conf import settings
@@ -554,3 +555,71 @@ def _refuse_if_issued(invoice_id):
 def _issued_invoices_are_kept(sender, instance, **kwargs):
     # Also runs for queryset deletes. An issued invoice is never deleted (numbers stay gap-free).
     _refuse_if_issued(instance.pk if sender is Invoice else instance.invoice_id)
+
+
+def pod_photo_path(instance, filename):
+    """``pod/<company>/<random>.<ext>``: the client's file name is never used."""
+    extension = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'bin'
+    return f'pod/{instance.run.company_id}/{uuid.uuid4().hex}.{extension}'
+
+
+class DeliveryRun(models.Model):
+    """
+    A van's delivery run (G44): a date, a van location, a driver (an operator with the driver role) and stops in
+    the order they are driven. Starting it moves the orders' picked lots from DISPATCH onto the van; each delivery
+    moves an order on to the customer; stops not delivered come back to DISPATCH when it is completed.
+    """
+
+    PLANNED, OUT, COMPLETED, CANCELLED = 'planned', 'out', 'completed', 'cancelled'
+    STATUSES = [(PLANNED, 'Planned'), (OUT, 'Out'), (COMPLETED, 'Completed'), (CANCELLED, 'Cancelled')]
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='delivery_runs')
+    number = models.PositiveIntegerField()  # per company: 1, 2, 3...
+    run_date = models.DateField()
+    vehicle = models.ForeignKey('inventory.Location', on_delete=models.PROTECT, related_name='delivery_runs')
+    driver = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='delivery_runs')
+    status = models.CharField(max_length=10, choices=STATUSES, default=PLANNED)
+    note = models.TextField(blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                   related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-run_date', '-number']
+        constraints = [models.UniqueConstraint(fields=['company', 'number'], name='unique_delivery_run_number')]
+
+    def __str__(self):
+        return self.number_display
+
+    @property
+    def number_display(self):
+        return f'RUN-{self.number:06d}'
+
+
+class DeliveryStop(models.Model):
+    """One order on a run, at its place in the drive, with its proof of delivery once delivered."""
+
+    PENDING, DELIVERED, FAILED = 'pending', 'delivered', 'failed'
+    STATUSES = [(PENDING, 'Pending'), (DELIVERED, 'Delivered'), (FAILED, 'Not delivered')]
+
+    run = models.ForeignKey(DeliveryRun, on_delete=models.CASCADE, related_name='stops')
+    order = models.ForeignKey(SalesOrder, on_delete=models.PROTECT, related_name='delivery_stops')
+    position = models.PositiveSmallIntegerField()
+    status = models.CharField(max_length=10, choices=STATUSES, default=PENDING)
+    # Proof of delivery. The recipient's name is personal data: shown to staff and the driver, never logged.
+    received_by = models.CharField(max_length=120, blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+    photo = models.FileField(upload_to=pod_photo_path, blank=True)
+    recorded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                    related_name='+')
+    failed_reason = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ['run', 'position']
+        constraints = [models.UniqueConstraint(fields=['run', 'position'], name='unique_stop_position')]
+
+    def __str__(self):
+        return f'Stop {self.position}'

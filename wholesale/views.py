@@ -15,6 +15,7 @@ from rest_framework.views import APIView
 from common.tenancy import TenantScopedMixin
 from inventory.models import StockReservation
 from inventory.views import CompanyMemberReadsStaffWrites
+from tenants.roles import STOCK
 from vat.services import uk_date
 
 from . import orders, picking
@@ -193,6 +194,15 @@ class IsCompanyMember(BasePermission):
         return bool(getattr(request.user, 'company_id', None))
 
 
+class MayPick(BasePermission):
+    """Staff, and the warehouse's stock operators (G42); other operators are stopped earlier by ``role_access``."""
+
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(getattr(user, 'company_id', None)) and (
+            user.is_staff or user.is_superuser or (user.is_operator and user.role == STOCK))
+
+
 class PriceResolveView(APIView):
     """
     What a trade customer pays per unit ex VAT (per kg for weighed products) for each line, on a UK date (today by
@@ -284,16 +294,16 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
         with transaction.atomic():  # the draft check and the edit happen under the order's lock
             super().perform_update(serializer)
 
-    # Picking (G42) is for anyone in the company who may reach it: staff, and the stock operator role through
-    # role_access. Approving a swap stays staff only (and never the proposer: wholesale.picking.decide).
+    # Picking (G42) is for staff and the stock operator role (also listed in role_access). Approving a swap stays
+    # staff only (and never the proposer: wholesale.picking.decide).
     PICKING_ACTIONS = {'start_pick', 'finish_pick', 'picks', 'pick', 'substitutions', 'pick_list'}
 
     def get_permissions(self):
         if self.action in self.PICKING_ACTIONS:
-            return [IsCompanyMember()]
+            return [MayPick()]
         return super().get_permissions()
 
-    def _moved(self, step, *args, status_code=200, **kwargs):
+    def _moved(self, step, *args, **kwargs):
         try:
             result = step(self.get_object(), *args, **kwargs)
         except orders.OrderStateError as error:

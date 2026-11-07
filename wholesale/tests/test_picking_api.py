@@ -164,7 +164,7 @@ class PickingApiTests(TestCase):
         member = APIClient()
         member.force_authenticate(UserFactory(company=self.company))
         self.assertEqual(self.post('picks', client=member, line=self.line_id(self.rice), batch_number='RICE-1',
-                                   quantity=1).status_code, 201)  # any company member may pick
+                                   quantity=1).status_code, 403)  # staff and the stock role pick, not members
 
     def test_tenancy(self):
         theirs = SalesOrder.objects.create(company=CompanyFactory(), number=1, customer=TradeCustomer.objects.create(

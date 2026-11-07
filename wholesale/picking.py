@@ -18,7 +18,7 @@ from rest_framework import serializers
 
 from inventory.ledger import LedgerError, dispatch_location, pick_batch, reserved_by_batch
 from inventory.models import StockBatch, StockReservation
-from inventory.reservations import release
+from inventory.reservations import hold_picked, release
 from sales.labels import read_label
 
 from .models import KG, SalesOrder, SalesOrderLine, SalesOrderPick, TradeCustomer
@@ -50,8 +50,9 @@ def start_pick(order):
     return advance(order, S.PICKING)
 
 
-def _amounts(product, quantity, weight_kg):
-    """Check the amounts a kind of product is picked (or swapped) in: units, kg (loose), or pieces and kg."""
+def _amounts(product, quantity, weight_kg, *, need_kg=True):
+    """Check the amounts a kind of product is picked (or swapped) in: units, kg (loose), or pieces and kg (a swap
+    of a catch-weight product is pieces only: its kg is estimated from the nominal weight)."""
     if weight_kg is not None and (weight_kg <= 0 or weight_kg != weight_kg.quantize(KG)):
         raise OrderStateError('Kg above 0, to 3 decimal places.')
     if quantity is not None and quantity < 1:
@@ -62,7 +63,7 @@ def _amounts(product, quantity, weight_kg):
         return 0, weight_kg
     if quantity is None:
         raise OrderStateError(f'Give how many {"pieces" if product.is_weighed else "units"} of {product.name}.')
-    if product.is_catch_weight and weight_kg is None:
+    if product.is_catch_weight and need_kg and weight_kg is None:
         raise OrderStateError(f'{product.name} is weighed per piece: give the kg too.')
     if not product.is_weighed and weight_kg is not None:
         raise OrderStateError(f'{product.name} is sold by each: no kg.')
@@ -95,6 +96,11 @@ def _available(order, line, batch):
     picked = SalesOrderPick.objects.filter(line__order=order, batch=batch).aggregate(
         total=Sum('weight_kg' if loose else 'quantity'))['total'] or 0
     return held - others - picked
+
+
+def _others_hold(order, batch):
+    return StockReservation.objects.filter(batch=batch, released_at__isnull=True).exclude(
+        order_line__order=order).exists()
 
 
 @transaction.atomic
@@ -136,14 +142,26 @@ def record_pick(order, line_id, *, user, batch_number=None, barcode=None, quanti
         if quantity > _available(order, line, batch):
             raise OrderStateError(f'Lot {batch.batch_number} has only {max(_available(order, line, batch), 0)} '
                                   'free for this order.')
-    elif _available(order, line, batch) <= 0:
-        raise OrderStateError(f'Lot {batch.batch_number} has nothing free for this order.')
+    else:
+        # Real kg may be over the recorded kg (up to 20% of what is there), but only where nobody else holds part
+        # of the lot: then the extra would be theirs.
+        available = _available(order, line, batch)
+        limit = available if _others_hold(order, batch) else (available * KG_TOLERANCE).quantize(KG)
+        if available <= 0 or weight_kg > limit:
+            raise OrderStateError(f'Lot {batch.batch_number} has {max(available, 0)} kg for this order; '
+                                  'check the lot or the weight.')
     if product.is_weighed:
         ordered_kg = line.weight_kg
+        if ordered_kg is None:
+            raise OrderStateError(f'{product.name} has no ordered kg; confirm the order again.')
         if (picked['kg'] or 0) + weight_kg > (ordered_kg * KG_TOLERANCE).quantize(KG):
             raise OrderStateError(f'{ordered_kg} kg ordered; more than 20% over is not picked.')
-    return SalesOrderPick.objects.create(line=line, batch=batch, quantity=quantity, weight_kg=weight_kg,
+    pick = SalesOrderPick.objects.create(line=line, batch=batch, quantity=quantity, weight_kg=weight_kg,
                                          barcode=(barcode or '')[:64], picked_by=user)
+    field = 'weight_kg' if _loose(product) else 'quantity'
+    picked_by_batch = dict(line.picks.values('batch_id').annotate(total=Sum(field)).values_list('batch_id', 'total'))
+    hold_picked(line, picked_by_batch)  # what is in the picker's hands stays this order's until the finish
+    return pick
 
 
 @transaction.atomic
@@ -166,7 +184,7 @@ def propose_substitute(order, line_id, product, *, user, quantity=None, weight_k
         raise OrderStateError('That is the product ordered.')
     if line.substitutes.filter(substitution=SalesOrderLine.PROPOSED).exists():
         raise OrderStateError('A swap for this line is already waiting for approval.')
-    quantity, weight_kg = _amounts(product, quantity, weight_kg if _loose(product) else None)
+    quantity, weight_kg = _amounts(product, quantity, weight_kg if _loose(product) else None, need_kg=False)
     return SalesOrderLine.objects.create(
         order=order, product=product, quantity=quantity if not _loose(product) else None,
         weight_kg=weight_kg if _loose(product) else None, substitute_for=line,
@@ -202,7 +220,8 @@ def finish_pick(order, user):
     lines = list(order.lines.select_related('product'))
     if any(line.substitution == SalesOrderLine.PROPOSED for line in lines):
         raise OrderStateError('A swap is waiting for approval.')
-    picks = list(SalesOrderPick.objects.filter(line__order=order).order_by('batch_id', 'pk'))
+    # Products, then lots, in id order, as tills and confirm lock them, so nothing waits on us in a circle.
+    picks = list(SalesOrderPick.objects.filter(line__order=order).order_by('batch__product_id', 'batch_id', 'pk'))
     if not picks:
         raise OrderStateError('Nothing has been picked.')
     release(order)
@@ -212,7 +231,7 @@ def finish_pick(order, user):
         try:
             pick_batch(batch, quantity=pick.quantity, weight_kg=pick.weight_kg, to=dispatch)
         except LedgerError as error:
-            raise OrderStateError(str(error)) from None
+            raise OrderStateError(f'{error} Remove that pick, or pick it again from another lot.') from None
     for line in lines:
         if line.substitution == SalesOrderLine.REJECTED:
             continue

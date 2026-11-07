@@ -263,3 +263,67 @@ class SubstitutionTests(Base):
             decide(self.order_, substitute.pk, approve=True, user=self.other_staff)
         substitute.refresh_from_db()
         self.assertEqual(substitute.substitution, 'proposed')
+
+
+class ReviewFixTests(Base):
+    def test_a_catch_weight_swap_is_proposed_in_pieces(self):
+        self.stock(self.each, 5, number='EACH-1')
+        self.stock(self.catch, 4, kg=D('6.000'), number='CW-1')
+        order = self.order((self.each, 5, None))
+        swap = propose_substitute(order, self.line(order, self.each).pk, self.catch, quantity=2, user=self.staff)
+        decide(order, swap.pk, approve=True, user=self.other_staff)
+        swap.refresh_from_db()
+        self.assertEqual((swap.quantity, swap.weight_kg, swap.unit_price), (2, D('3.000'), D('6.0000')))
+
+    def test_picked_free_stock_is_held_until_finish(self):
+        batch = self.stock(self.each, 5, number='EACH-1')
+        first = self.order((self.each, 2, None))  # reserves 2 of the 5
+        StockReservation.objects.filter(order_line__order=first).update(released_at=timezone.now())  # e.g. lost
+        record_pick(first, self.line(first, self.each).pk, batch_number='EACH-1', quantity=2, user=self.staff)
+        second = self.order((self.each, 5, None))  # may only reserve the 3 not in the picker's hands
+        self.assertEqual(StockReservation.objects.filter(order_line__order=second, released_at__isnull=True)
+                         .aggregate(s=Sum('quantity'))['s'], 3)
+        finish_pick(first, self.staff)
+        batch.refresh_from_db()
+        self.assertEqual(batch.quantity, 3)
+
+    def test_a_pick_from_another_lot_moves_the_lines_hold_there(self):
+        self.stock(self.each, 3, number='A', days=10)
+        self.stock(self.each, 3, number='B', days=20)
+        order = self.order((self.each, 3, None))  # reserves A
+        record_pick(order, self.line(order, self.each).pk, batch_number='B', quantity=3, user=self.staff)
+        held = dict(StockReservation.objects.filter(order_line__order=order, released_at__isnull=True)
+                    .values('batch__batch_number').annotate(s=Sum('quantity')).values_list('batch__batch_number', 's'))
+        self.assertEqual(held, {'B': 3})  # A is free again for others
+
+    def test_loose_pick_never_goes_over_free_kg_while_another_order_holds_the_lot(self):
+        batch = self.stock(self.loose, kg=D('10.000'), number='LOOSE-1')
+        self.order((self.loose, None, D('9.000')))  # holds 9 of the 10 kg
+        order = self.order((self.loose, None, D('5.000')))  # only 1 kg left for it
+        with self.assertRaises(OrderStateError):
+            self.pick(order, self.loose, batch_number='LOOSE-1', weight_kg=D('1.001'))
+        self.pick(order, self.loose, batch_number='LOOSE-1', weight_kg=D('1.000'))
+        finish_pick(order, self.staff)
+        batch.refresh_from_db()
+        self.assertEqual(batch.weight_kg, D('9.000'))  # the other order's 9 kg is still there
+        self.assertFalse(StockMovement.objects.filter(source_location__type='adjustment').exists())
+
+    def test_ledger_books_no_kg_gap_into_a_lot_others_hold(self):
+        from inventory.ledger import LedgerError, pick_batch
+
+        batch = self.stock(self.loose, kg=D('10.000'), number='LOOSE-1')
+        self.order((self.loose, None, D('9.000')))
+        with transaction.atomic(), self.assertRaises(LedgerError):
+            pick_batch(StockBatch.objects.select_for_update().select_related('location').get(pk=batch.pk),
+                       quantity=0, weight_kg=D('1.500'), to=dispatch_location(self.company))
+
+
+class PickAdminTests(TestCase):
+    def test_picks_are_view_only(self):
+        from django.contrib import admin
+
+        model_admin = admin.site._registry[SalesOrderPick]
+        request = type('Request', (), {'user': UserFactory(is_staff=True, is_superuser=True)})()
+        for allowed in (model_admin.has_add_permission(request), model_admin.has_change_permission(request),
+                        model_admin.has_delete_permission(request)):
+            self.assertFalse(allowed)

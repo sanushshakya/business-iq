@@ -11,6 +11,7 @@ from .models import (
     PriceListEntry,
     SalesOrder,
     SalesOrderLine,
+    SalesOrderPick,
     TradeCustomer,
     TradeCustomerAddress,
     TradeCustomerContact,
@@ -231,3 +232,11 @@ class SalesOrderAdmin(TenantAdminMixin, ViewOnlyAdmin):
 @admin.register(SalesOrderLine)
 class SalesOrderLineAdmin(TenantAdminMixin, ViewOnlyAdmin):
     """Changed through the order only."""
+
+
+@admin.register(SalesOrderPick)
+class SalesOrderPickAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """View only: a finished pick is the record of what moved to dispatch (G42)."""
+
+    list_display = ('line', 'batch', 'quantity', 'weight_kg', 'picked_at')
+    list_select_related = ('line__product', 'batch')

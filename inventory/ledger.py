@@ -335,6 +335,9 @@ def pick_batch(batch, *, quantity, weight_kg, to, today=None):
     if product.is_weighed:
         free_kg = kg - reserved if loose else kg
         if free_kg < weight_kg:
+            if reserved:  # the extra kg would be someone else's: never book it in as a recording gap
+                raise LedgerError(f'Only {free_kg} kg free in batch {batch.batch_number}; the rest is reserved.',
+                                  available=free_kg)
             move(batch, 0, 'inbound', counterpart=adjustment, weight_kg=weight_kg - free_kg)
     lot, _ = StockBatch.objects.get_or_create(
         product_id=batch.product_id, batch_number=batch.batch_number, location=to,

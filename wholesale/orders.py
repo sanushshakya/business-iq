@@ -154,7 +154,9 @@ def allocate(order, user):
     if order.status not in (S.CONFIRMED, S.PICKING):
         raise OrderStateError(f'A {order.get_status_display().lower()} order holds no stock to top up.')
     source = _source(order)
-    _reserve_all(order, list(order.lines.select_related('product')), source)
+    lines = order.lines.select_related('product').exclude(
+        substitution__in=[SalesOrderLine.PROPOSED, SalesOrderLine.REJECTED])  # a swap holds stock once approved
+    _reserve_all(order, list(lines), source)
     return order
 
 

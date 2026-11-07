@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 
 from django.db import transaction
@@ -8,13 +9,17 @@ from inventory.models import Location, Product
 
 from .models import (
     WEEKDAYS,
+    CreditNote,
+    CreditNoteLine,
     CustomerGroup,
+    CustomerReturn,
     DeliveryRun,
     DeliveryStop,
     Invoice,
     InvoiceLine,
     PriceList,
     PriceListEntry,
+    ReturnLine,
     SalesOrder,
     SalesOrderLine,
     SalesOrderPick,
@@ -693,8 +698,33 @@ class DeliveryRunSerializer(TenantModelSerializer):
             raise serializers.ValidationError({'detail': str(error)}) from None
 
 
+class ReturnRequestLineSerializer(serializers.Serializer):
+    line = serializers.IntegerField(min_value=1, help_text='The order line.')
+    quantity = serializers.IntegerField(min_value=1, max_value=MAX_ORDER_UNITS, required=False)
+    weight_kg = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=Decimal('0.001'),
+                                        max_value=MAX_ORDER_KG, required=False)
+    reason = serializers.ChoiceField(choices=ReturnLine.REASONS)
+
+
+class RefusedField(serializers.JSONField):
+    """Refused amounts per line (G45): a list, or the same list as a JSON string in a multipart form."""
+
+    def to_internal_value(self, data):
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except ValueError:
+                raise serializers.ValidationError('A JSON list of refused lines.') from None
+        lines = ReturnRequestLineSerializer(data=data, many=True)
+        lines.is_valid(raise_exception=True)
+        return lines.validated_data
+
+
 class DeliverSerializer(serializers.Serializer):
-    """Proof of delivery: who received it, when (now if left out), notes, and an optional JPEG or PNG photo."""
+    """Proof of delivery: who received it, when (now if left out), notes, and an optional JPEG or PNG photo.
+    ``refused`` (G45) lists what the customer refused at the door, by line, with a reason."""
+
+    refused = RefusedField(required=False, help_text='[{line, quantity?, weight_kg?, reason}]')
 
     received_by = serializers.CharField(max_length=120)
     delivered_at = serializers.DateTimeField(required=False)
@@ -719,3 +749,79 @@ class DeliverSerializer(serializers.Serializer):
 
 class FailStopSerializer(serializers.Serializer):
     reason = serializers.CharField(max_length=255, help_text='Why it was not delivered.')
+
+
+class ReturnLineSerializer(serializers.ModelSerializer):
+    product = serializers.IntegerField(source='order_line.product_id', read_only=True)
+    product_name = serializers.CharField(source='order_line.product.name', read_only=True)
+
+    class Meta:
+        model = ReturnLine
+        fields = ['id', 'order_line', 'product', 'product_name', 'batch_number', 'quantity', 'weight_kg', 'reason',
+                  'disposition', 'location']
+        read_only_fields = fields
+
+
+class CustomerReturnSerializer(serializers.ModelSerializer):
+    """Goods given back (G45): refused at the door (``door``) or returned later (``later``), line by lot."""
+
+    number_display = serializers.CharField(read_only=True)
+    order_number = serializers.CharField(source='order.number_display', read_only=True)
+    lines = ReturnLineSerializer(many=True, read_only=True)
+    credit_note = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CustomerReturn
+        fields = ['id', 'number', 'number_display', 'order', 'order_number', 'stop', 'kind', 'status', 'note',
+                  'lines', 'credit_note', 'created_by', 'created_at', 'received_at']
+        read_only_fields = fields
+
+    def get_credit_note(self, customer_return) -> int | None:
+        note = CreditNote.objects.filter(customer_return=customer_return).values_list('pk', flat=True).first()
+        return note
+
+
+class LaterReturnLineSerializer(ReturnRequestLineSerializer):
+    location = serializers.PrimaryKeyRelatedField(queryset=Location.objects.all(), required=False,
+                                                  help_text="Where restocked goods go (default: the order's "
+                                                            'warehouse).')
+
+
+class LaterReturnSerializer(serializers.Serializer):
+    lines = LaterReturnLineSerializer(many=True, allow_empty=False, max_length=200)
+    note = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+
+
+class CreditNoteLineSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CreditNoteLine
+        fields = ['id', 'invoice_line', 'description', 'quantity', 'weight_kg', 'unit_price', 'vat_code',
+                  'vat_rate', 'net', 'vat', 'gross']
+        read_only_fields = fields
+
+
+class CreditNoteSerializer(serializers.ModelSerializer):
+    """
+    A credit note (G45): POST ``{customer_return}`` drafts it against the order's issued invoice; ``issue``
+    numbers and freezes it. It never credits more than the invoice billed.
+    """
+
+    number_display = serializers.CharField(read_only=True)
+    invoice_number = serializers.CharField(source='invoice.number_display', read_only=True)
+    lines = CreditNoteLineSerializer(many=True, read_only=True)
+    vat_summary = VatSummaryRowSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = CreditNote
+        fields = [
+            'id', 'customer_return', 'invoice', 'invoice_number', 'status', 'number', 'number_display',
+            'credit_date', 'seller_name', 'seller_vat_number', 'customer_code', 'customer_name',
+            'customer_vat_number', 'lines', 'net_total', 'vat_total', 'gross_total', 'vat_summary', 'created_by',
+            'created_at', 'issued_by', 'issued_at', 'emailed_to', 'emailed_at', 'email_status',
+        ]
+        read_only_fields = [name for name in fields if name != 'customer_return']
+
+    def validate_customer_return(self, customer_return):
+        if customer_return.company_id != self.context['request'].user.company_id:  # superusers included
+            raise serializers.ValidationError("Another company's return can't be credited here.")
+        return customer_return

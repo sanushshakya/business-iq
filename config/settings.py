@@ -147,6 +147,10 @@ SPECTACULAR_SETTINGS = {
         "SaleExceptionKindEnum": "sales.models.SaleException.KINDS",
         "YieldOutputKindEnum": "inventory.models.YieldTemplateOutput.KINDS",
         "TradeCustomerStatusEnum": "wholesale.models.TradeCustomer.STATUSES",
+        "CustomerReturnStatusEnum": "wholesale.models.CustomerReturn.STATUSES",
+        "ReturnReasonEnum": "wholesale.models.ReturnLine.REASONS",
+        "DocumentStatusEnum": "wholesale.models.Invoice.STATUSES",  # invoices and credit notes
+        "WriteOffReasonEnum": "inventory.models.WriteOff.REASONS",
     },
 }
 

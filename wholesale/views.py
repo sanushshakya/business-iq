@@ -20,12 +20,14 @@ from inventory.views import CompanyMemberReadsStaffWrites
 from tenants.roles import DRIVER, STOCK
 from vat.services import uk_date
 
-from . import invoices, orders, picking, runs
+from . import credit_notes, invoices, orders, picking, returns, runs
 from .manifest_pdf import build_manifest_pdf
-from .invoice_pdf import build_invoice_pdf
+from .invoice_pdf import build_credit_note_pdf, build_invoice_pdf
 from .pick_list import build_pick_list
 from .models import (
+    CreditNote,
     CustomerGroup,
+    CustomerReturn,
     DeliveryRun,
     DeliveryStop,
     Invoice,
@@ -39,11 +41,14 @@ from .models import (
 from .pricing import resolve_prices
 from .serializers import (
     CancelOrderSerializer,
+    CreditNoteSerializer,
     CustomerGroupSerializer,
+    CustomerReturnSerializer,
     DeliverSerializer,
     DeliveryRunSerializer,
     FailStopSerializer,
     InvoiceSerializer,
+    LaterReturnSerializer,
     PickRequestSerializer,
     PriceListSerializer,
     ResolveRequestSerializer,
@@ -427,6 +432,25 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
         """Reject a proposed swap (staff, not the proposer)."""
         return self._decide(line_id, False)
 
+    @extend_schema(request=LaterReturnSerializer, responses={201: CustomerReturnSerializer})
+    @action(detail=True, methods=['post'])
+    def returns(self, request, pk=None):
+        """Record goods the customer gave back after delivery (G45): to stock or waste by reason, at once."""
+        order = self.get_object()
+        serializer = LaterReturnSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        lines = [dict(line) for line in serializer.validated_data['lines']]
+        for line in lines:
+            location = line.get('location')
+            if location is not None and location.company_id != order.company_id:
+                raise ValidationError({'lines': "Another company's location can't take stock."})
+        try:
+            customer_return = returns.record_return(order, request.user, lines,
+                                                    note=serializer.validated_data.get('note', ''))
+        except returns.ReturnError as error:
+            raise ValidationError({'detail': str(error)}) from None
+        return Response(CustomerReturnSerializer(customer_return).data, status=201)
+
     @extend_schema(request=None, responses={(200, 'application/pdf'): OpenApiTypes.BINARY})
     @action(detail=True, methods=['get'], url_path='pick-list', url_name='pick-list')
     def pick_list(self, request, pk=None):
@@ -650,3 +674,87 @@ class DeliveryRunViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retrie
 
 def run_label(stop):
     return f'pod-{stop.run.number_display}-stop-{stop.position}'
+
+
+RETURN_KINDS = {value for value, _label in CustomerReturn.KINDS}
+
+
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter('order', int, description="Only this order's returns."),
+    OpenApiParameter('kind', str, enum=sorted(RETURN_KINDS), description='door or later.'),
+]))
+class CustomerReturnViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin,
+                            viewsets.GenericViewSet):
+    """Goods given back (G45): refusals recorded at the door and returns recorded on the order. Members read."""
+
+    queryset = CustomerReturn.objects.select_related('order').prefetch_related('lines__order_line__product')
+    serializer_class = CustomerReturnSerializer
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        order = _id_param(params, 'order')
+        if order is not None:
+            queryset = queryset.filter(order_id=order)
+        kind = params.get('kind')
+        if kind is not None:
+            if kind not in RETURN_KINDS:
+                raise ValidationError({'kind': 'door or later.'})
+            queryset = queryset.filter(kind=kind)
+        return queryset
+
+
+class CreditNoteViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin,
+                        mixins.CreateModelMixin, mixins.DestroyModelMixin, viewsets.GenericViewSet):
+    """
+    Credit notes (G45). POST ``{customer_return}`` drafts one against the order's issued invoice; ``issue`` numbers
+    (``CN-``, gap-free per company), freezes and emails it. Only drafts are deleted. Members read; staff write.
+    """
+
+    queryset = CreditNote.objects.select_related('invoice').prefetch_related('lines')
+    serializer_class = CreditNoteSerializer
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    def _done(self, step, *args):
+        try:
+            note = step(*args)
+        except credit_notes.CreditNoteError as error:
+            raise ValidationError({'detail': str(error)}) from None
+        note = note or self.get_object()
+        return Response(self.get_serializer(self.get_queryset().get(pk=note.pk)).data)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        response = self._done(credit_notes.create_credit_note, serializer.validated_data['customer_return'],
+                              request.user)
+        response.status_code = 201
+        return response
+
+    def perform_destroy(self, instance):
+        try:
+            credit_notes.discard_draft(instance)
+        except credit_notes.CreditNoteError as error:
+            raise ValidationError({'detail': str(error)}) from None
+
+    @extend_schema(request=None, responses=CreditNoteSerializer)
+    @action(detail=True, methods=['post'])
+    def issue(self, request, pk=None):
+        """Number, freeze and email the credit note; refused if it would credit more than was invoiced."""
+        return self._done(credit_notes.issue_credit_note, self.get_object(), request.user)
+
+    @extend_schema(request=None, responses=CreditNoteSerializer)
+    @action(detail=True, methods=['post'])
+    def email(self, request, pk=None):
+        """Send an issued credit note's PDF to the customer again."""
+        return self._done(credit_notes.resend, self.get_object())
+
+    @extend_schema(request=None, responses={(200, 'application/pdf'): OpenApiTypes.BINARY})
+    @action(detail=True, methods=['get'])
+    def pdf(self, request, pk=None):
+        """The credit note as a PDF."""
+        note = self.get_object()
+        response = HttpResponse(build_credit_note_pdf(note), content_type='application/pdf')
+        response['Content-Disposition'] = f'inline; filename="{note.number_display}.pdf"'
+        return response

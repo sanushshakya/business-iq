@@ -6,13 +6,17 @@ from common.tenancy import TenantAdminMixin
 from inventory.admin import ViewOnlyAdmin
 
 from .models import (
+    CreditNote,
+    CreditNoteLine,
     CustomerGroup,
+    CustomerReturn,
     DeliveryRun,
     DeliveryStop,
     Invoice,
     InvoiceLine,
     PriceList,
     PriceListEntry,
+    ReturnLine,
     SalesOrder,
     SalesOrderLine,
     SalesOrderPick,
@@ -300,3 +304,8 @@ class DeliveryStopAdmin(TenantAdminMixin, ViewOnlyAdmin):
     """Changed through the run only."""
 
     exclude = ('photo',)
+
+
+@admin.register(CustomerReturn, ReturnLine, CreditNote, CreditNoteLine)
+class ReturnsAndCreditsAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """View only: returns move stock and credit notes are frozen once issued (G45); both change through the API."""

@@ -9,6 +9,7 @@ requests>=2.31
 whitenoise>=6.6
 pyotp>=2.9,<3          # staff two-factor sign-in (TOTP)
 segno>=1.6,<2          # enrolment QR code as SVG (pure Python)
+reportlab>=4.2,<6      # pick lists (G42), later invoices and manifests, as PDF
 
 # Database
 psycopg2-binary>=2.9.9

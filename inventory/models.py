@@ -80,6 +80,11 @@ class Product(models.Model):
         max_digits=12, decimal_places=4, null=True, blank=True, validators=[MinValueValidator(Decimal('0'))],
         help_text='Trade price ex VAT (per kg when sold by weight), when no price list applies.',
     )
+    # Where it is kept, for pick lists (G42); blank: butchery for weighed products, ambient otherwise.
+    AMBIENT, CHILLED, FROZEN, BUTCHERY_ZONE = 'ambient', 'chilled', 'frozen', 'butchery'
+    ZONES = [(AMBIENT, 'Ambient'), (CHILLED, 'Chilled'), (FROZEN, 'Frozen'), (BUTCHERY_ZONE, 'Butchery')]
+    storage_zone = models.CharField(max_length=10, choices=ZONES, blank=True, default='',
+                                    help_text='Where it is kept; sets its place on pick lists.')
     # The item number a scale prints on its labels (G18): digits, stored without leading zeros, unique per company.
     plu = models.CharField(max_length=8, blank=True, default='', help_text='Scale PLU (item number on labels).')
     # The till catalogue's version (G26): moves on every save and every stock movement, so tills fetch only changes.
@@ -117,6 +122,10 @@ class Product(models.Model):
     @property
     def is_weighed(self):
         return self.sold_by == self.WEIGHT
+
+    @property
+    def pick_zone(self):
+        return self.storage_zone or (self.BUTCHERY_ZONE if self.is_weighed else self.AMBIENT)
 
 
 class ProductRemoval(models.Model):
@@ -278,6 +287,7 @@ class Location(models.Model):
     """
 
     SHOP_FLOOR, BUTCHERY, WAREHOUSE, BACK_STORE, VAN = 'shop_floor', 'butchery', 'warehouse', 'back_store', 'van'
+    DISPATCH = 'dispatch'  # picked trade orders waiting for their delivery run (G42); never sellable
     IN_TRANSIT, SUPPLIER, CUSTOMER, WASTE, ADJUSTMENT = 'in_transit', 'supplier', 'customer', 'waste', 'adjustment'
     TYPES = [
         (SHOP_FLOOR, 'Shop floor'),
@@ -285,6 +295,7 @@ class Location(models.Model):
         (WAREHOUSE, 'Warehouse'),
         (BACK_STORE, 'Back store'),
         (VAN, 'Van'),
+        (DISPATCH, 'Dispatch'),
         (IN_TRANSIT, 'In transit'),
         (SUPPLIER, 'Supplier (virtual)'),
         (CUSTOMER, 'Customer (virtual)'),
@@ -337,6 +348,8 @@ class Location(models.Model):
                 errors['sellable'] = 'A virtual location is never sellable.'
             if self.branch_id:
                 errors['branch'] = 'A virtual location has no branch.'
+        elif self.type == self.DISPATCH and (self.sellable or self.online_sellable):
+            errors['sellable'] = 'Picked orders wait at dispatch; it is never sellable.'
         elif self.type in self.BRANCH_TYPES and not self.branch_id:
             errors['branch'] = 'This type of location is inside a branch.'
         if self.branch_id and self.company_id and self.branch.company_id != self.company_id:

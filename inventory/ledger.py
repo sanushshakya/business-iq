@@ -301,6 +301,60 @@ def transfer_batch(batch, quantity, to, *, transfer=None):
     return held
 
 
+def dispatch_location(company):
+    """The company's DISPATCH location (created if missing): where picked trade orders wait (G42)."""
+    company_id = getattr(company, 'pk', company)
+    location, _ = Location.objects.get_or_create(
+        company_id=company_id, code='DISPATCH', defaults={'name': 'Dispatch', 'type': Location.DISPATCH},
+    )
+    if location.type != Location.DISPATCH:
+        raise LedgerError('The location coded DISPATCH is not a dispatch location; rename it.')
+    return location
+
+
+def pick_batch(batch, *, quantity, weight_kg, to, today=None):
+    """
+    Move a picked amount of a (locked) batch into the same lot at ``to`` (G42): ``quantity`` units or pieces (0 for
+    loose) and, for weighed products, the real ``weight_kg``. Only the batch's free stock can be picked (release this
+    order's own reservations first); an expired lot is refused. Recorded kg below the real kg is first booked in
+    from ADJUSTMENT; for catch-weight, kg left once the last piece goes is booked out to it. Returns the lot at ``to``.
+    Inside ``transaction.atomic()``.
+    """
+    product = Product.objects.get(pk=batch.product_id)
+    if to.company_id != product.company_id:
+        raise LedgerError('Stock can only move between locations of the same company.')
+    if batch.expiration_date < (today or timezone.localdate()):
+        raise LedgerError(f'Batch {batch.batch_number} is out of date.')
+    loose = product.is_weighed and not product.is_catch_weight
+    pieces, kg = StockBatch.objects.filter(pk=batch.pk).values_list('quantity', 'weight_kg').get()
+    reserved = reserved_by_batch([batch.pk], loose=loose).get(batch.pk, 0)
+    if not loose and quantity > pieces - reserved:
+        raise LedgerError(f'Only {max(pieces - reserved, 0)} free in batch {batch.batch_number}.',
+                          available=max(pieces - reserved, 0))
+    adjustment = virtual_location(product.company_id, Location.ADJUSTMENT)
+    if product.is_weighed:
+        free_kg = kg - reserved if loose else kg
+        if free_kg < weight_kg:
+            move(batch, 0, 'inbound', counterpart=adjustment, weight_kg=weight_kg - free_kg)
+    lot, _ = StockBatch.objects.get_or_create(
+        product_id=batch.product_id, batch_number=batch.batch_number, location=to,
+        defaults={'quantity': 0, 'weight_kg': Decimal('0'), 'expiration_date': batch.expiration_date,
+                  'supplier_id': batch.supplier_id, 'unit_cost': batch.unit_cost},
+    )
+    lot = StockBatch.objects.select_for_update(of=('self',)).select_related('location').get(pk=lot.pk)
+    if lot.expiration_date != batch.expiration_date:
+        raise LedgerError(f'Batch {batch.batch_number} at {to.code} has another expiry; correct the lot number first.')
+    kg_moved = weight_kg if product.is_weighed else None
+    move(batch, quantity, 'outbound', counterpart=to, weight_kg=kg_moved)
+    move(lot, quantity, 'inbound', counterpart=batch.location, weight_kg=kg_moved)
+    if product.is_catch_weight and pieces == quantity:  # the last piece went: no kg can be left behind
+        left = StockBatch.objects.filter(pk=batch.pk).values_list('weight_kg', flat=True).get()
+        if left > 0:
+            move(batch, 0, 'outbound', counterpart=adjustment, weight_kg=left)
+    lot.refresh_from_db()
+    return lot
+
+
 def transfer_fefo(product, quantity, *, source, to, transfer=None, today=None):
     """
     Move ``quantity`` units of ``product`` from its in-date batches at ``source`` to ``to`` (earliest expiry first,

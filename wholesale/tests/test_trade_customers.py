@@ -205,7 +205,7 @@ class TradeCustomerAdminTests(TestCase):
 
     def test_admin_adds_a_customer_with_an_address(self):
         response = self.client.post(reverse('admin:wholesale_tradecustomer_add'), {
-            'account_code': 'adm-1', 'legal_name': 'E2E Fake Admin Ltd', 'trading_name': '', 'vat_number': '',
+            'account_code': 'adm-1', 'legal_name': 'E2E Fake Admin Ltd', 'payment_terms_days': '30', 'trading_name': '', 'vat_number': '',
             'status': 'active', 'delivery_days': '["tue"]', 'note': '',
             'addresses-TOTAL_FORMS': '1', 'addresses-INITIAL_FORMS': '0',
             'addresses-0-label': 'Door', 'addresses-0-line1': '1 Fake St', 'addresses-0-line2': '',
@@ -220,7 +220,7 @@ class TradeCustomerAdminTests(TestCase):
 
     def test_admin_refuses_a_duplicate_code_cleanly(self):
         response = self.client.post(reverse('admin:wholesale_tradecustomer_add'), {
-            'account_code': 'mine-1', 'legal_name': 'E2E Fake Copy Ltd', 'trading_name': '', 'vat_number': '',
+            'account_code': 'mine-1', 'legal_name': 'E2E Fake Copy Ltd', 'payment_terms_days': '30', 'trading_name': '', 'vat_number': '',
             'status': 'active', 'delivery_days': '[]', 'note': '',
             'addresses-TOTAL_FORMS': '0', 'addresses-INITIAL_FORMS': '0',
             'contacts-TOTAL_FORMS': '0', 'contacts-INITIAL_FORMS': '0',
@@ -249,7 +249,7 @@ class ReviewFollowUpTests(TestCase):
 
     def change_post(self, a_default, b_default, **extra):
         data = {
-            'account_code': 'MINE-1', 'legal_name': 'E2E Fake Mine Ltd', 'trading_name': '', 'vat_number': '',
+            'account_code': 'MINE-1', 'legal_name': 'E2E Fake Mine Ltd', 'payment_terms_days': '30', 'trading_name': '', 'vat_number': '',
             'status': 'active', 'delivery_days': '[]', 'note': '',
             'addresses-TOTAL_FORMS': '2', 'addresses-INITIAL_FORMS': '2',
             'contacts-TOTAL_FORMS': '0', 'contacts-INITIAL_FORMS': '0',
@@ -295,7 +295,7 @@ class ReviewFollowUpTests(TestCase):
         self.client.force_login(superuser)
         other = CompanyFactory()
         response = self.client.post(reverse('admin:wholesale_tradecustomer_add'), {
-            'company': other.pk, 'account_code': 'MINE-1', 'legal_name': 'E2E Fake Other Ltd', 'trading_name': '',
+            'company': other.pk, 'account_code': 'MINE-1', 'legal_name': 'E2E Fake Other Ltd', 'payment_terms_days': '30', 'trading_name': '',
             'vat_number': '', 'status': 'active', 'delivery_days': '[]', 'note': '',
             'addresses-TOTAL_FORMS': '0', 'addresses-INITIAL_FORMS': '0',
             'contacts-TOTAL_FORMS': '0', 'contacts-INITIAL_FORMS': '0',

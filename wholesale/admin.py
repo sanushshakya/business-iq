@@ -7,6 +7,8 @@ from inventory.admin import ViewOnlyAdmin
 
 from .models import (
     CustomerGroup,
+    Invoice,
+    InvoiceLine,
     PriceList,
     PriceListEntry,
     SalesOrder,
@@ -240,3 +242,30 @@ class SalesOrderPickAdmin(TenantAdminMixin, ViewOnlyAdmin):
 
     list_display = ('line', 'batch', 'quantity', 'weight_kg', 'picked_at')
     list_select_related = ('line__product', 'batch')
+
+
+class InvoiceLineInline(admin.TabularInline):
+    model = InvoiceLine
+    extra = 0
+    can_delete = False
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(Invoice)
+class InvoiceAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """View only: invoices are made and issued through the API; an issued one never changes (G43)."""
+
+    list_display = ('number_display', 'customer_name', 'status', 'invoice_date', 'gross_total', 'email_status')
+    list_filter = ('status', 'email_status')
+    search_fields = ('number', 'customer_code', 'customer_name')
+    inlines = [InvoiceLineInline]
+
+
+@admin.register(InvoiceLine)
+class InvoiceLineAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """Changed through the invoice only."""

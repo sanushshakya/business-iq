@@ -18,10 +18,12 @@ from inventory.views import CompanyMemberReadsStaffWrites
 from tenants.roles import STOCK
 from vat.services import uk_date
 
-from . import orders, picking
+from . import invoices, orders, picking
+from .invoice_pdf import build_invoice_pdf
 from .pick_list import build_pick_list
 from .models import (
     CustomerGroup,
+    Invoice,
     PriceList,
     PriceListEntry,
     SalesOrder,
@@ -33,6 +35,7 @@ from .pricing import resolve_prices
 from .serializers import (
     CancelOrderSerializer,
     CustomerGroupSerializer,
+    InvoiceSerializer,
     PickRequestSerializer,
     PriceListSerializer,
     ResolveRequestSerializer,
@@ -423,4 +426,91 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
         order = self.get_object()
         response = HttpResponse(build_pick_list(order), content_type='application/pdf')
         response['Content-Disposition'] = f'inline; filename="pick-list-{order.number_display}.pdf"'
+        return response
+
+
+INVOICE_STATUSES = {value for value, _label in Invoice.STATUSES}
+
+
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter('status', str, enum=sorted(INVOICE_STATUSES), description='Only drafts or issued invoices.'),
+    OpenApiParameter('customer', int, description="Only this trade customer's invoices."),
+    OpenApiParameter('order', int, description="Only this order's invoice."),
+]))
+class InvoiceViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.CreateModelMixin,
+                     mixins.DestroyModelMixin, viewsets.GenericViewSet):
+    """
+    Trade invoices (G43). POST ``{order}`` makes a draft from a picked order, billed on what was picked (real kg for
+    weighed goods); ``issue`` numbers it (gap-free per company), freezes it and emails the PDF. Only drafts are
+    deleted or rebuilt. Members read; staff write.
+    """
+
+    queryset = Invoice.objects.select_related('order').prefetch_related('lines')
+    serializer_class = InvoiceSerializer
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        status = params.get('status')
+        if status is not None:
+            if status not in INVOICE_STATUSES:
+                raise ValidationError({'status': 'draft or issued.'})
+            queryset = queryset.filter(status=status)
+        for name, lookup in (('customer', 'order__customer_id'), ('order', 'order_id')):
+            value = _id_param(params, name)
+            if value is not None:
+                queryset = queryset.filter(**{lookup: value})
+        return queryset
+
+    def _done(self, step, *args):
+        try:
+            invoice = step(*args)
+        except invoices.InvoiceError as error:
+            raise ValidationError({'detail': str(error)}) from None
+        return Response(self.get_serializer(self.get_queryset().get(pk=invoice.pk)).data)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        response = self._done(invoices.create_invoice, serializer.validated_data['order'], request.user)
+        response.status_code = 201
+        return response
+
+    def perform_destroy(self, instance):
+        if instance.status != Invoice.DRAFT:
+            raise ValidationError({'detail': 'An issued invoice is kept; correct it with a credit note.'})
+        instance.delete()
+
+    @extend_schema(request=None, responses=InvoiceSerializer)
+    @action(detail=True, methods=['post'])
+    def issue(self, request, pk=None):
+        """Number, freeze and email the invoice. Refused without your company's VAT number."""
+        return self._done(invoices.issue, self.get_object(), request.user)
+
+    @extend_schema(request=None, responses=InvoiceSerializer)
+    @action(detail=True, methods=['post'])
+    def refresh(self, request, pk=None):
+        """Rebuild a draft from the order's picked amounts as they are now."""
+        return self._done(invoices.refresh_draft, self.get_object())
+
+    @extend_schema(request=None, responses=InvoiceSerializer)
+    @action(detail=True, methods=['post'])
+    def email(self, request, pk=None):
+        """Send an issued invoice's PDF to the customer again."""
+        invoice = self.get_object()
+
+        def queue(invoice):
+            invoices.resend(invoice)
+            return invoice
+
+        return self._done(queue, invoice)
+
+    @extend_schema(request=None, responses={(200, 'application/pdf'): OpenApiTypes.BINARY})
+    @action(detail=True, methods=['get'])
+    def pdf(self, request, pk=None):
+        """The invoice as a PDF (a draft says DRAFT and has no number)."""
+        invoice = self.get_object()
+        response = HttpResponse(build_invoice_pdf(invoice), content_type='application/pdf')
+        response['Content-Disposition'] = f'inline; filename="{invoice.number_display}.pdf"'
         return response

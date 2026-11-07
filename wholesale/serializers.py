@@ -9,6 +9,8 @@ from inventory.models import Location, Product
 from .models import (
     WEEKDAYS,
     CustomerGroup,
+    Invoice,
+    InvoiceLine,
     PriceList,
     PriceListEntry,
     SalesOrder,
@@ -75,7 +77,7 @@ class TradeCustomerSerializer(TenantModelSerializer):
         model = TradeCustomer
         fields = [
             'id', 'account_code', 'legal_name', 'trading_name', 'vat_number', 'status', 'delivery_days', 'note',
-            'group', 'addresses', 'contacts', 'created_at', 'updated_at',
+            'group', 'invoice_email', 'payment_terms_days', 'addresses', 'contacts', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
@@ -555,3 +557,47 @@ class SubstituteRequestSerializer(serializers.Serializer):
         if product.company_id != self.context['request'].user.company_id:  # superusers included
             raise serializers.ValidationError("Another company's product can't be sent.")
         return product
+
+
+class InvoiceLineSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = InvoiceLine
+        fields = ['id', 'order_line', 'product', 'description', 'quantity', 'weight_kg', 'unit_price', 'vat_code',
+                  'vat_rate', 'net', 'vat', 'gross']
+        read_only_fields = fields
+
+
+class VatSummaryRowSerializer(serializers.Serializer):
+    rate = serializers.DecimalField(max_digits=5, decimal_places=2)
+    net = serializers.DecimalField(max_digits=12, decimal_places=2)
+    vat = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+
+class InvoiceSerializer(serializers.ModelSerializer):
+    """
+    A trade invoice (G43). Created as a draft from a picked order (``order``), billed on what was picked; issuing
+    numbers and freezes it. Nothing here is edited: drafts are rebuilt (``refresh``) or deleted, issued invoices are
+    corrected by credit notes (G45).
+    """
+
+    number_display = serializers.CharField(read_only=True)
+    order_number = serializers.CharField(source='order.number_display', read_only=True)
+    customer = serializers.IntegerField(source='order.customer_id', read_only=True)
+    lines = InvoiceLineSerializer(many=True, read_only=True)
+    vat_summary = VatSummaryRowSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Invoice
+        fields = [
+            'id', 'order', 'order_number', 'customer', 'status', 'number', 'number_display', 'invoice_date',
+            'due_date', 'seller_name', 'seller_address', 'seller_vat_number', 'customer_code', 'customer_name',
+            'customer_vat_number', 'customer_ref', 'address_line1', 'address_line2', 'address_town',
+            'address_postcode', 'lines', 'net_total', 'vat_total', 'gross_total', 'vat_summary', 'created_by',
+            'created_at', 'issued_by', 'issued_at', 'emailed_to', 'emailed_at', 'email_status',
+        ]
+        read_only_fields = [name for name in fields if name != 'order']
+
+    def validate_order(self, order):
+        if order.company_id != self.context['request'].user.company_id:  # superusers included
+            raise serializers.ValidationError("Another company's order can't be invoiced here.")
+        return order

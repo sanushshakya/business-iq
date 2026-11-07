@@ -8,6 +8,7 @@ router.register(r'customers', views.TradeCustomerViewSet, basename='tradecustome
 router.register(r'groups', views.CustomerGroupViewSet, basename='customergroup')
 router.register(r'price-lists', views.PriceListViewSet, basename='pricelist')
 router.register(r'orders', views.SalesOrderViewSet, basename='salesorder')
+router.register(r'invoices', views.InvoiceViewSet, basename='invoice')
 
 urlpatterns = [
     path('prices/resolve/', views.PriceResolveView.as_view(), name='price-resolve'),

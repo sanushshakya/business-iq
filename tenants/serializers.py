@@ -3,6 +3,8 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
+from vat.numbers import normalise_vat_number, vat_number_problem
+
 from common.tenancy import TenantModelSerializer
 
 from .roles import ROLE_LABELS
@@ -13,9 +15,21 @@ from .models import Branch, Company, Till
 class CompanySerializer(serializers.ModelSerializer):
     class Meta:
         model = Company
-        fields = ['id', 'name', 'registration_number', 'address', 'created_at']
+        fields = ['id', 'name', 'registration_number', 'address', 'vat_number', 'created_at']
         # The registration number identifies the company; only the admin site changes it.
         read_only_fields = ['id', 'registration_number', 'created_at']
+
+    def to_internal_value(self, data):
+        if hasattr(data, 'copy') and isinstance(data.get('vat_number'), str):  # before the length check
+            data = data.copy()
+            data['vat_number'] = normalise_vat_number(data['vat_number'])
+        return super().to_internal_value(data)
+
+    def validate_vat_number(self, value):
+        problem = vat_number_problem(value)
+        if problem:
+            raise serializers.ValidationError(problem)
+        return value
 
 
 class BranchSerializer(TenantModelSerializer):

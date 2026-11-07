@@ -186,8 +186,9 @@ def send_invoice_email(invoice_id):
     try:  # building the PDF can fail too (e.g. odd text): staff see it as failed, not stuck on queued
         message.attach(f'{invoice.number_display}.pdf', build_invoice_pdf(invoice), 'application/pdf')
         message.send(fail_silently=False)
-    except Exception:  # noqa: BLE001 - SMTP errors are many and varied; the address is not logged
-        logger.exception('Could not email invoice %s', invoice.number_display)
+    except Exception as error:  # noqa: BLE001 - SMTP errors are many and varied
+        # No traceback or message: SMTP errors quote the recipient's address, which never goes in the logs.
+        logger.warning('Could not email invoice %s (%s)', invoice.number_display, type(error).__name__)
         _email_outcome(invoice, Invoice.FAILED, to)
         return
     _email_outcome(invoice, Invoice.SENT, to)
@@ -205,7 +206,7 @@ def discard_draft(invoice):
     locked = Invoice.objects.select_for_update().filter(pk=invoice.pk).first()
     if locked is None or locked.status != Invoice.DRAFT:
         raise InvoiceError('An issued invoice is kept; correct it with a credit note.')
-    locked.delete()
+    locked.delete()  # Invoice.delete re-checks under the same lock, for every other caller too
 
 
 def resend(invoice):

@@ -290,3 +290,35 @@ class ReviewFixTests(Base):
         draft = create_invoice(self.mixed_order(), self.staff)
         invoices.discard_draft(draft)
         self.assertFalse(Invoice.objects.filter(pk=draft.pk).exists())
+
+
+class GuardrailFixTests(Base):
+    def test_a_refused_recipient_never_reaches_the_logs(self):
+        import smtplib
+
+        invoice = self.issued()
+        refused = smtplib.SMTPRecipientsRefused({'accounts@example.test': (550, b'5.1.1 <accounts@example.test> no')})
+        with mock.patch('wholesale.invoices.EmailMessage.send', side_effect=refused), \
+                self.assertLogs('wholesale.invoices', level='WARNING') as logs:
+            invoices.send_invoice_email(invoice.pk)
+        self.assertNotIn('example.test', '\n'.join(logs.output))
+        self.assertIn('INV-000001', '\n'.join(logs.output))
+
+    def test_bulk_paths_cannot_change_an_issued_invoice(self):
+        invoice = self.issued()
+        draft = create_invoice(self.mixed_order(), self.staff)
+        with self.assertRaises(ValidationError):
+            Invoice.objects.filter(pk=invoice.pk).update(net_total=D('1.00'))
+        Invoice.objects.filter(pk=invoice.pk).update(email_status='sent')  # the email fields may change
+        Invoice.objects.filter(pk=draft.pk).update(net_total=D('1.00'))  # a draft may
+        with self.assertRaises(ValidationError):
+            InvoiceLine.objects.filter(invoice=invoice).update(net=D('0.01'))
+        line = invoice.lines.first()
+        line.net = D('0.01')
+        with self.assertRaises(ValidationError):
+            InvoiceLine.objects.bulk_update([line], ['net'])
+        with self.assertRaises(ValidationError):
+            InvoiceLine.objects.bulk_create([InvoiceLine(
+                invoice=invoice, order_line=line.order_line, product=line.product, description='x',
+                unit_price=D('1'), vat_rate=D('0'), net=D('1'), vat=D('0'), gross=D('1'))])
+        self.assertEqual(Invoice.objects.get(pk=invoice.pk).net_total, D('475.95'))

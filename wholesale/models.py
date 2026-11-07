@@ -13,7 +13,7 @@ from decimal import Decimal
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models
+from django.db import models, transaction
 from django.db.models import F, Q
 from django.db.models.signals import pre_delete
 from django.dispatch import receiver
@@ -394,6 +394,41 @@ class SalesOrderPick(models.Model):
         return f'Pick #{self.pk}'
 
 
+FROZEN = 'An issued invoice cannot be changed; correct it with a credit note.'
+
+
+class InvoiceQuerySet(models.QuerySet):
+    """Bulk updates follow the model: an issued invoice changes only in its email fields."""
+
+    def update(self, **kwargs):
+        if not set(kwargs) <= Invoice.EMAIL_FIELDS and self.filter(status=Invoice.ISSUED).exists():
+            raise ValidationError(FROZEN)
+        return super().update(**kwargs)
+
+
+class InvoiceLineQuerySet(models.QuerySet):
+    """No bulk path writes lines of an issued invoice."""
+
+    def _refuse(self, invoice_ids):
+        if Invoice.objects.filter(pk__in=set(invoice_ids), status=Invoice.ISSUED).exists():
+            raise ValidationError(FROZEN)
+
+    def update(self, **kwargs):
+        self._refuse(self.values_list('invoice_id', flat=True))
+        return super().update(**kwargs)
+
+    def bulk_update(self, objs, fields, *args, **kwargs):
+        objs = list(objs)
+        self._refuse(InvoiceLine.objects.filter(pk__in=[obj.pk for obj in objs]).values_list('invoice_id',
+                                                                                              flat=True))
+        return super().bulk_update(objs, fields, *args, **kwargs)
+
+    def bulk_create(self, objs, *args, **kwargs):
+        objs = list(objs)
+        self._refuse(obj.invoice_id for obj in objs)
+        return super().bulk_create(objs, *args, **kwargs)
+
+
 class Invoice(models.Model):
     """
     A trade invoice for a picked order (G43), billed on what was picked (real kg for weighed goods). A draft has no
@@ -407,6 +442,7 @@ class Invoice(models.Model):
     EMAIL_STATUSES = [(NOT_SENT, 'Not sent'), (QUEUED, 'Queued'), (SENT, 'Sent'), (FAILED, 'Failed'),
                       (NO_ADDRESS, 'No email address')]
     EMAIL_FIELDS = {'emailed_to', 'emailed_at', 'email_status'}
+    objects = InvoiceQuerySet.as_manager()
 
     company = models.ForeignKey('tenants.Company', on_delete=models.PROTECT, related_name='invoices')
     order = models.OneToOneField(SalesOrder, on_delete=models.PROTECT, related_name='invoice')
@@ -462,12 +498,15 @@ class Invoice(models.Model):
 
     def save(self, *args, update_fields=None, **kwargs):
         if self.is_issued_in_db() and not (update_fields and set(update_fields) <= self.EMAIL_FIELDS):
-            raise ValidationError('An issued invoice cannot be changed; correct it with a credit note.')
+            raise ValidationError(FROZEN)
         super().save(*args, update_fields=update_fields, **kwargs)
 
     def delete(self, *args, **kwargs):
-        _refuse_if_issued(self.pk)  # before Django's own delete transaction (the signal is the backstop)
-        return super().delete(*args, **kwargs)
+        # Re-checked under the row lock, so an issue committed meanwhile is never deleted (the number stays used).
+        with transaction.atomic():
+            Invoice.objects.select_for_update().filter(pk=self.pk).first()
+            _refuse_if_issued(self.pk)
+            return super().delete(*args, **kwargs)
 
 
 class InvoiceLine(models.Model):
@@ -487,6 +526,8 @@ class InvoiceLine(models.Model):
     vat = models.DecimalField(max_digits=12, decimal_places=2)
     gross = models.DecimalField(max_digits=12, decimal_places=2)
 
+    objects = InvoiceLineQuerySet.as_manager()
+
     class Meta:
         ordering = ['invoice', 'id']
 
@@ -495,7 +536,7 @@ class InvoiceLine(models.Model):
 
     def save(self, *args, **kwargs):
         if Invoice.objects.filter(pk=self.invoice_id, status=Invoice.ISSUED).exists():
-            raise ValidationError('An issued invoice cannot be changed; correct it with a credit note.')
+            raise ValidationError(FROZEN)
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):

@@ -715,7 +715,7 @@ class RefusedField(serializers.JSONField):
                 data = json.loads(data)
             except ValueError:
                 raise serializers.ValidationError('A JSON list of refused lines.') from None
-        lines = ReturnRequestLineSerializer(data=data, many=True)
+        lines = ReturnRequestLineSerializer(data=data, many=True, max_length=200)
         lines.is_valid(raise_exception=True)
         return lines.validated_data
 
@@ -782,7 +782,7 @@ class CustomerReturnSerializer(serializers.ModelSerializer):
 
 
 class LaterReturnLineSerializer(ReturnRequestLineSerializer):
-    location = serializers.PrimaryKeyRelatedField(queryset=Location.objects.all(), required=False,
+    location = _OwnCompanyPrimaryKey(queryset=Location.objects.all(), required=False,
                                                   help_text="Where restocked goods go (default: the order's "
                                                             'warehouse).')
 
@@ -800,7 +800,7 @@ class CreditNoteLineSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class CreditNoteSerializer(serializers.ModelSerializer):
+class CreditNoteSerializer(TenantModelSerializer):
     """
     A credit note (G45): POST ``{customer_return}`` drafts it against the order's issued invoice; ``issue``
     numbers and freezes it. It never credits more than the invoice billed.

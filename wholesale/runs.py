@@ -242,6 +242,10 @@ def deliver(stop, user, *, received_by, delivered_at=None, notes='', photo=None,
     now = timezone.now()
     if delivered_at is not None and not (run.started_at - CLOCK_SLACK <= delivered_at <= now + CLOCK_SLACK):
         raise RunError('The delivery time must be between the start of the run and now.')
+    # Company (a refusal is numbered) and the order's invoice before the order, as invoices.issue locks them.
+    if refused:
+        Company.objects.select_for_update().get(pk=run.company_id)
+    list(Invoice.objects.select_for_update().filter(order_id=stop.order_id).values_list('pk', flat=True))
     order = S.objects.select_for_update().get(pk=stop.order_id)
     customer = virtual_location(run.company_id, Location.CUSTOMER)
     _lock_lots([order], run.vehicle)
@@ -276,12 +280,18 @@ def _rebill_draft(order):
     """A draft invoice bills only what reached the customer: rebuilt after the door (dropped if nothing did)."""
     from .invoices import InvoiceError, refresh_draft
 
+    from .returns import delivered
+
     draft = Invoice.objects.filter(order=order, status=Invoice.DRAFT).first()
-    if draft is not None:
-        try:
-            refresh_draft(draft)
-        except InvoiceError:
-            draft.delete()
+    if draft is None:
+        return
+    if not any(any(delivered(line)) for line in order.lines.all()):
+        draft.delete()  # nothing reached the customer
+        return
+    try:
+        refresh_draft(draft)
+    except InvoiceError as error:
+        raise RunError(str(error)) from None
 
 
 @transaction.atomic

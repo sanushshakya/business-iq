@@ -122,3 +122,29 @@ class ReturnsApiTests(Base):
                                        format='json').status_code, 400)
         self.assertEqual(self.api.get(reverse('customerreturn-detail', args=[their_return.pk])).status_code, 404)
         self.assertFalse(CreditNote.objects.exists())
+
+
+class GuardrailApiTests(ReturnsApiTests):
+    def test_another_companys_location_or_return_is_simply_unknown(self):
+        from inventory.models import Location
+
+        order = self.picked_order(rice=3)
+        run = self.out(order)
+        self.api.post(self.deliver_url(run), {'received_by': 'Fake Chef'}, format='json')
+        complete_run(run, self.staff)
+        theirs = Location.objects.create(company=CompanyFactory(), code='WH-T', name='Theirs', type='warehouse')
+        response = self.api.post(reverse('salesorder-returns', args=[order.pk]), {'lines': [
+            {'line': self.line(order, self.rice), 'quantity': 1, 'reason': 'not_wanted', 'location': theirs.pk}]},
+            format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('does not exist', str(response.json()))
+        other = CompanyFactory()
+        their_order = SalesOrder.objects.create(company=other, number=1, customer=TradeCustomer.objects.create(
+            company=other, account_code='T-1', legal_name='E2E Fake Theirs'), delivery_date=self.today, line1='x',
+            town='y', postcode='TT1 1TT', status='delivered')
+        their_return = CustomerReturn.objects.create(company=other, number=1, order=their_order, kind='later',
+                                                     status='received')
+        for pk in (their_return.pk, their_return.pk + 1000):  # the same answer for theirs and for none
+            response = self.api.post(reverse('creditnote-list'), {'customer_return': pk}, format='json')
+            self.assertEqual(response.status_code, 400)
+            self.assertIn('does not exist', str(response.json()))

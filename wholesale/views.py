@@ -437,7 +437,7 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
     def returns(self, request, pk=None):
         """Record goods the customer gave back after delivery (G45): to stock or waste by reason, at once."""
         order = self.get_object()
-        serializer = LaterReturnSerializer(data=request.data)
+        serializer = LaterReturnSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         lines = [dict(line) for line in serializer.validated_data['lines']]
         for line in lines:

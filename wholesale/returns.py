@@ -136,12 +136,15 @@ def _disposition(reason, location, default):
 
 def _lines(order, requested, default_location):
     """Check the requested lines; returns ``[(ReturnLine, template)]`` (unsaved)."""
-    rows = []
+    rows, seen = [], set()
     lines = {line.pk: line for line in order.lines.select_related('product')}
     for item in requested:
         line = lines.get(item.get('line'))
         if line is None:
             raise ReturnError('Not a line of this order.')
+        if line.pk in seen:  # each is checked against what is saved: a line twice would pass twice
+            raise ReturnError(f'{line.product.name}: each line once per return.')
+        seen.add(line.pk)
         quantity, weight_kg = _amounts(line, item.get('quantity'), item.get('weight_kg'))
         disposition, location = _disposition(item.get('reason'), item.get('location'), default_location)
         if location is not None and (location.company_id != order.company_id or location.is_virtual
@@ -194,7 +197,11 @@ def receive_door_returns(run, van):
                 product=product, batch_number=row.batch_number, location=van).first()
             if lot is None:
                 raise LedgerError(f'{product.name} lot {row.batch_number} is not on {van.code}.')
-            units, kg = row.quantity or 0, row.weight_kg if product.is_weighed else None
+            # What is still on the van (a van write-off may have taken some): the rest is the van's to explain.
+            units = min(row.quantity or 0, lot.quantity)
+            kg = min(row.weight_kg, lot.weight_kg) if product.is_weighed else None
+            if not units and not kg:
+                continue
             if row.disposition == ReturnLine.WASTE:
                 move(lot, units, 'outbound', counterpart=waste, weight_kg=kg)
             else:
@@ -206,6 +213,8 @@ def receive_door_returns(run, van):
 @transaction.atomic
 def record_return(order, user, requested, note=''):
     """Goods a customer gives back later: into their lots at a location, or to WASTE, straight away."""
+    # Company (for the return's number) before the order, as invoices.issue does: no lock cycle with it.
+    Company.objects.select_for_update().get(pk=order.company_id)
     order = SalesOrder.objects.select_for_update().get(pk=order.pk)
     if order.status not in (SalesOrder.DELIVERED, SalesOrder.INVOICED):
         raise ReturnError(f'A {order.get_status_display().lower()} order has nothing delivered to give back.')
@@ -213,6 +222,12 @@ def record_return(order, user, requested, note=''):
         raise ReturnError('Say what came back.')
     warehouse = Location.objects.filter(pk=order.source_location_id).first()
     rows = _lines(order, requested, warehouse)
+    today = timezone.localdate()
+    for row, template in rows:
+        if (row.disposition == ReturnLine.RESTOCK and template.expiration_date < today
+                and (row.location.sellable or row.location.online_sellable)):
+            raise ReturnError(f'Lot {template.batch_number} is out of date: it goes to waste, or to a place that '
+                              'does not sell.')
     product_ids = sorted({row.order_line.product_id for row, _template in rows})
     list(Product.objects.select_for_update().filter(pk__in=product_ids).order_by('pk').values_list('pk', flat=True))
     customer_return = _create(order, user, CustomerReturn.LATER, rows, note=note)

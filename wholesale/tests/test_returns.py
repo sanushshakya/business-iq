@@ -168,3 +168,56 @@ class LaterReturnTests(Base):
         record_return(order, self.staff, [{'line': line, 'quantity': 2, 'weight_kg': D('1.040'),
                                            'reason': 'damaged'}])
         self.assert_balances()
+
+
+class GuardrailFixTests(Base):
+    def line(self, order, product):
+        return SalesOrderLine.objects.get(order=order, product=product, substitute_for__isnull=True)
+
+    def test_one_line_twice_in_a_request_is_refused_at_the_door_and_later(self):
+        order = self.picked_order(rice=3)
+        run = self.plan(order)
+        start_run(run, self.staff)
+        twice = [{'line': self.line(order, self.rice).pk, 'quantity': 3, 'reason': 'not_wanted'}] * 2
+        with self.assertRaises(RunError):
+            deliver(run.stops.get(), self.driver, received_by='Fake Chef', refused=twice)
+        deliver(run.stops.get(), self.driver, received_by='Fake Chef')
+        complete_run(run, self.staff)
+        with self.assertRaises(ReturnError):
+            record_return(order, self.staff, twice)
+        self.assertEqual(self.held(self.warehouse, self.rice)[0], 17)  # nothing booked in
+
+    def test_an_out_of_date_lot_is_never_restocked_to_a_sellable_place(self):
+        from datetime import timedelta
+
+        from inventory.models import Location
+
+        order = self.picked_order(rice=3)
+        run = self.plan(order)
+        start_run(run, self.staff)
+        deliver(run.stops.get(), self.driver, received_by='Fake Chef')
+        complete_run(run, self.staff)
+        StockBatch.objects.filter(batch_number='RICE-1').update(expiration_date=self.today - timedelta(days=1))
+        shop = Location.objects.create(company=self.company, code='SHOP-9', name='Fake shop', type='shop_floor',
+                                       sellable=True)
+        with self.assertRaises(ReturnError):
+            record_return(order, self.staff, [{'line': self.line(order, self.rice).pk, 'quantity': 1,
+                                               'reason': 'not_wanted', 'location': shop}])
+
+    def test_a_short_van_still_takes_door_refusals_off_it(self):
+        from django.db import transaction
+
+        from inventory.ledger import move
+
+        order = self.picked_order(rice=3)
+        run = self.plan(order)
+        start_run(run, self.staff)
+        deliver(run.stops.get(), self.driver, received_by='Fake Chef', refused=[
+            {'line': self.line(order, self.rice).pk, 'quantity': 2, 'reason': 'not_wanted'}])
+        lot = StockBatch.objects.get(location=self.van, product=self.rice)
+        with transaction.atomic():
+            move(StockBatch.objects.select_for_update().get(pk=lot.pk), 1, 'outbound',
+                 counterpart=virtual_location(self.company, 'waste'))
+        complete_run(run, self.staff)
+        self.assertEqual(self.held(dispatch_location(self.company), self.rice), (1, D('0')))
+        self.assert_balances()

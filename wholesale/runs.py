@@ -16,7 +16,7 @@ from django.db.models import Max, Sum
 from django.utils import timezone
 
 from inventory.ledger import LedgerError, dispatch_location, move, relocate, virtual_location
-from inventory.models import Location, StockBatch
+from inventory.models import Location, Product, StockBatch
 from tenants.models import Company
 from tenants.roles import DRIVER
 
@@ -111,35 +111,78 @@ def set_stops(run, orders):
     return update_run(run, orders=orders)
 
 
-def _order_lots(order, location):
-    """``[(lot at location, units, kg)]``: the order's picks, found at ``location`` by batch number."""
+def _order_lots(order, location, *, with_picks=False):
+    """``[(lot at location, units, kg)]`` (with the pick first when ``with_picks``): the order's picks, found at
+    ``location`` by batch number. Lock the lots first (``_lock_lots``) where they are changed."""
     moves = []
     picks = SalesOrderPick.objects.filter(line__order=order).select_related('batch', 'line__product').order_by(
         'batch__product_id', 'batch__batch_number', 'pk')
     for pick in picks:
-        lot = (StockBatch.objects.select_for_update(of=('self',)).select_related('location')
+        lot = (StockBatch.objects.select_related('location', 'product')
                .filter(product_id=pick.batch.product_id, batch_number=pick.batch.batch_number, location=location)
                .first())
         if lot is None:
             raise RunError(f'{pick.line.product.name} lot {pick.batch.batch_number} is not at {location.code}.')
-        moves.append((lot, pick.quantity, pick.weight_kg))
+        moves.append((pick, lot, pick.quantity, pick.weight_kg) if with_picks else (lot, pick.quantity,
+                                                                                   pick.weight_kg))
     return moves
+
+
+def _lock_lots(orders, source, to=None):
+    """Lock what moving these orders touches, products then lots, each in id order (as tills and picking do), so
+    a run never waits on a till that waits on it."""
+    lots = [lot for order in orders for lot, _quantity, _kg in _order_lots(order, source)]
+    product_ids = sorted({lot.product_id for lot in lots})
+    list(Product.objects.select_for_update().filter(pk__in=product_ids).order_by('pk').values_list('pk', flat=True))
+    twins = StockBatch.objects.none() if to is None else StockBatch.objects.filter(
+        location=to, product_id__in=product_ids, batch_number__in={lot.batch_number for lot in lots})
+    lot_ids = sorted({lot.pk for lot in lots} | set(twins.values_list('pk', flat=True)))
+    list(StockBatch.objects.select_for_update(of=('self',)).filter(pk__in=lot_ids).order_by('pk')
+         .values_list('pk', flat=True))
 
 
 def _relocate_order(order, source, to, *, what_is_there=False):
     """Move the order's picks from ``source`` to ``to``. With ``what_is_there`` (bringing a van back), a lot
-    holding less than the picks moves what it holds: the rest was lost on the van, and is the van's to explain."""
+    holding less than the picks moves what it holds, and the order then owes what came back: the picks and the
+    lines' picked amounts are lowered to it (the loss stays booked where it happened, e.g. a write-off on the van).
+    Returns whether anything was lowered."""
+    lowered = False
     try:
-        for lot, quantity, kg in _order_lots(order, source):
+        for pick, lot, quantity, kg in _order_lots(order, source, with_picks=True):
             if what_is_there:
                 lot.refresh_from_db()
                 quantity = min(quantity, lot.quantity)
                 kg = None if kg is None else min(kg, lot.weight_kg)
+                if (quantity, kg) != (pick.quantity, pick.weight_kg):
+                    pick.quantity, pick.weight_kg = quantity, kg
+                    pick.save(update_fields=['quantity', 'weight_kg'])
+                    lowered = True
                 if not quantity and not kg:
                     continue
             relocate(lot, quantity=quantity, weight_kg=kg, to=to)
     except LedgerError as error:
         raise RunError(f'Order {order.number_display}: {error}') from None
+    if lowered:
+        _owe_what_was_picked(order)
+    return lowered
+
+
+def _owe_what_was_picked(order):
+    """Set the lines' picked amounts from the (lowered) picks and rebuild a draft invoice."""
+    from .invoices import InvoiceError, refresh_draft
+
+    for line in order.lines.select_related('product').exclude(picked_quantity=None, picked_weight_kg=None):
+        totals = line.picks.aggregate(units=Sum('quantity'), kg=Sum('weight_kg'))
+        loose = line.product.is_weighed and not line.product.is_catch_weight
+        line.picked_quantity = None if loose else totals['units'] or 0
+        line.picked_weight_kg = (totals['kg'] or Decimal('0.000')) if line.product.is_weighed else None
+        line.save(update_fields=['picked_quantity', 'picked_weight_kg'])
+    draft = Invoice.objects.filter(order=order, status=Invoice.DRAFT).first()
+    if draft is not None:
+        try:
+            refresh_draft(draft)
+        except InvoiceError:  # nothing left to bill: the draft goes
+            draft.delete()
 
 
 def _check_dispatch_covers_every_picked_order(order, dispatch):
@@ -165,8 +208,10 @@ def start_run(run, user):
     if not stops:
         raise RunError('A run needs at least one stop.')
     dispatch = dispatch_location(run.company_id)
+    orders = list(S.objects.select_for_update().filter(pk__in=[stop.order_id for stop in stops]).order_by('pk'))
+    _lock_lots(orders, dispatch, run.vehicle)
     for stop in stops:
-        order = S.objects.select_for_update().get(pk=stop.order_id)
+        order = S.objects.get(pk=stop.order_id)
         if order.status != S.PICKED:
             raise RunError(f'Order {order.number_display} is {order.get_status_display().lower()}, not picked.')
         _check_dispatch_covers_every_picked_order(order, dispatch)
@@ -198,6 +243,7 @@ def deliver(stop, user, *, received_by, delivered_at=None, notes='', photo=None)
         raise RunError('The delivery time must be between the start of the run and now.')
     order = S.objects.select_for_update().get(pk=stop.order_id)
     customer = virtual_location(run.company_id, Location.CUSTOMER)
+    _lock_lots([order], run.vehicle)
     try:
         for lot, quantity, kg in _order_lots(order, run.vehicle):
             move(lot, quantity, 'outbound', counterpart=customer, weight_kg=kg if lot.product.is_weighed else None)
@@ -232,10 +278,10 @@ def complete_run(run, user):
     if any(stop.status == DeliveryStop.PENDING for stop in stops):
         raise RunError('Record every stop (delivered or not) before completing the run.')
     dispatch = dispatch_location(run.company_id)
-    for stop in stops:
-        if stop.status != DeliveryStop.FAILED:
-            continue
-        order = S.objects.select_for_update().get(pk=stop.order_id)
+    failed = [stop for stop in stops if stop.status == DeliveryStop.FAILED]
+    orders = list(S.objects.select_for_update().filter(pk__in=[stop.order_id for stop in failed]).order_by('pk'))
+    _lock_lots(orders, run.vehicle, dispatch)
+    for order in orders:
         _relocate_order(order, run.vehicle, dispatch, what_is_there=True)  # back off the van
         advance(order, S.PICKED)
     run.status, run.completed_at = R.COMPLETED, timezone.now()

@@ -287,6 +287,34 @@ class ReviewFixTests(Base):
         self.assertEqual(self.status(order), 'picked')
         self.assert_balances()
 
+    def test_after_a_short_return_the_order_owes_what_came_back_and_goes_out_again(self):
+        order, sharing = self.picked_order(rice=3), self.picked_order(rice=2)  # both picked from RICE-1
+        draft = create_invoice(order, self.staff)
+        run = self.plan(order)
+        start_run(run, self.staff)
+        lot = StockBatch.objects.get(location=self.van, product=self.rice)
+        with transaction.atomic():
+            move(StockBatch.objects.select_for_update().get(pk=lot.pk), 1, 'outbound',
+                 counterpart=virtual_location(self.company, 'waste'))
+        fail_stop(run.stops.get(), self.driver, 'Damaged in the van')
+        complete_run(run, self.staff)
+        line = SalesOrderLine.objects.get(order=order, product=self.rice)
+        self.assertEqual(line.picked_quantity, 2)
+        self.assertEqual(line.picks.aggregate(s=Sum('quantity'))['s'], 2)
+        self.assertEqual(draft.lines.get(product=self.rice).quantity, 2)  # the draft invoice was rebuilt
+        again = self.plan(order, sharing)  # both go out again: nothing owed that isn't there
+        start_run(again, self.staff)
+        self.assertEqual(self.held(self.van, self.rice), (4, D('0')))
+        self.assert_balances()
+
+    def test_issuing_an_invoice_reads_the_order_under_its_lock(self):
+        order = self.picked_order()
+        invoice = create_invoice(order, self.staff)
+        SalesOrder.objects.filter(pk=order.pk).update(status='delivered')  # delivered after the invoice was read
+        with mock.patch.object(invoices.send_invoice_email, 'apply_async'):
+            issue(invoice, self.staff)
+        self.assertEqual(self.status(order), 'invoiced')
+
     def test_a_sellable_van_is_refused(self):
         order = self.picked_order()
         Location.objects.filter(pk=self.van.pk).update(sellable=True)

@@ -124,7 +124,9 @@ def issue(invoice, user):
         raise InvoiceError("Set your company's VAT number before issuing invoices.")
     if not invoice.lines.exists():
         raise InvoiceError('An invoice needs at least one line.')
-    order = invoice.order
+    # The order under its lock (after the invoice's): a delivery committing meanwhile is seen, and either it or
+    # this issue moves the order on to invoiced (G44).
+    order = SalesOrder.objects.select_for_update().get(pk=invoice.order_id)
     customer = TradeCustomer.objects.get(pk=order.customer_id)
     last = Invoice.objects.filter(company=company, number__isnull=False).aggregate(last=Max('number'))['last']
     invoice.number = (last or 0) + 1

@@ -102,6 +102,12 @@ ROLE_ROUTES = {
         + _route(r'^/inventory/reports/(yield|waste)/$', 'GET')
         + STOCK_ALERTS
         + _collection('pricing/price-changes', READ)
+        # Picking trade orders (G42): read them, pick, propose swaps; approving swaps and the rest stay staff only.
+        + _collection('wholesale/orders', READ)
+        + _route(r'^/wholesale/orders/\d+/(start-pick|finish-pick|substitutions)/$', 'POST')
+        + _route(r'^/wholesale/orders/\d+/picks/$', 'GET', 'POST')
+        + _route(r'^/wholesale/orders/\d+/picks/\d+/$', 'DELETE')
+        + _route(r'^/wholesale/orders/\d+/pick-list/$', 'GET')
     ),
 }
 

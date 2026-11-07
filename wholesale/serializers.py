@@ -13,6 +13,7 @@ from .models import (
     PriceListEntry,
     SalesOrder,
     SalesOrderLine,
+    SalesOrderPick,
     TradeCustomer,
     TradeCustomerAddress,
     TradeCustomerContact,
@@ -312,8 +313,23 @@ class ResolveResponseSerializer(serializers.Serializer):
 MAX_ORDER_UNITS = 100_000
 MAX_ORDER_KG = Decimal('10000')
 HOLDING_STATUSES = (SalesOrder.CONFIRMED, SalesOrder.PICKING)
+PICK_FIELDS = ['picks', 'picked_quantity', 'picked_weight_kg', 'substitute_for', 'substitution', 'proposed_by',
+               'decided_by', 'decided_at']
 ORDER_SNAPSHOT_FIELDS = ['unit_price', 'price_source', 'price_list', 'price_list_name', 'min_quantity', 'vat_code',
                          'vat_rate', 'estimated_net', 'estimated_vat']
+
+
+class SalesOrderPickSerializer(serializers.ModelSerializer):
+    """What was picked for a line from one warehouse lot (G42)."""
+
+    batch_number = serializers.CharField(source='batch.batch_number', read_only=True)
+    expiration_date = serializers.DateField(source='batch.expiration_date', read_only=True)
+
+    class Meta:
+        model = SalesOrderPick
+        fields = ['id', 'line', 'batch', 'batch_number', 'expiration_date', 'quantity', 'weight_kg', 'barcode',
+                  'picked_by', 'picked_at']
+        read_only_fields = fields
 
 
 class SalesOrderLineSerializer(TenantModelSerializer):
@@ -327,6 +343,8 @@ class SalesOrderLineSerializer(TenantModelSerializer):
     reserved = serializers.SerializerMethodField(
         help_text='Held at the warehouse (G41): units, or kg for loose products; null unless confirmed or picking.')
     short = serializers.SerializerMethodField(help_text='Still to reserve; null unless confirmed or picking.')
+    zone = serializers.CharField(source='product.pick_zone', read_only=True, help_text='Its place on the pick list.')
+    picks = SalesOrderPickSerializer(many=True, read_only=True)
     # Trade-sized caps, well inside the columns (and the 12-digit estimated totals).
     quantity = serializers.IntegerField(min_value=1, max_value=MAX_ORDER_UNITS, required=False, allow_null=True)
     weight_kg = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=Decimal('0.001'),
@@ -334,9 +352,9 @@ class SalesOrderLineSerializer(TenantModelSerializer):
 
     class Meta:
         model = SalesOrderLine
-        fields = ['id', 'product', 'product_name', 'quantity', 'weight_kg', 'note', 'reserved', 'short',
-                  *ORDER_SNAPSHOT_FIELDS]
-        read_only_fields = ['id', *ORDER_SNAPSHOT_FIELDS]
+        fields = ['id', 'product', 'product_name', 'quantity', 'weight_kg', 'note', 'reserved', 'short', 'zone',
+                  *ORDER_SNAPSHOT_FIELDS, *PICK_FIELDS]
+        read_only_fields = ['id', *ORDER_SNAPSHOT_FIELDS, *PICK_FIELDS]
 
     @staticmethod
     def amounts(line):
@@ -506,3 +524,34 @@ class SalesOrderSerializer(TenantModelSerializer):
 
 class CancelOrderSerializer(serializers.Serializer):
     reason = serializers.CharField(max_length=255, help_text='Why the order is cancelled.')
+
+
+class PickRequestSerializer(serializers.Serializer):
+    """One pick (G42): the line, and the lot's number or a scanned scale/GS1 label (one item, with its kg)."""
+
+    line = serializers.IntegerField(min_value=1)
+    batch_number = serializers.CharField(max_length=50, required=False, allow_blank=False)
+    barcode = serializers.CharField(max_length=64, required=False, allow_blank=False)
+    quantity = serializers.IntegerField(min_value=1, max_value=MAX_ORDER_UNITS, required=False)
+    weight_kg = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=Decimal('0.001'),
+                                         max_value=MAX_ORDER_KG, required=False)
+
+    def validate(self, attrs):
+        if bool(attrs.get('batch_number')) == bool(attrs.get('barcode')):
+            raise serializers.ValidationError('Send the lot number or a label, not both.')
+        return attrs
+
+
+class SubstituteRequestSerializer(serializers.Serializer):
+    """A swap proposed for a line (G42): another product of the company, in units, pieces or kg (loose)."""
+
+    line = serializers.IntegerField(min_value=1)
+    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
+    quantity = serializers.IntegerField(min_value=1, max_value=MAX_ORDER_UNITS, required=False)
+    weight_kg = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=Decimal('0.001'),
+                                         max_value=MAX_ORDER_KG, required=False)
+
+    def validate_product(self, product):
+        if product.company_id != self.context['request'].user.company_id:  # superusers included
+            raise serializers.ValidationError("Another company's product can't be sent.")
+        return product

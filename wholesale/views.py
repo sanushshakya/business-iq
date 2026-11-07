@@ -1,6 +1,7 @@
 from datetime import date
 
 from django.db import IntegrityError, transaction
+from django.http import HttpResponse
 from django.db.models import Prefetch, Q
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
@@ -16,16 +17,29 @@ from inventory.models import StockReservation
 from inventory.views import CompanyMemberReadsStaffWrites
 from vat.services import uk_date
 
-from . import orders
-from .models import CustomerGroup, PriceList, PriceListEntry, SalesOrder, SalesOrderLine, TradeCustomer
+from . import orders, picking
+from .pick_list import build_pick_list
+from .models import (
+    CustomerGroup,
+    PriceList,
+    PriceListEntry,
+    SalesOrder,
+    SalesOrderLine,
+    SalesOrderPick,
+    TradeCustomer,
+)
 from .pricing import resolve_prices
 from .serializers import (
     CancelOrderSerializer,
     CustomerGroupSerializer,
+    PickRequestSerializer,
     PriceListSerializer,
     ResolveRequestSerializer,
     ResolveResponseSerializer,
+    SalesOrderLineSerializer,
+    SalesOrderPickSerializer,
     SalesOrderSerializer,
+    SubstituteRequestSerializer,
     TradeCustomerSerializer,
 )
 
@@ -243,7 +257,7 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
     queryset = SalesOrder.objects.select_related('customer').prefetch_related(Prefetch(
         'lines', queryset=SalesOrderLine.objects.select_related('product').prefetch_related(Prefetch(
             'reservations', queryset=StockReservation.objects.filter(released_at__isnull=True),
-            to_attr='active_reservations')),
+            to_attr='active_reservations'), 'picks__batch'),
     ))
     serializer_class = SalesOrderSerializer
     permission_classes = [CompanyMemberReadsStaffWrites]
@@ -270,11 +284,25 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
         with transaction.atomic():  # the draft check and the edit happen under the order's lock
             super().perform_update(serializer)
 
-    def _moved(self, step, *args):
+    # Picking (G42) is for anyone in the company who may reach it: staff, and the stock operator role through
+    # role_access. Approving a swap stays staff only (and never the proposer: wholesale.picking.decide).
+    PICKING_ACTIONS = {'start_pick', 'finish_pick', 'picks', 'pick', 'substitutions', 'pick_list'}
+
+    def get_permissions(self):
+        if self.action in self.PICKING_ACTIONS:
+            return [IsCompanyMember()]
+        return super().get_permissions()
+
+    def _moved(self, step, *args, status_code=200, **kwargs):
         try:
-            order = step(self.get_object(), self.request.user, *args)
+            result = step(self.get_object(), *args, **kwargs)
         except orders.OrderStateError as error:
             raise ValidationError({'detail': error.detail}) from None
+        if isinstance(result, SalesOrder):
+            return Response(self.get_serializer(self.get_queryset().get(pk=result.pk)).data)
+        return result
+
+    def _order(self, order):
         return Response(self.get_serializer(self.get_queryset().get(pk=order.pk)).data)
 
     @extend_schema(request=None, responses=SalesOrderSerializer)
@@ -282,13 +310,13 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
     def confirm(self, request, pk=None):
         """Fix each line's price (lists valid on the delivery date, then the wholesale price) and confirm. Refused
         when a line has no trade price or the customer is on hold or closed."""
-        return self._moved(orders.confirm)
+        return self._moved(orders.confirm, self.request.user)
 
     @extend_schema(request=None, responses=SalesOrderSerializer)
     @action(detail=True, methods=['post'])
     def allocate(self, request, pk=None):
         """Top up the short lines of a confirmed (or picking) order from free warehouse stock, FEFO (G41)."""
-        return self._moved(orders.allocate)
+        return self._moved(orders.allocate, self.request.user)
 
     @extend_schema(request=CancelOrderSerializer, responses=SalesOrderSerializer)
     @action(detail=True, methods=['post'])
@@ -296,4 +324,93 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
         """Cancel a draft, confirmed or picking order, with a reason; its reserved stock is released."""
         serializer = CancelOrderSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        return self._moved(orders.cancel, serializer.validated_data['reason'])
+        return self._moved(orders.cancel, self.request.user, serializer.validated_data['reason'])
+
+    @extend_schema(request=None, responses=SalesOrderSerializer)
+    @action(detail=True, methods=['post'], url_path='start-pick', url_name='start-pick')
+    def start_pick(self, request, pk=None):
+        """Start picking a confirmed order (G42)."""
+        return self._moved(picking.start_pick)
+
+    @extend_schema(request=None, responses=SalesOrderSerializer)
+    @action(detail=True, methods=['post'], url_path='finish-pick', url_name='finish-pick')
+    def finish_pick(self, request, pk=None):
+        """Finish the pick: release the reservations and move every pick to DISPATCH at its real count and kg.
+        Refused while a swap waits for approval or nothing is picked."""
+        return self._moved(picking.finish_pick, request.user)
+
+    @extend_schema(methods=['GET'], request=None, responses=SalesOrderPickSerializer(many=True))
+    @extend_schema(methods=['POST'], request=PickRequestSerializer, responses={201: SalesOrderPickSerializer})
+    @action(detail=True, methods=['get', 'post'])
+    def picks(self, request, pk=None):
+        """The order's picks; POST records one: the line and a lot number or a scanned label, with the units
+        (pieces) and the real kg as the product needs."""
+        order = self.get_object()
+        if request.method == 'GET':
+            rows = SalesOrderPick.objects.filter(line__order=order).select_related('batch')
+            return Response(SalesOrderPickSerializer(rows, many=True).data)
+        serializer = PickRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = dict(serializer.validated_data)
+        line = data.pop('line')
+        try:
+            pick = picking.record_pick(order, line, user=request.user, **data)
+        except orders.OrderStateError as error:
+            raise ValidationError({'detail': error.detail}) from None
+        return Response(SalesOrderPickSerializer(pick).data, status=201)
+
+    @extend_schema(request=None, responses={204: None})
+    @action(detail=True, methods=['delete'], url_path=r'picks/(?P<pick_id>\d+)', url_name='pick')
+    def pick(self, request, pk=None, pick_id=None):
+        """Take a pick back (until the pick is finished)."""
+        try:
+            picking.remove_pick(self.get_object(), int(pick_id))
+        except orders.OrderStateError as error:
+            raise ValidationError({'detail': error.detail}) from None
+        return Response(status=204)
+
+    @extend_schema(request=SubstituteRequestSerializer, responses={201: SalesOrderLineSerializer})
+    @action(detail=True, methods=['post'])
+    def substitutions(self, request, pk=None):
+        """Propose another product for a line; another staff user approves or rejects it."""
+        order = self.get_object()
+        serializer = SubstituteRequestSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        data = dict(serializer.validated_data)
+        try:
+            line = picking.propose_substitute(order, data.pop('line'), data.pop('product'), user=request.user,
+                                              **data)
+        except orders.OrderStateError as error:
+            raise ValidationError({'detail': error.detail}) from None
+        return Response(SalesOrderLineSerializer(line, context=self.get_serializer_context()).data, status=201)
+
+    def _decide(self, line_id, approve):
+        order = self.get_object()
+        try:
+            picking.decide(order, int(line_id), approve=approve, user=self.request.user)
+        except orders.OrderStateError as error:
+            raise ValidationError({'detail': error.detail}) from None
+        return self._order(order)
+
+    @extend_schema(request=None, responses=SalesOrderSerializer)
+    @action(detail=True, methods=['post'], url_path=r'substitutions/(?P<line_id>\d+)/approve',
+            url_name='approve-substitution')
+    def approve_substitution(self, request, pk=None, line_id=None):
+        """Approve a proposed swap (staff, not the proposer): it is priced on the delivery date."""
+        return self._decide(line_id, True)
+
+    @extend_schema(request=None, responses=SalesOrderSerializer)
+    @action(detail=True, methods=['post'], url_path=r'substitutions/(?P<line_id>\d+)/reject',
+            url_name='reject-substitution')
+    def reject_substitution(self, request, pk=None, line_id=None):
+        """Reject a proposed swap (staff, not the proposer)."""
+        return self._decide(line_id, False)
+
+    @extend_schema(request=None, responses={(200, 'application/pdf'): OpenApiTypes.BINARY})
+    @action(detail=True, methods=['get'], url_path='pick-list', url_name='pick-list')
+    def pick_list(self, request, pk=None):
+        """The printable pick list (PDF), one table per zone: ambient, chilled, frozen, then butchery."""
+        order = self.get_object()
+        response = HttpResponse(build_pick_list(order), content_type='application/pdf')
+        response['Content-Disposition'] = f'inline; filename="pick-list-{order.number_display}.pdf"'
+        return response

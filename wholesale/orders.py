@@ -83,6 +83,16 @@ def confirm(order, user):
     if not lines:
         raise OrderStateError('An order needs at least one line.')
     source = _source(order)
+    price_lines(order, customer, lines)
+    set_estimates(order)
+    order.status, order.confirmed_by, order.confirmed_at = S.CONFIRMED, user, timezone.now()
+    order.save()
+    _reserve_all(order, lines, source)  # what the warehouse can't cover stays short
+    return order
+
+
+def price_lines(order, customer, lines):
+    """Fix the lines' trade price (on the delivery date), VAT rate and estimated net and VAT; saves them."""
     amounts = [_ordered_amount(line) for line in lines]
     prices = resolve_prices(customer, [(line.product, amount) for line, amount in zip(lines, amounts, strict=True)],
                             on=order.delivery_date)
@@ -108,13 +118,16 @@ def confirm(order, user):
         'weight_kg', 'unit_price', 'price_source', 'price_list', 'price_list_name', 'min_quantity', 'vat_code',
         'vat_rate', 'estimated_net', 'estimated_vat',
     ])
-    order.estimated_net = sum((line.estimated_net for line in lines), Decimal('0'))
-    order.estimated_vat = sum((line.estimated_vat for line in lines), Decimal('0'))
+
+
+def set_estimates(order):
+    """The order's estimated totals: the sums of its priced lines (a proposed or rejected swap counts nothing)."""
+    lines = order.lines.exclude(substitution__in=[SalesOrderLine.PROPOSED, SalesOrderLine.REJECTED])
+    nets = [line.estimated_net or Decimal('0') for line in lines]
+    vats = [line.estimated_vat or Decimal('0') for line in lines]
+    order.estimated_net = sum(nets, Decimal('0'))
+    order.estimated_vat = sum(vats, Decimal('0'))
     order.estimated_gross = order.estimated_net + order.estimated_vat
-    order.status, order.confirmed_by, order.confirmed_at = S.CONFIRMED, user, timezone.now()
-    order.save()
-    _reserve_all(order, lines, source)  # what the warehouse can't cover stays short
-    return order
 
 
 def _reserve_all(order, lines, source):

@@ -351,10 +351,50 @@ class SalesOrderLine(models.Model):
     vat_rate = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     estimated_net = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     estimated_vat = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    # A swap proposed while picking (G42): another product for ``substitute_for``, approved by other staff, then
+    # priced like a confirmed line.
+    PROPOSED, APPROVED, REJECTED = 'proposed', 'approved', 'rejected'
+    SUBSTITUTIONS = [(PROPOSED, 'Proposed'), (APPROVED, 'Approved'), (REJECTED, 'Rejected')]
+    substitute_for = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True,
+                                       related_name='substitutes')
+    substitution = models.CharField(max_length=10, choices=SUBSTITUTIONS, blank=True)
+    proposed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                    related_name='+')
+    decided_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                   related_name='+')
+    decided_at = models.DateTimeField(null=True, blank=True)
+    # What was picked (G42), set when the pick is finished: what the invoice bills (G43).
+    picked_quantity = models.PositiveIntegerField(null=True, blank=True)
+    picked_weight_kg = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
 
     class Meta:
         ordering = ['order', 'id']
-        constraints = [models.UniqueConstraint(fields=['order', 'product'], name='one_line_per_product_per_order')]
+        constraints = [
+            models.UniqueConstraint(fields=['order', 'product'], condition=Q(substitute_for__isnull=True),
+                                    name='one_line_per_product_per_order'),
+        ]
 
     def __str__(self):
         return f'{self.product} x {self.weight_kg if self.quantity is None else self.quantity}'
+
+
+class SalesOrderPick(models.Model):
+    """
+    What a picker took for a line from one warehouse lot (G42): units (pieces for catch-weight; 0 for loose) and the
+    real kg for weighed products. Removable until the pick is finished, when it is moved to DISPATCH.
+    """
+
+    line = models.ForeignKey(SalesOrderLine, on_delete=models.CASCADE, related_name='picks')
+    batch = models.ForeignKey('inventory.StockBatch', on_delete=models.PROTECT, related_name='sales_order_picks')
+    quantity = models.PositiveIntegerField(default=0)
+    weight_kg = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
+    barcode = models.CharField(max_length=64, blank=True, help_text='The label scanned, if any.')
+    picked_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                  related_name='+')
+    picked_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['line', 'id']
+
+    def __str__(self):
+        return f'Pick #{self.pk}'

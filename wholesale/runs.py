@@ -20,8 +20,9 @@ from inventory.models import Location, Product, StockBatch
 from tenants.models import Company
 from tenants.roles import DRIVER
 
-from .models import DeliveryRun, DeliveryStop, Invoice, SalesOrder, SalesOrderPick
+from .models import CustomerReturn, DeliveryRun, DeliveryStop, Invoice, SalesOrder, SalesOrderPick
 from .orders import OrderStateError, advance
+from .returns import ReturnError, receive_door_returns, refuse_at_door
 
 R, S = DeliveryRun, SalesOrder
 CLOCK_SLACK = timedelta(minutes=5)  # phones' clocks drift
@@ -233,7 +234,7 @@ def _stop(stop, user):
 
 
 @transaction.atomic
-def deliver(stop, user, *, received_by, delivered_at=None, notes='', photo=None):
+def deliver(stop, user, *, received_by, delivered_at=None, notes='', photo=None, refused=None):
     received_by = (received_by or '').strip()
     if not received_by:
         raise RunError('Who received it?')
@@ -245,12 +246,23 @@ def deliver(stop, user, *, received_by, delivered_at=None, notes='', photo=None)
     customer = virtual_location(run.company_id, Location.CUSTOMER)
     _lock_lots([order], run.vehicle)
     try:
+        # Refused at the door (G45): stays on the van, goes back by reason when the run is completed.
+        left_on_van = refuse_at_door(order, stop, user, refused or [])
         for lot, quantity, kg in _order_lots(order, run.vehicle):
-            move(lot, quantity, 'outbound', counterpart=customer, weight_kg=kg if lot.product.is_weighed else None)
+            key = (lot.product_id, lot.batch_number)
+            keep_units, keep_kg = left_on_van.get(key, (0, Decimal('0')))
+            units, kept_units = max(quantity - keep_units, 0), min(quantity, keep_units)
+            weight = None if kg is None else max(kg - keep_kg, Decimal('0'))
+            kept_kg = Decimal('0') if kg is None else min(kg, keep_kg)
+            left_on_van[key] = (keep_units - kept_units, keep_kg - kept_kg)
+            if units or weight:
+                move(lot, units, 'outbound', counterpart=customer,
+                     weight_kg=weight if lot.product.is_weighed else None)
         advance(order, S.DELIVERED)
         if Invoice.objects.filter(order=order, status=Invoice.ISSUED).exists():
             advance(order, S.INVOICED)
-    except (LedgerError, OrderStateError) as error:
+        _rebill_draft(order)
+    except (LedgerError, OrderStateError, ReturnError) as error:
         raise RunError(str(error)) from None
     stop.status, stop.received_by, stop.notes = DeliveryStop.DELIVERED, received_by[:120], notes or ''
     stop.delivered_at, stop.recorded_by = delivered_at or timezone.now(), user
@@ -258,6 +270,18 @@ def deliver(stop, user, *, received_by, delivered_at=None, notes='', photo=None)
         stop.photo = photo
     stop.save()
     return stop
+
+
+def _rebill_draft(order):
+    """A draft invoice bills only what reached the customer: rebuilt after the door (dropped if nothing did)."""
+    from .invoices import InvoiceError, refresh_draft
+
+    draft = Invoice.objects.filter(order=order, status=Invoice.DRAFT).first()
+    if draft is not None:
+        try:
+            refresh_draft(draft)
+        except InvoiceError:
+            draft.delete()
 
 
 @transaction.atomic
@@ -279,8 +303,16 @@ def complete_run(run, user):
         raise RunError('Record every stop (delivered or not) before completing the run.')
     dispatch = dispatch_location(run.company_id)
     failed = [stop for stop in stops if stop.status == DeliveryStop.FAILED]
-    orders = list(S.objects.select_for_update().filter(pk__in=[stop.order_id for stop in failed]).order_by('pk'))
-    _lock_lots(orders, run.vehicle, dispatch)
+    refusing = set(CustomerReturn.objects.filter(stop__run=run, status=CustomerReturn.ON_VAN)
+                   .values_list('order_id', flat=True))
+    every = list(S.objects.select_for_update().filter(pk__in={stop.order_id for stop in failed} | refusing)
+                 .order_by('pk'))
+    _lock_lots(every, run.vehicle, dispatch)
+    try:
+        receive_door_returns(run, run.vehicle)  # refused at the door: off the van, by reason
+    except LedgerError as error:
+        raise RunError(str(error)) from None
+    orders = [order for order in every if order.pk in {stop.order_id for stop in failed}]
     for order in orders:
         _relocate_order(order, run.vehicle, dispatch, what_is_there=True)  # back off the van
         advance(order, S.PICKED)

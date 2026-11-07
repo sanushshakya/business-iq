@@ -623,3 +623,66 @@ class DeliveryStop(models.Model):
 
     def __str__(self):
         return f'Stop {self.position}'
+
+
+class CustomerReturn(models.Model):
+    """
+    Goods a trade customer gave back (G45): refused at the door during a delivery (``door``: on the van until the
+    run is completed) or returned later (``later``: received when recorded). Each line goes to a location or to
+    waste by its reason; a credit note against the issued invoice credits it.
+    """
+
+    DOOR, LATER = 'door', 'later'
+    KINDS = [(DOOR, 'Refused at the door'), (LATER, 'Returned later')]
+    ON_VAN, RECEIVED = 'on_van', 'received'
+    STATUSES = [(ON_VAN, 'On the van'), (RECEIVED, 'Received')]
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='customer_returns')
+    number = models.PositiveIntegerField()  # per company: 1, 2, 3...
+    order = models.ForeignKey(SalesOrder, on_delete=models.PROTECT, related_name='returns')
+    stop = models.ForeignKey(DeliveryStop, on_delete=models.PROTECT, null=True, blank=True, related_name='returns')
+    kind = models.CharField(max_length=6, choices=KINDS)
+    status = models.CharField(max_length=10, choices=STATUSES)
+    note = models.TextField(blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                   related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+    received_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-number']
+        constraints = [models.UniqueConstraint(fields=['company', 'number'], name='unique_customer_return_number')]
+
+    def __str__(self):
+        return self.number_display
+
+    @property
+    def number_display(self):
+        return f'RET-{self.number:06d}'
+
+
+class ReturnLine(models.Model):
+    """What came back of one order line from one lot (by batch number): units or pieces and/or kg."""
+
+    DAMAGED, OUT_OF_DATE, WRONG_ITEM, NOT_WANTED = 'damaged', 'out_of_date', 'wrong_item', 'not_wanted'
+    REASONS = [(DAMAGED, 'Damaged'), (OUT_OF_DATE, 'Out of date'), (WRONG_ITEM, 'Wrong item'),
+               (NOT_WANTED, 'Not wanted')]
+    WASTE_REASONS = {DAMAGED, OUT_OF_DATE}
+    RESTOCK, WASTE = 'restock', 'waste'
+    DISPOSITIONS = [(RESTOCK, 'Back to stock'), (WASTE, 'Waste')]
+
+    customer_return = models.ForeignKey(CustomerReturn, on_delete=models.CASCADE, related_name='lines')
+    order_line = models.ForeignKey(SalesOrderLine, on_delete=models.PROTECT, related_name='return_lines')
+    batch_number = models.CharField(max_length=50)
+    quantity = models.PositiveIntegerField(null=True, blank=True)
+    weight_kg = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
+    reason = models.CharField(max_length=12, choices=REASONS)
+    disposition = models.CharField(max_length=8, choices=DISPOSITIONS)
+    location = models.ForeignKey('inventory.Location', on_delete=models.PROTECT, null=True, blank=True,
+                                 related_name='+')
+
+    class Meta:
+        ordering = ['customer_return', 'id']
+
+    def __str__(self):
+        return f'{self.order_line.product} {self.batch_number}'

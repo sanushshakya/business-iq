@@ -84,6 +84,8 @@ TENANT_LOOKUPS = {
     'wholesale.InvoiceLine': 'invoice__company',
     'wholesale.DeliveryRun': 'company',
     'wholesale.DeliveryStop': 'run__company',
+    'wholesale.CustomerReturn': 'company',
+    'wholesale.ReturnLine': 'customer_return__company',
     'inventory.StockReservation': 'batch__product__company',
 }
 

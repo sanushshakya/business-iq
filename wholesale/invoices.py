@@ -40,19 +40,23 @@ def _round(value):
 
 
 def _billed_lines(order):
-    """``InvoiceLine`` objects (unsaved) for what was picked; lines with nothing picked are left out."""
+    """``InvoiceLine`` objects (unsaved) for what was delivered (picked, less refused at the door); lines with
+    nothing delivered are left out."""
     rows = []
     lines = order.lines.select_related('product').exclude(
         substitution__in=[SalesOrderLine.PROPOSED, SalesOrderLine.REJECTED]).order_by('id')
+    from .returns import delivered
+
     for line in lines:
         product = line.product
+        units, kg = delivered(line)  # picked, less refused at the door (G45)
         if product.is_weighed:
-            amount = line.picked_weight_kg or Decimal('0')
-            quantity = line.picked_quantity if product.is_catch_weight else None
+            amount = kg
+            quantity = units if product.is_catch_weight else None
             weight = amount
         else:
-            amount = Decimal(line.picked_quantity or 0)
-            quantity, weight = line.picked_quantity, None
+            amount = Decimal(units)
+            quantity, weight = units, None
         if amount <= 0:
             continue
         if line.unit_price is None or line.vat_rate is None:
@@ -65,7 +69,7 @@ def _billed_lines(order):
             gross=net + vat,
         ))
     if not rows:
-        raise InvoiceError('Nothing was picked on this order, so there is nothing to invoice.')
+        raise InvoiceError('Nothing was picked (or all of it was refused), so there is nothing to invoice.')
     return rows
 
 

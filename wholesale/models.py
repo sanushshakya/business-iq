@@ -398,36 +398,40 @@ class SalesOrderPick(models.Model):
 FROZEN = 'An issued invoice cannot be changed; correct it with a credit note.'
 
 
-class InvoiceQuerySet(models.QuerySet):
-    """Bulk updates follow the model: an issued invoice changes only in its email fields."""
+class FrozenDocumentQuerySet(models.QuerySet):
+    """Bulk updates follow the model: an issued invoice or credit note changes only in its email fields."""
 
     def update(self, **kwargs):
-        if not set(kwargs) <= Invoice.EMAIL_FIELDS and self.filter(status=Invoice.ISSUED).exists():
+        if not set(kwargs) <= self.model.EMAIL_FIELDS and self.filter(status='issued').exists():
             raise ValidationError(FROZEN)
         return super().update(**kwargs)
 
 
-class InvoiceLineQuerySet(models.QuerySet):
-    """No bulk path writes lines of an issued invoice."""
+class FrozenLineQuerySet(models.QuerySet):
+    """No bulk path writes lines of an issued document (the line model names its ``DOCUMENT_FIELD``)."""
 
-    def _refuse(self, invoice_ids):
-        if Invoice.objects.filter(pk__in=set(invoice_ids), status=Invoice.ISSUED).exists():
+    def _refuse(self, document_ids):
+        document = self.model._meta.get_field(self.model.DOCUMENT_FIELD).related_model
+        if document.objects.filter(pk__in=set(document_ids), status='issued').exists():
             raise ValidationError(FROZEN)
 
     def update(self, **kwargs):
-        self._refuse(self.values_list('invoice_id', flat=True))
+        self._refuse(self.values_list(f'{self.model.DOCUMENT_FIELD}_id', flat=True))
         return super().update(**kwargs)
 
     def bulk_update(self, objs, fields, *args, **kwargs):
         objs = list(objs)
-        self._refuse(InvoiceLine.objects.filter(pk__in=[obj.pk for obj in objs]).values_list('invoice_id',
-                                                                                              flat=True))
+        self._refuse(self.model.objects.filter(pk__in=[obj.pk for obj in objs]).values_list(
+            f'{self.model.DOCUMENT_FIELD}_id', flat=True))
         return super().bulk_update(objs, fields, *args, **kwargs)
 
     def bulk_create(self, objs, *args, **kwargs):
         objs = list(objs)
-        self._refuse(obj.invoice_id for obj in objs)
+        self._refuse(getattr(obj, f'{self.model.DOCUMENT_FIELD}_id') for obj in objs)
         return super().bulk_create(objs, *args, **kwargs)
+
+
+InvoiceQuerySet, InvoiceLineQuerySet = FrozenDocumentQuerySet, FrozenLineQuerySet
 
 
 class Invoice(models.Model):
@@ -528,6 +532,7 @@ class InvoiceLine(models.Model):
     gross = models.DecimalField(max_digits=12, decimal_places=2)
 
     objects = InvoiceLineQuerySet.as_manager()
+    DOCUMENT_FIELD = 'invoice'
 
     class Meta:
         ordering = ['invoice', 'id']
@@ -686,3 +691,124 @@ class ReturnLine(models.Model):
 
     def __str__(self):
         return f'{self.order_line.product} {self.batch_number}'
+
+
+
+class CreditNote(models.Model):
+    """
+    A credit note (G45) for a return, against the order's issued invoice: its lines credit invoice lines at their
+    price and VAT rate, never more than invoiced. Drawn up as a draft (seller and customer copied from the invoice),
+    then issued: numbered gap-free per company (``CN-000001``) and frozen like an invoice.
+    """
+
+    DRAFT, ISSUED = 'draft', 'issued'
+    STATUSES = [(DRAFT, 'Draft'), (ISSUED, 'Issued')]
+    EMAIL_STATUSES = Invoice.EMAIL_STATUSES
+    EMAIL_FIELDS = Invoice.EMAIL_FIELDS
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.PROTECT, related_name='credit_notes')
+    customer_return = models.OneToOneField(CustomerReturn, on_delete=models.PROTECT, related_name='credit_note')
+    invoice = models.ForeignKey(Invoice, on_delete=models.PROTECT, related_name='credit_notes')
+    status = models.CharField(max_length=8, choices=STATUSES, default=DRAFT)
+    number = models.PositiveIntegerField(null=True, blank=True)
+    credit_date = models.DateField(null=True, blank=True)
+    seller_name = models.CharField(max_length=255, blank=True)
+    seller_address = models.TextField(blank=True)
+    seller_vat_number = models.CharField(max_length=14, blank=True)
+    customer_code = models.CharField(max_length=20, blank=True)
+    customer_name = models.CharField(max_length=150, blank=True)
+    customer_vat_number = models.CharField(max_length=14, blank=True)
+    customer_ref = models.CharField(max_length=40, blank=True)
+    address_line1 = models.CharField(max_length=120, blank=True)
+    address_line2 = models.CharField(max_length=120, blank=True)
+    address_town = models.CharField(max_length=80, blank=True)
+    address_postcode = models.CharField(max_length=8, blank=True)
+    net_total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    vat_total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    gross_total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    vat_summary = models.JSONField(default=list, blank=True, help_text='By rate: [{rate, net, vat}] as strings.')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                   related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+    issued_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                  related_name='+')
+    issued_at = models.DateTimeField(null=True, blank=True)
+    emailed_to = models.EmailField(blank=True)
+    emailed_at = models.DateTimeField(null=True, blank=True)
+    email_status = models.CharField(max_length=10, choices=EMAIL_STATUSES, default=Invoice.NOT_SENT)
+
+    objects = FrozenDocumentQuerySet.as_manager()
+
+    class Meta:
+        ordering = ['-number', '-id']
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'number'], condition=Q(number__isnull=False),
+                                    name='unique_credit_note_number'),
+            models.CheckConstraint(condition=Q(status='draft', number__isnull=True) | Q(status='issued',
+                                                                                       number__isnull=False),
+                                   name='credit_note_numbered_when_issued'),
+        ]
+
+    def __str__(self):
+        return self.number_display
+
+    @property
+    def number_display(self):
+        return f'CN-{self.number:06d}' if self.number else f'Draft #{self.pk}'
+
+    def save(self, *args, update_fields=None, **kwargs):
+        issued = self.pk is not None and CreditNote.objects.filter(pk=self.pk, status=self.ISSUED).exists()
+        if issued and not (update_fields and set(update_fields) <= self.EMAIL_FIELDS):
+            raise ValidationError(FROZEN)
+        super().save(*args, update_fields=update_fields, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        with transaction.atomic():
+            CreditNote.objects.select_for_update().filter(pk=self.pk).first()
+            _refuse_if_credit_issued(self.pk)
+            return super().delete(*args, **kwargs)
+
+
+class CreditNoteLine(models.Model):
+    """Credits one invoice line: units or pieces and/or kg, at the invoice line's price and VAT rate."""
+
+    credit_note = models.ForeignKey(CreditNote, on_delete=models.CASCADE, related_name='lines')
+    invoice_line = models.ForeignKey(InvoiceLine, on_delete=models.PROTECT, related_name='credit_lines')
+    description = models.CharField(max_length=255)
+    quantity = models.PositiveIntegerField(null=True, blank=True)
+    weight_kg = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=4)
+    vat_code = models.CharField(max_length=10, choices=VAT_CODES, blank=True)
+    vat_rate = models.DecimalField(max_digits=5, decimal_places=2)
+    net = models.DecimalField(max_digits=12, decimal_places=2)
+    vat = models.DecimalField(max_digits=12, decimal_places=2)
+    gross = models.DecimalField(max_digits=12, decimal_places=2)
+
+    objects = FrozenLineQuerySet.as_manager()
+    DOCUMENT_FIELD = 'credit_note'
+
+    class Meta:
+        ordering = ['credit_note', 'id']
+
+    def __str__(self):
+        return self.description
+
+    def save(self, *args, **kwargs):
+        if CreditNote.objects.filter(pk=self.credit_note_id, status=CreditNote.ISSUED).exists():
+            raise ValidationError(FROZEN)
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        _refuse_if_credit_issued(self.credit_note_id)
+        return super().delete(*args, **kwargs)
+
+
+def _refuse_if_credit_issued(credit_note_id):
+    if CreditNote.objects.filter(pk=credit_note_id, status=CreditNote.ISSUED).exists():
+        raise ValidationError('An issued credit note cannot be deleted.')
+
+
+@receiver(pre_delete, sender=CreditNote)
+@receiver(pre_delete, sender=CreditNoteLine)
+def _issued_credit_notes_are_kept(sender, instance, **kwargs):
+    _refuse_if_credit_issued(instance.pk if sender is CreditNote else instance.credit_note_id)

@@ -194,8 +194,11 @@ class OrderApiTests(Base):
         self.assertEqual(self.member.post(self.detail(order_id, 'confirm')).status_code, 403)
         self.assertEqual(self.member.post(self.detail(order_id, 'cancel'), {'reason': 'x'},
                                           format='json').status_code, 403)
-        for role in (TILL, STOCK):
-            self.assertEqual(self.operator(role).get(self.list_url).status_code, 403)
+        self.assertEqual(self.operator(TILL).get(self.list_url).status_code, 403)
+        stock = self.operator(STOCK)  # G42: the warehouse reads orders to pick them, but doesn't change them
+        self.assertEqual(stock.get(self.list_url).status_code, 200)
+        self.assertEqual(stock.post(self.detail(order_id, 'confirm')).status_code, 403)
+        self.assertEqual(stock.patch(self.detail(order_id), {'note': 'x'}, format='json').status_code, 403)
 
     def test_tenancy(self):
         theirs = SalesOrder.objects.create(company=self.other_company, number=1, customer=self.foreign_customer,

@@ -1,6 +1,7 @@
 """G44: delivery runs over the API — the manifest, proof-of-delivery photos, and who sees what. Fake data only."""
 
 import shutil
+from decimal import Decimal
 import tempfile
 
 from django.contrib.auth import get_user_model
@@ -17,6 +18,7 @@ from wholesale.models import DeliveryRun, DeliveryStop, TradeCustomerAddress
 from wholesale.tests.test_picking_api import pdf_text
 from wholesale.tests.test_runs import Base
 
+D = Decimal
 PNG = b'\x89PNG\r\n\x1a\n' + b'\x00' * 64
 JPEG = b'\xff\xd8\xff\xe0' + b'\x00' * 64
 
@@ -163,3 +165,13 @@ class RunApiTests(Base):
         self.assertEqual(ids(status='out'), [out])
         self.assertEqual(ids(date=str(self.today)), sorted([planned, out]))
         self.assertEqual(self.api.get(reverse('deliveryrun-list'), {'status': 'x'}).status_code, 400)
+
+
+    def test_a_stop_carries_its_order_lines_for_the_driver(self):
+        order = self.picked_order(rice=3, chops=2, chops_kg=D('1.040'))
+        run_id = self.create(order).json()['id']
+        stop = self.driver_api.get(reverse('deliveryrun-detail', args=[run_id])).json()['stops'][0]
+        lines = {line['product_name']: line for line in stop['lines']}
+        self.assertEqual((lines['Fake Rice']['picked_quantity'], lines['Fake Rice']['sold_by']), (3, 'each'))
+        self.assertEqual((lines['Fake Chops']['picked_weight_kg'], lines['Fake Chops']['is_catch_weight']),
+                         ('1.040', True))

@@ -577,7 +577,7 @@ class DeliveryRunViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retrie
     their own runs and records their stops. No delete: cancel a planned run.
     """
 
-    queryset = DeliveryRun.objects.select_related('vehicle', 'driver').prefetch_related('stops__order__customer')
+    queryset = DeliveryRun.objects.select_related('vehicle', 'driver').prefetch_related('stops__order__customer', 'stops__order__lines__product')
     serializer_class = DeliveryRunSerializer
     permission_classes = [CompanyMemberReadsStaffWrites]
     POD_ACTIONS = {'deliver', 'fail', 'photo'}

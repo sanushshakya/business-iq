@@ -2,6 +2,7 @@ import json
 from decimal import Decimal
 
 from django.db import transaction
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from common.tenancy import TenantModelSerializer
@@ -613,8 +614,23 @@ class InvoiceSerializer(serializers.ModelSerializer):
 PHOTO_SIGNATURES = {'png': (b'\x89PNG\r\n\x1a\n',), 'jpg': (b'\xff\xd8\xff',), 'jpeg': (b'\xff\xd8\xff',)}
 
 
+class StopLineSerializer(serializers.ModelSerializer):
+    """What a stop's order carries (G46b): enough for the driver to refuse by line, without the order API."""
+
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    sold_by = serializers.CharField(source='product.sold_by', read_only=True)
+    is_catch_weight = serializers.BooleanField(source='product.is_catch_weight', read_only=True)
+
+    class Meta:
+        model = SalesOrderLine
+        fields = ['id', 'product_name', 'sold_by', 'is_catch_weight', 'picked_quantity', 'picked_weight_kg']
+        read_only_fields = fields
+
+
 class DeliveryStopSerializer(serializers.ModelSerializer):
     """A stop on a run, in driving order, with its proof of delivery. The photo is fetched from ``photo/``."""
+
+    lines = serializers.SerializerMethodField()
 
     order_number = serializers.CharField(source='order.number_display', read_only=True)
     customer_code = serializers.CharField(source='order.customer.account_code', read_only=True)
@@ -630,8 +646,14 @@ class DeliveryStopSerializer(serializers.ModelSerializer):
         model = DeliveryStop
         fields = ['id', 'position', 'order', 'order_number', 'customer_code', 'customer_name', 'line1', 'line2',
                   'town', 'postcode', 'instructions', 'status', 'received_by', 'delivered_at', 'notes', 'has_photo',
-                  'failed_reason', 'recorded_by']
+                  'failed_reason', 'recorded_by', 'lines']
         read_only_fields = fields
+
+    @extend_schema_field(StopLineSerializer(many=True))
+    def get_lines(self, stop):
+        lines = [line for line in stop.order.lines.all()
+                 if line.substitution not in (SalesOrderLine.PROPOSED, SalesOrderLine.REJECTED)]
+        return StopLineSerializer(lines, many=True).data
 
     def get_customer_name(self, stop) -> str:
         customer = stop.order.customer

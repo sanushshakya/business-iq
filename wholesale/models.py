@@ -15,14 +15,14 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import F, Q
+from django.db.models.signals import pre_delete
+from django.dispatch import receiver
 
 from vat.models import VAT_CODES
+from vat.numbers import VAT_NUMBER, normalise_vat_number, vat_number_problem  # noqa: F401 (used here and re-exported)
 
 WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
 ACCOUNT_CODE = re.compile(r'[A-Z0-9][A-Z0-9-]{0,19}', re.ASCII)
-# UK VAT numbers: GB (or XI for Northern Ireland) + 9 digits, or 12 for a group/branch; GBGD/GBHA + 3 for
-# government bodies and health authorities.
-VAT_NUMBER = re.compile(r'(GB|XI)(\d{9}|\d{12})|GB(GD|HA)\d{3}', re.ASCII)
 POSTCODE = re.compile(r'[A-Z]{1,2}\d[A-Z\d]? ?\d[A-Z]{2}', re.ASCII)
 
 
@@ -33,16 +33,6 @@ def normalise_account_code(value):
 def account_code_problem(code):
     if not ACCOUNT_CODE.fullmatch(code):
         return 'Use 1-20 capital letters, digits or dashes, starting with a letter or digit.'
-    return None
-
-
-def normalise_vat_number(value):
-    return re.sub(r'[\s.-]', '', value or '').upper()
-
-
-def vat_number_problem(number):
-    if number and not VAT_NUMBER.fullmatch(number):
-        return 'Not a UK VAT number (GB or XI and 9 or 12 digits).'
     return None
 
 
@@ -99,6 +89,10 @@ class TradeCustomer(models.Model):
     # Its group's price lists apply after its own (G39); deleting the group leaves it with none.
     group = models.ForeignKey(CustomerGroup, on_delete=models.SET_NULL, null=True, blank=True,
                               related_name='customers')
+    # Invoicing (G43): where invoices are emailed (blank: the primary contact's email) and how long to pay.
+    invoice_email = models.EmailField(blank=True, help_text="Where invoices go; blank: the primary contact's email.")
+    payment_terms_days = models.PositiveSmallIntegerField(default=30, validators=[MaxValueValidator(120)],
+                                                          help_text='Days to pay an invoice (0-120).')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -398,3 +392,124 @@ class SalesOrderPick(models.Model):
 
     def __str__(self):
         return f'Pick #{self.pk}'
+
+
+class Invoice(models.Model):
+    """
+    A trade invoice for a picked order (G43), billed on what was picked (real kg for weighed goods). A draft has no
+    number and can be rebuilt or discarded; issuing numbers it (gap-free per company), copies in who sells to whom
+    with both VAT numbers, and freezes it: after that only the email fields change (``save``/delete refuse).
+    """
+
+    DRAFT, ISSUED = 'draft', 'issued'
+    STATUSES = [(DRAFT, 'Draft'), (ISSUED, 'Issued')]
+    NOT_SENT, QUEUED, SENT, FAILED, NO_ADDRESS = 'not_sent', 'queued', 'sent', 'failed', 'no_address'
+    EMAIL_STATUSES = [(NOT_SENT, 'Not sent'), (QUEUED, 'Queued'), (SENT, 'Sent'), (FAILED, 'Failed'),
+                      (NO_ADDRESS, 'No email address')]
+    EMAIL_FIELDS = {'emailed_to', 'emailed_at', 'email_status'}
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.PROTECT, related_name='invoices')
+    order = models.OneToOneField(SalesOrder, on_delete=models.PROTECT, related_name='invoice')
+    status = models.CharField(max_length=8, choices=STATUSES, default=DRAFT)
+    number = models.PositiveIntegerField(null=True, blank=True)  # per company, set at issue: 1, 2, 3...
+    invoice_date = models.DateField(null=True, blank=True)
+    due_date = models.DateField(null=True, blank=True)
+    # Copied at issue.
+    seller_name = models.CharField(max_length=255, blank=True)
+    seller_address = models.TextField(blank=True)
+    seller_vat_number = models.CharField(max_length=14, blank=True)
+    customer_code = models.CharField(max_length=20, blank=True)
+    customer_name = models.CharField(max_length=150, blank=True)
+    customer_vat_number = models.CharField(max_length=14, blank=True)
+    customer_ref = models.CharField(max_length=40, blank=True)
+    address_line1 = models.CharField(max_length=120, blank=True)
+    address_line2 = models.CharField(max_length=120, blank=True)
+    address_town = models.CharField(max_length=80, blank=True)
+    address_postcode = models.CharField(max_length=8, blank=True)
+    net_total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    vat_total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    gross_total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    vat_summary = models.JSONField(default=list, blank=True, help_text='By rate: [{rate, net, vat}] as strings.')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                   related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+    issued_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                  related_name='+')
+    issued_at = models.DateTimeField(null=True, blank=True)
+    emailed_to = models.EmailField(blank=True)
+    emailed_at = models.DateTimeField(null=True, blank=True)
+    email_status = models.CharField(max_length=10, choices=EMAIL_STATUSES, default=NOT_SENT)
+
+    class Meta:
+        ordering = ['-number', '-id']
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'number'], condition=Q(number__isnull=False),
+                                    name='unique_invoice_number'),
+            models.CheckConstraint(condition=Q(status='draft', number__isnull=True) | Q(status='issued',
+                                                                                       number__isnull=False),
+                                   name='invoice_numbered_when_issued'),
+        ]
+
+    def __str__(self):
+        return self.number_display
+
+    @property
+    def number_display(self):
+        return f'INV-{self.number:06d}' if self.number else f'Draft #{self.pk}'
+
+    def is_issued_in_db(self):
+        return self.pk is not None and Invoice.objects.filter(pk=self.pk, status=self.ISSUED).exists()
+
+    def save(self, *args, update_fields=None, **kwargs):
+        if self.is_issued_in_db() and not (update_fields and set(update_fields) <= self.EMAIL_FIELDS):
+            raise ValidationError('An issued invoice cannot be changed; correct it with a credit note.')
+        super().save(*args, update_fields=update_fields, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        _refuse_if_issued(self.pk)  # before Django's own delete transaction (the signal is the backstop)
+        return super().delete(*args, **kwargs)
+
+
+class InvoiceLine(models.Model):
+    """A billed line: ``quantity`` units or pieces and/or the real ``weight_kg``; net and VAT half up to the
+    penny, at the rate fixed on the order line. Frozen once its invoice is issued."""
+
+    invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='lines')
+    order_line = models.ForeignKey(SalesOrderLine, on_delete=models.PROTECT, related_name='invoice_lines')
+    product = models.ForeignKey('inventory.Product', on_delete=models.PROTECT, related_name='+')
+    description = models.CharField(max_length=255)
+    quantity = models.PositiveIntegerField(null=True, blank=True)
+    weight_kg = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=4, help_text='Ex VAT, per unit or per kg.')
+    vat_code = models.CharField(max_length=10, choices=VAT_CODES, blank=True)
+    vat_rate = models.DecimalField(max_digits=5, decimal_places=2)
+    net = models.DecimalField(max_digits=12, decimal_places=2)
+    vat = models.DecimalField(max_digits=12, decimal_places=2)
+    gross = models.DecimalField(max_digits=12, decimal_places=2)
+
+    class Meta:
+        ordering = ['invoice', 'id']
+
+    def __str__(self):
+        return self.description
+
+    def save(self, *args, **kwargs):
+        if Invoice.objects.filter(pk=self.invoice_id, status=Invoice.ISSUED).exists():
+            raise ValidationError('An issued invoice cannot be changed; correct it with a credit note.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        _refuse_if_issued(self.invoice_id)
+        return super().delete(*args, **kwargs)
+
+
+def _refuse_if_issued(invoice_id):
+    if Invoice.objects.filter(pk=invoice_id, status=Invoice.ISSUED).exists():
+        raise ValidationError('An issued invoice cannot be deleted; correct it with a credit note.')
+
+
+@receiver(pre_delete, sender=Invoice)
+@receiver(pre_delete, sender=InvoiceLine)
+def _issued_invoices_are_kept(sender, instance, **kwargs):
+    # Also runs for queryset deletes. An issued invoice is never deleted (numbers stay gap-free).
+    _refuse_if_issued(instance.pk if sender is Invoice else instance.invoice_id)

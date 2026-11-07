@@ -20,6 +20,8 @@ class Company(models.Model):
     name = models.CharField(max_length=255, verbose_name='Company Name')
     registration_number = models.CharField(max_length=100, unique=True, verbose_name='Registration Number')
     address = models.TextField(verbose_name='Address')
+    # Printed on trade invoices (G43); stored without spaces, e.g. GB123456789. Invoices can't be issued without it.
+    vat_number = models.CharField(max_length=14, blank=True, verbose_name='VAT number')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Created At')
 
     class Meta:

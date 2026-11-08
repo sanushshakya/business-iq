@@ -22,7 +22,7 @@ from inventory.views import CompanyMemberReadsStaffWrites, Conflict
 from tenants.roles import DRIVER, STOCK
 from vat.services import uk_date
 
-from . import credit_notes, invoices, ledger, orders, picking, returns, runs
+from . import credit, credit_notes, invoices, ledger, orders, picking, returns, runs
 from .manifest_pdf import build_manifest_pdf
 from .invoice_pdf import build_credit_note_pdf, build_invoice_pdf
 from .pick_list import build_pick_list
@@ -52,6 +52,10 @@ from .serializers import (
     FailStopSerializer,
     InvoiceSerializer,
     AdjustmentSerializer,
+    ConfirmRequestSerializer,
+    CreditBlockedSerializer,
+    CreditOverrideRequestSerializer,
+    CreditStatusSerializer,
     LedgerEntrySerializer,
     StatementSerializer,
     LaterReturnSerializer,
@@ -119,6 +123,15 @@ class TradeCustomerViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retr
             raise ValidationError({'from': 'At most 366 days at a time.'})
         report = ledger.statement(customer, start, end)
         return Response(StatementSerializer({'customer': customer.pk, 'from': start, 'to': end, **report}).data)
+
+    @extend_schema(responses=CreditStatusSerializer)
+    @action(detail=True, methods=['get'], url_path='credit', url_name='credit')
+    def credit(self, request, pk=None):
+        """Where the customer stands on credit (G48): balance, open orders, exposure, limit, what is available,
+        overdue invoices (oldest first, over the company's `credit_overdue_days`) and what would stop a new order."""
+        customer = self._own_customer()
+        reasons, report = credit.blocks(customer)
+        return Response(CreditStatusSerializer({**report, 'blocks': reasons}).data)
 
     @extend_schema(request=AdjustmentSerializer, responses={201: LedgerEntrySerializer})
     @action(detail=True, methods=['post'])
@@ -301,6 +314,10 @@ class PriceResolveView(APIView):
         return Response(ResolveResponseSerializer({'customer': customer.pk, 'on': on, 'lines': rows}).data)
 
 
+def _credit_blocked(error):
+    return Response({'detail': error.detail, 'code': 'credit_blocked', 'reasons': error.reasons}, status=400)
+
+
 ORDER_STATUSES = {value for value, _label in SalesOrder.STATUSES}
 
 
@@ -336,7 +353,7 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
         'lines', queryset=SalesOrderLine.objects.select_related('product').prefetch_related(Prefetch(
             'reservations', queryset=StockReservation.objects.filter(released_at__isnull=True),
             to_attr='active_reservations'), 'picks__batch'),
-    ))
+    ), 'credit_overrides')
     serializer_class = SalesOrderSerializer
     permission_classes = [CompanyMemberReadsStaffWrites]
 
@@ -374,6 +391,8 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
     def _moved(self, step, *args, **kwargs):
         try:
             result = step(self.get_object(), *args, **kwargs)
+        except credit.CreditBlocked as error:
+            return _credit_blocked(error)
         except orders.OrderStateError as error:
             raise ValidationError({'detail': error.detail}) from None
         if isinstance(result, SalesOrder):
@@ -383,12 +402,37 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
     def _order(self, order):
         return Response(self.get_serializer(self.get_queryset().get(pk=order.pk)).data)
 
-    @extend_schema(request=None, responses=SalesOrderSerializer)
+    @extend_schema(request=ConfirmRequestSerializer, responses={200: SalesOrderSerializer,
+                                                                400: CreditBlockedSerializer})
     @action(detail=True, methods=['post'])
     def confirm(self, request, pk=None):
         """Fix each line's price (lists valid on the delivery date, then the wholesale price) and confirm. Refused
-        when a line has no trade price or the customer is on hold or closed."""
-        return self._moved(orders.confirm, self.request.user)
+        when a line has no trade price, the customer is on hold or closed, or on credit (G48: `code`
+        `credit_blocked` with `reasons`); staff send `credit_override_reason` to confirm past a limit or overdue
+        block, which is logged."""
+        body = ConfirmRequestSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        return self._moved(orders.confirm, self.request.user,
+                           override_reason=body.validated_data.get('credit_override_reason'))
+
+    @extend_schema(request=CreditOverrideRequestSerializer, responses=SalesOrderSerializer)
+    @action(detail=True, methods=['post'], url_path='credit-override', url_name='credit-override')
+    def credit_override(self, request, pk=None):
+        """Staff let a confirmed or picking order past its credit limit or overdue block (G48), with a reason;
+        logged with what blocked it. Never lifts a manual hold. A draft is overridden on confirm."""
+        order = self.get_object()
+        if order.company_id != request.user.company_id:  # superusers too: credit is decided per company
+            raise Http404
+        body = CreditOverrideRequestSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        if order.status not in (SalesOrder.CONFIRMED, SalesOrder.PICKING):
+            raise ValidationError({'detail': 'Only a confirmed or picking order is overridden here (a draft on '
+                                             'confirm).'})
+        try:
+            credit.override(order, request.user, body.validated_data['reason'])
+        except credit.CreditError as error:
+            raise ValidationError({'detail': error.detail}) from None
+        return self._order(order)
 
     @extend_schema(request=None, responses=SalesOrderSerializer)
     @action(detail=True, methods=['post'])
@@ -508,6 +552,10 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
     def pick_list(self, request, pk=None):
         """The printable pick list (PDF), one table per zone: ambient, chilled, frozen, then butchery."""
         order = self.get_object()
+        try:
+            credit.check(order)  # G48
+        except credit.CreditBlocked as error:
+            return _credit_blocked(error)
         response = HttpResponse(build_pick_list(order), content_type='application/pdf')
         response['Content-Disposition'] = f'inline; filename="pick-list-{order.number_display}.pdf"'
         return response

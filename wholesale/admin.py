@@ -8,6 +8,7 @@ from inventory.admin import ViewOnlyAdmin
 from .models import (
     CreditNote,
     CreditNoteLine,
+    CreditOverride,
     CustomerGroup,
     CustomerReturn,
     DeliveryRun,
@@ -318,3 +319,10 @@ class LedgerEntryAdmin(TenantAdminMixin, ViewOnlyAdmin):
 
     list_display = ['customer', 'entry_date', 'kind', 'amount', 'description']
     list_filter = ['kind']
+
+
+@admin.register(CreditOverride)
+class CreditOverrideAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """View only: a credit override is a logged decision (G48), made through the API."""
+
+    list_display = ['order', 'created_at', 'created_by', 'blocks', 'exposure', 'credit_limit']

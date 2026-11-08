@@ -17,6 +17,7 @@ from .models import (
     DeliveryRun,
     DeliveryStop,
     Invoice,
+    CreditOverride,
     InvoiceLine,
     LedgerEntry,
     PriceList,
@@ -86,8 +87,9 @@ class TradeCustomerSerializer(TenantModelSerializer):
     class Meta:
         model = TradeCustomer
         fields = [
-            'id', 'account_code', 'legal_name', 'trading_name', 'vat_number', 'status', 'delivery_days', 'note',
-            'group', 'invoice_email', 'payment_terms_days', 'addresses', 'contacts', 'balance', 'created_at',
+            'id', 'account_code', 'legal_name', 'trading_name', 'vat_number', 'status', 'hold_reason',
+            'delivery_days', 'note', 'group', 'invoice_email', 'payment_terms_days', 'credit_limit', 'addresses',
+            'contacts', 'balance', 'created_at',
             'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
@@ -419,6 +421,53 @@ class SalesOrderLineSerializer(TenantModelSerializer):
         return attrs
 
 
+class CreditOverrideSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CreditOverride
+        fields = ['id', 'order', 'reason', 'blocks', 'balance', 'exposure', 'credit_limit', 'overdue', 'created_by',
+                  'created_at']
+        read_only_fields = fields
+
+
+class CreditReasonSerializer(serializers.Serializer):
+    code = serializers.ChoiceField(choices=['on_hold', 'over_limit', 'overdue'])
+    message = serializers.CharField()
+
+
+class OverdueInvoiceSerializer(serializers.Serializer):
+    invoice = serializers.IntegerField()
+    number = serializers.CharField()
+    due_date = serializers.DateField()
+    open = serializers.DecimalField(max_digits=14, decimal_places=2)
+
+
+class CreditStatusSerializer(serializers.Serializer):
+    balance = serializers.DecimalField(max_digits=14, decimal_places=2)
+    open_orders = serializers.DecimalField(max_digits=14, decimal_places=2,
+                                           help_text='Estimated gross of confirmed-to-delivered orders not invoiced.')
+    exposure = serializers.DecimalField(max_digits=14, decimal_places=2)
+    credit_limit = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
+    available = serializers.DecimalField(max_digits=14, decimal_places=2, allow_null=True)
+    overdue = OverdueInvoiceSerializer(many=True)
+    overdue_days = serializers.IntegerField()
+    blocks = CreditReasonSerializer(many=True, help_text='What would stop a new order now.')
+
+
+class CreditBlockedSerializer(serializers.Serializer):
+    detail = serializers.CharField()
+    code = serializers.CharField(help_text='credit_blocked')
+    reasons = CreditReasonSerializer(many=True)
+
+
+class CreditOverrideRequestSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=255)
+
+
+class ConfirmRequestSerializer(serializers.Serializer):
+    credit_override_reason = serializers.CharField(
+        max_length=255, required=False, help_text='Staff: confirm past a credit limit or overdue block (G48).')
+
+
 class SalesOrderSerializer(TenantModelSerializer):
     """
     A trade sales order (G40). On create, ``address`` picks one of the customer's addresses (the default when left
@@ -435,6 +484,10 @@ class SalesOrderSerializer(TenantModelSerializer):
     address = serializers.PrimaryKeyRelatedField(queryset=TradeCustomerAddress.objects.all(), write_only=True,
                                                  required=False, help_text="One of the customer's addresses.")
     lines = SalesOrderLineSerializer(many=True, allow_empty=False)
+    credit_blocks = serializers.SerializerMethodField(
+        help_text='What stops confirm, start-pick and the pick list now (G48): [{code, message, ...}]; on a single '
+                  'order only (empty in lists and once picked; a draft\'s own amount counts from confirm).')
+    credit_override = serializers.SerializerMethodField(help_text='The latest staff credit override, if any.')
 
     class Meta:
         model = SalesOrder
@@ -442,8 +495,8 @@ class SalesOrderSerializer(TenantModelSerializer):
             'id', 'number', 'number_display', 'customer', 'customer_code', 'customer_name', 'delivery_date',
             'off_delivery_day', 'customer_ref', 'note', 'status', 'source_location', 'is_short', 'address', 'delivery_label', 'line1', 'line2',
             'town', 'postcode', 'instructions', 'lines', 'estimated_net', 'estimated_vat', 'estimated_gross',
-            'created_by', 'confirmed_by', 'confirmed_at', 'cancelled_at', 'cancel_reason', 'created_at',
-            'updated_at',
+            'created_by', 'confirmed_by', 'confirmed_at', 'cancelled_at', 'cancel_reason', 'credit_blocks',
+            'credit_override', 'created_at', 'updated_at',
         ]
         read_only_fields = [
             'id', 'number', 'status', 'delivery_label', 'line1', 'line2', 'town', 'postcode', 'instructions',
@@ -460,6 +513,21 @@ class SalesOrderSerializer(TenantModelSerializer):
 
     def get_customer_name(self, order) -> str:
         return order.customer.trading_name or order.customer.legal_name
+
+    @extend_schema_field(CreditReasonSerializer(many=True))
+    def get_credit_blocks(self, order):
+        from .credit import order_blocks
+
+        view = self.context.get('view')
+        if getattr(view, 'action', None) == 'list' or order.status not in (SalesOrder.DRAFT, SalesOrder.CONFIRMED,
+                                                                            SalesOrder.PICKING):
+            return []
+        return order_blocks(order)
+
+    @extend_schema_field(CreditOverrideSerializer(allow_null=True))
+    def get_credit_override(self, order):
+        latest = next(iter(order.credit_overrides.all()), None)  # newest first; prefetched in lists
+        return CreditOverrideSerializer(latest).data if latest else None
 
     def get_is_short(self, order) -> bool:
         return any((SalesOrderLineSerializer.amounts(line)[1] or 0) > 0 for line in order.lines.all())

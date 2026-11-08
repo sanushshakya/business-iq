@@ -92,6 +92,10 @@ class TradeCustomer(models.Model):
                               related_name='customers')
     # Invoicing (G43): where invoices are emailed (blank: the primary contact's email) and how long to pay.
     invoice_email = models.EmailField(blank=True, help_text="Where invoices go; blank: the primary contact's email.")
+    credit_limit = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True,
+                                       validators=[MinValueValidator(Decimal('0'))],
+                                       help_text='What they may owe, incl. open orders (G48); blank: no limit.')
+    hold_reason = models.CharField(max_length=255, blank=True, help_text='Why they are on hold (shown on orders).')
     payment_terms_days = models.PositiveSmallIntegerField(default=30, validators=[MaxValueValidator(120)],
                                                           help_text='Days to pay an invoice (0-120).')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -897,3 +901,32 @@ class LedgerEntry(models.Model):
 @receiver(pre_delete, sender=LedgerEntry)
 def _ledger_entries_are_kept(sender, instance, **kwargs):
     raise ValidationError(LEDGER_FROZEN)
+
+
+class CreditOverride(models.Model):
+    """
+    A staff decision to let one order past its credit blocks (G48): over the limit and/or overdue invoices (never a
+    manual hold). It covers that order's confirm, start-pick and pick list, and keeps what blocked it at the time.
+    Never changed once written.
+    """
+
+    order = models.ForeignKey(SalesOrder, on_delete=models.PROTECT, related_name='credit_overrides')
+    reason = models.CharField(max_length=255)
+    blocks = models.JSONField(default=list, help_text='What it lifted: over_limit, overdue.')
+    balance = models.DecimalField(max_digits=14, decimal_places=2)
+    exposure = models.DecimalField(max_digits=14, decimal_places=2)
+    credit_limit = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    overdue = models.JSONField(default=list, blank=True, help_text='[{invoice, number, due_date, open}] then.')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['order', '-created_at', '-id']
+
+    def __str__(self):
+        return f'Credit override #{self.pk}'
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError('A credit override is never changed.')
+        super().save(*args, **kwargs)

@@ -47,6 +47,9 @@ def _line(order, line_id):
 
 
 def start_pick(order):
+    from . import credit  # credit imports orders, which this module imports
+
+    credit.check(order)  # G48: the limit, overdue invoices and the manual hold stop picking too
     return advance(order, S.PICKING)
 
 

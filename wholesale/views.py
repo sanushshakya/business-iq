@@ -1,9 +1,11 @@
-from datetime import date
+from datetime import date, timedelta
+from decimal import Decimal
 
 from django.db import IntegrityError, transaction
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404
-from django.db.models import Prefetch, Q
+from django.db.models import DecimalField, OuterRef, Prefetch, Q, Subquery, Sum, Value
+from django.db.models.functions import Coalesce
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import mixins, viewsets
@@ -20,7 +22,7 @@ from inventory.views import CompanyMemberReadsStaffWrites
 from tenants.roles import DRIVER, STOCK
 from vat.services import uk_date
 
-from . import credit_notes, invoices, orders, picking, returns, runs
+from . import credit_notes, invoices, ledger, orders, picking, returns, runs
 from .manifest_pdf import build_manifest_pdf
 from .invoice_pdf import build_credit_note_pdf, build_invoice_pdf
 from .pick_list import build_pick_list
@@ -31,6 +33,7 @@ from .models import (
     DeliveryRun,
     DeliveryStop,
     Invoice,
+    LedgerEntry,
     PriceList,
     PriceListEntry,
     SalesOrder,
@@ -48,6 +51,9 @@ from .serializers import (
     DeliveryRunSerializer,
     FailStopSerializer,
     InvoiceSerializer,
+    AdjustmentSerializer,
+    LedgerEntrySerializer,
+    StatementSerializer,
     LaterReturnSerializer,
     PickRequestSerializer,
     PriceListSerializer,
@@ -79,7 +85,10 @@ class TradeCustomerViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retr
     permission_classes = [CompanyMemberReadsStaffWrites]
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        owed = (LedgerEntry.objects.filter(customer=OuterRef('pk')).order_by().values('customer')
+                .annotate(total=Sum('amount')).values('total'))
+        queryset = super().get_queryset().annotate(
+            ledger_balance=Coalesce(Subquery(owed), Value(Decimal('0.00')), output_field=DecimalField()))
         status = self.request.query_params.get('status')
         if status is not None:
             if status not in STATUS_VALUES:
@@ -91,6 +100,40 @@ class TradeCustomerViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retr
                 Q(account_code__icontains=search) | Q(legal_name__icontains=search) | Q(trading_name__icontains=search)
             )
         return queryset
+
+    @extend_schema(parameters=[
+        OpenApiParameter('from', OpenApiTypes.DATE, description='First day (UK, inclusive); default 89 days before '
+                         '`to`.'),
+        OpenApiParameter('to', OpenApiTypes.DATE, description='Last day (UK, inclusive); default today.'),
+    ], responses=StatementSerializer)
+    @action(detail=True, methods=['get'])
+    def ledger(self, request, pk=None):
+        """The customer's statement (G47): the balance before `from`, every entry to `to` with the balance after
+        it, and the closing balance. At most 366 days."""
+        customer = self.get_object()
+        end = _date_param(request.query_params, 'to') or uk_date()
+        start = _date_param(request.query_params, 'from') or end - timedelta(days=89)
+        if start > end:
+            raise ValidationError({'from': 'On or before `to`.'})
+        if (end - start).days > 365:
+            raise ValidationError({'from': 'At most 366 days at a time.'})
+        report = ledger.statement(customer, start, end)
+        return Response(StatementSerializer({'customer': customer.pk, 'from': start, 'to': end, **report}).data)
+
+    @extend_schema(request=AdjustmentSerializer, responses={201: LedgerEntrySerializer})
+    @action(detail=True, methods=['post'])
+    def adjustments(self, request, pk=None):
+        """Post a manual adjustment (staff): `amount` to the penny, not 0, and a `reason`. It never changes VAT
+        (that is a credit note) and cannot be edited: correct one with the opposite adjustment."""
+        customer = self.get_object()
+        body = AdjustmentSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        try:
+            entry = ledger.post_adjustment(customer, body.validated_data['amount'], body.validated_data['reason'],
+                                           request.user)
+        except ledger.LedgerError as error:
+            raise ValidationError({'amount': str(error)}) from None
+        return Response(LedgerEntrySerializer(entry).data, status=201)
 
     def perform_create(self, serializer):
         self._save_once(super().perform_create, serializer)

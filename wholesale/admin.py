@@ -13,6 +13,7 @@ from .models import (
     DeliveryRun,
     DeliveryStop,
     Invoice,
+    LedgerEntry,
     InvoiceLine,
     PriceList,
     PriceListEntry,
@@ -309,3 +310,11 @@ class DeliveryStopAdmin(TenantAdminMixin, ViewOnlyAdmin):
 @admin.register(CustomerReturn, ReturnLine, CreditNote, CreditNoteLine)
 class ReturnsAndCreditsAdmin(TenantAdminMixin, ViewOnlyAdmin):
     """View only: returns move stock and credit notes are frozen once issued (G45); both change through the API."""
+
+
+@admin.register(LedgerEntry)
+class LedgerEntryAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """View only: the customer ledger is append-only (G47); adjustments are posted through the API."""
+
+    list_display = ['customer', 'entry_date', 'kind', 'amount', 'description']
+    list_filter = ['kind']

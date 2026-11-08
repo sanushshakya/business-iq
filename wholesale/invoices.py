@@ -24,6 +24,7 @@ from django.utils import timezone
 from tenants.models import Company
 from vat.services import HUNDRED, PENNY, uk_date
 
+from .ledger import post_invoice
 from .models import Invoice, InvoiceLine, SalesOrder, SalesOrderLine, TradeCustomer, TradeCustomerContact
 
 logger = logging.getLogger(__name__)
@@ -146,6 +147,7 @@ def issue(invoice, user):
     invoice.issued_by, invoice.issued_at = user, timezone.now()
     invoice.email_status = Invoice.QUEUED
     invoice.save()
+    post_invoice(invoice, customer.pk)  # the customer now owes it (G47), in this transaction: once per invoice
     if order.status == S.DELIVERED:
         from .orders import advance  # delivered -> invoiced (G44 does the same when a delivery completes)
 

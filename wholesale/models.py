@@ -812,3 +812,79 @@ def _refuse_if_credit_issued(credit_note_id):
 @receiver(pre_delete, sender=CreditNoteLine)
 def _issued_credit_notes_are_kept(sender, instance, **kwargs):
     _refuse_if_credit_issued(instance.pk if sender is CreditNote else instance.credit_note_id)
+
+
+LEDGER_FROZEN = 'A ledger entry cannot be changed or deleted; post a reversing adjustment.'
+
+
+class LedgerEntryQuerySet(models.QuerySet):
+    """Only new rows: no bulk path changes or deletes an entry."""
+
+    def update(self, **kwargs):
+        raise ValidationError(LEDGER_FROZEN)
+
+    def delete(self):
+        raise ValidationError(LEDGER_FROZEN)
+
+    def bulk_update(self, objs, fields, *args, **kwargs):
+        raise ValidationError(LEDGER_FROZEN)
+
+
+class LedgerEntry(models.Model):
+    """
+    One line of a trade customer's account (G47), append-only: what they owe is the sum of their entries, never a
+    stored balance. Positive = they owe more (an issued invoice, a debit adjustment); negative = they owe less (an
+    issued credit note, a payment, a credit adjustment). Invoices and credit notes post themselves when issued;
+    staff post adjustments with a reason. A mistake is corrected by a reversing adjustment.
+    """
+
+    INVOICE, CREDIT_NOTE, PAYMENT, ADJUSTMENT = 'invoice', 'credit_note', 'payment', 'adjustment'
+    KINDS = [(INVOICE, 'Invoice'), (CREDIT_NOTE, 'Credit note'), (PAYMENT, 'Payment'), (ADJUSTMENT, 'Adjustment')]
+    objects = LedgerEntryQuerySet.as_manager()
+
+    customer = models.ForeignKey(TradeCustomer, on_delete=models.PROTECT, related_name='ledger_entries')
+    kind = models.CharField(max_length=12, choices=KINDS)
+    entry_date = models.DateField(help_text="The document's date (UK); an adjustment's posting date.")
+    amount = models.DecimalField(max_digits=12, decimal_places=2, help_text='Signed: positive = owed more.')
+    invoice = models.OneToOneField(Invoice, on_delete=models.PROTECT, null=True, blank=True,
+                                   related_name='ledger_entry')
+    credit_note = models.OneToOneField(CreditNote, on_delete=models.PROTECT, null=True, blank=True,
+                                       related_name='ledger_entry')
+    payment_ref = models.CharField(max_length=60, blank=True)  # G49
+    description = models.CharField(max_length=120)
+    reason = models.CharField(max_length=255, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                   related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['customer', 'entry_date', 'id']
+        indexes = [models.Index(fields=['customer', 'entry_date'], name='ledger_customer_date')]
+        constraints = [
+            models.CheckConstraint(condition=~Q(amount=0), name='ledger_amount_not_zero'),
+            models.CheckConstraint(
+                condition=(
+                    Q(kind='invoice', amount__gt=0, invoice__isnull=False, credit_note__isnull=True)
+                    | Q(kind='credit_note', amount__lt=0, credit_note__isnull=False, invoice__isnull=True)
+                    | Q(kind='payment', amount__lt=0, invoice__isnull=True, credit_note__isnull=True)
+                    | (Q(kind='adjustment', invoice__isnull=True, credit_note__isnull=True) & ~Q(reason=''))
+                ),
+                name='ledger_kind_sign_and_document',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.description} {self.amount}'
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError(LEDGER_FROZEN)
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError(LEDGER_FROZEN)
+
+
+@receiver(pre_delete, sender=LedgerEntry)
+def _ledger_entries_are_kept(sender, instance, **kwargs):
+    raise ValidationError(LEDGER_FROZEN)

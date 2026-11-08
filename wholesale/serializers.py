@@ -18,6 +18,7 @@ from .models import (
     DeliveryStop,
     Invoice,
     InvoiceLine,
+    LedgerEntry,
     PriceList,
     PriceListEntry,
     ReturnLine,
@@ -80,14 +81,24 @@ class TradeCustomerSerializer(TenantModelSerializer):
     )
     addresses = TradeCustomerAddressSerializer(many=True, required=False)
     contacts = TradeCustomerContactSerializer(many=True, required=False)
+    balance = serializers.SerializerMethodField(help_text='What they owe: the sum of their ledger entries (G47).')
 
     class Meta:
         model = TradeCustomer
         fields = [
             'id', 'account_code', 'legal_name', 'trading_name', 'vat_number', 'status', 'delivery_days', 'note',
-            'group', 'invoice_email', 'payment_terms_days', 'addresses', 'contacts', 'created_at', 'updated_at',
+            'group', 'invoice_email', 'payment_terms_days', 'addresses', 'contacts', 'balance', 'created_at',
+            'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    @extend_schema_field(serializers.DecimalField(max_digits=14, decimal_places=2))
+    def get_balance(self, customer):
+        from .ledger import balance
+
+        # Lists annotate it (one query); a just-saved customer is summed on its own.
+        total = getattr(customer, 'ledger_balance', None)
+        return f'{(balance(customer) if total is None else total):.2f}'
 
     def to_internal_value(self, data):
         # Normalise before the unique (company, account_code) check sees it.
@@ -847,3 +858,37 @@ class CreditNoteSerializer(TenantModelSerializer):
         if customer_return.company_id != self.context['request'].user.company_id:  # superusers included
             raise serializers.ValidationError("Another company's return can't be credited here.")
         return customer_return
+
+
+class LedgerEntrySerializer(serializers.ModelSerializer):
+    """A customer ledger entry (G47): read only; ``amount`` positive = owed more, negative = owed less."""
+
+    class Meta:
+        model = LedgerEntry
+        fields = ['id', 'kind', 'entry_date', 'amount', 'description', 'reason', 'invoice', 'credit_note',
+                  'payment_ref', 'created_by', 'created_at']
+        read_only_fields = fields
+
+
+class StatementEntrySerializer(LedgerEntrySerializer):
+    running = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True,
+                                       help_text='The balance after this entry.')
+
+    class Meta(LedgerEntrySerializer.Meta):
+        fields = [*LedgerEntrySerializer.Meta.fields, 'running']
+        read_only_fields = fields
+
+
+class StatementSerializer(serializers.Serializer):
+    customer = serializers.IntegerField()
+    start = serializers.DateField(source='from')
+    end = serializers.DateField(source='to')
+    opening = serializers.DecimalField(max_digits=14, decimal_places=2)
+    entries = StatementEntrySerializer(many=True)
+    closing = serializers.DecimalField(max_digits=14, decimal_places=2)
+
+
+class AdjustmentSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=8, decimal_places=2,
+                                      help_text='Positive: they owe more; negative: they owe less. Not 0.')
+    reason = serializers.CharField(max_length=255)

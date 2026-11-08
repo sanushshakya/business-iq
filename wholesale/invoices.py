@@ -24,6 +24,7 @@ from django.utils import timezone
 from tenants.models import Company
 from vat.services import HUNDRED, PENNY, uk_date
 
+from .ledger import post_invoice
 from .models import Invoice, InvoiceLine, SalesOrder, SalesOrderLine, TradeCustomer, TradeCustomerContact
 
 logger = logging.getLogger(__name__)
@@ -40,19 +41,23 @@ def _round(value):
 
 
 def _billed_lines(order):
-    """``InvoiceLine`` objects (unsaved) for what was picked; lines with nothing picked are left out."""
+    """``InvoiceLine`` objects (unsaved) for what was delivered (picked, less refused at the door); lines with
+    nothing delivered are left out."""
     rows = []
     lines = order.lines.select_related('product').exclude(
         substitution__in=[SalesOrderLine.PROPOSED, SalesOrderLine.REJECTED]).order_by('id')
+    from .returns import delivered
+
     for line in lines:
         product = line.product
+        units, kg = delivered(line)  # picked, less refused at the door (G45)
         if product.is_weighed:
-            amount = line.picked_weight_kg or Decimal('0')
-            quantity = line.picked_quantity if product.is_catch_weight else None
+            amount = kg
+            quantity = units if product.is_catch_weight else None
             weight = amount
         else:
-            amount = Decimal(line.picked_quantity or 0)
-            quantity, weight = line.picked_quantity, None
+            amount = Decimal(units)
+            quantity, weight = units, None
         if amount <= 0:
             continue
         if line.unit_price is None or line.vat_rate is None:
@@ -65,7 +70,7 @@ def _billed_lines(order):
             gross=net + vat,
         ))
     if not rows:
-        raise InvoiceError('Nothing was picked on this order, so there is nothing to invoice.')
+        raise InvoiceError('Nothing was picked (or all of it was refused), so there is nothing to invoice.')
     return rows
 
 
@@ -124,7 +129,9 @@ def issue(invoice, user):
         raise InvoiceError("Set your company's VAT number before issuing invoices.")
     if not invoice.lines.exists():
         raise InvoiceError('An invoice needs at least one line.')
-    order = invoice.order
+    # The order under its lock (after the invoice's): a delivery committing meanwhile is seen, and either it or
+    # this issue moves the order on to invoiced (G44).
+    order = SalesOrder.objects.select_for_update().get(pk=invoice.order_id)
     customer = TradeCustomer.objects.get(pk=order.customer_id)
     last = Invoice.objects.filter(company=company, number__isnull=False).aggregate(last=Max('number'))['last']
     invoice.number = (last or 0) + 1
@@ -140,6 +147,7 @@ def issue(invoice, user):
     invoice.issued_by, invoice.issued_at = user, timezone.now()
     invoice.email_status = Invoice.QUEUED
     invoice.save()
+    post_invoice(invoice, customer.pk)  # the customer now owes it (G47), in this transaction: once per invoice
     if order.status == S.DELIVERED:
         from .orders import advance  # delivered -> invoiced (G44 does the same when a delivery completes)
 

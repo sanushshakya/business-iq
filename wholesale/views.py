@@ -1,29 +1,39 @@
-from datetime import date
+from datetime import date, timedelta
+from decimal import Decimal
 
 from django.db import IntegrityError, transaction
-from django.http import HttpResponse
-from django.db.models import Prefetch, Q
+from django.http import FileResponse, Http404, HttpResponse
+from django.shortcuts import get_object_or_404
+from django.db.models import DecimalField, OuterRef, Prefetch, Q, Subquery, Sum, Value
+from django.db.models.functions import Coalesce
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.tenancy import TenantScopedMixin
 from inventory.models import StockReservation
-from inventory.views import CompanyMemberReadsStaffWrites
-from tenants.roles import STOCK
+from inventory.views import CompanyMemberReadsStaffWrites, Conflict
+from tenants.roles import DRIVER, STOCK
 from vat.services import uk_date
 
-from . import invoices, orders, picking
-from .invoice_pdf import build_invoice_pdf
+from . import credit, credit_notes, invoices, ledger, orders, picking, returns, runs
+from .manifest_pdf import build_manifest_pdf
+from .invoice_pdf import build_credit_note_pdf, build_invoice_pdf
 from .pick_list import build_pick_list
 from .models import (
+    CreditNote,
     CustomerGroup,
+    CustomerReturn,
+    DeliveryRun,
+    DeliveryStop,
     Invoice,
+    LedgerEntry,
     PriceList,
     PriceListEntry,
     SalesOrder,
@@ -34,8 +44,21 @@ from .models import (
 from .pricing import resolve_prices
 from .serializers import (
     CancelOrderSerializer,
+    CreditNoteSerializer,
     CustomerGroupSerializer,
+    CustomerReturnSerializer,
+    DeliverSerializer,
+    DeliveryRunSerializer,
+    FailStopSerializer,
     InvoiceSerializer,
+    AdjustmentSerializer,
+    ConfirmRequestSerializer,
+    CreditBlockedSerializer,
+    CreditOverrideRequestSerializer,
+    CreditStatusSerializer,
+    LedgerEntrySerializer,
+    StatementSerializer,
+    LaterReturnSerializer,
     PickRequestSerializer,
     PriceListSerializer,
     ResolveRequestSerializer,
@@ -66,7 +89,10 @@ class TradeCustomerViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retr
     permission_classes = [CompanyMemberReadsStaffWrites]
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        owed = (LedgerEntry.objects.filter(customer=OuterRef('pk')).order_by().values('customer')
+                .annotate(total=Sum('amount')).values('total'))
+        queryset = super().get_queryset().annotate(
+            ledger_balance=Coalesce(Subquery(owed), Value(Decimal('0.00')), output_field=DecimalField()))
         status = self.request.query_params.get('status')
         if status is not None:
             if status not in STATUS_VALUES:
@@ -78,6 +104,58 @@ class TradeCustomerViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retr
                 Q(account_code__icontains=search) | Q(legal_name__icontains=search) | Q(trading_name__icontains=search)
             )
         return queryset
+
+    @extend_schema(parameters=[
+        OpenApiParameter('from', OpenApiTypes.DATE, description='First day (UK, inclusive); default 89 days before '
+                         '`to`.'),
+        OpenApiParameter('to', OpenApiTypes.DATE, description='Last day (UK, inclusive); default today.'),
+    ], responses=StatementSerializer)
+    @action(detail=True, methods=['get'])
+    def ledger(self, request, pk=None):
+        """The customer's statement (G47): the balance before `from`, every entry to `to` with the balance after
+        it, and the closing balance. At most 366 days."""
+        customer = self._own_customer()
+        end = _date_param(request.query_params, 'to') or uk_date()
+        start = _date_param(request.query_params, 'from') or end - timedelta(days=89)
+        if start > end:
+            raise ValidationError({'from': 'On or before `to`.'})
+        if (end - start).days > 365:
+            raise ValidationError({'from': 'At most 366 days at a time.'})
+        report = ledger.statement(customer, start, end)
+        return Response(StatementSerializer({'customer': customer.pk, 'from': start, 'to': end, **report}).data)
+
+    @extend_schema(responses=CreditStatusSerializer)
+    @action(detail=True, methods=['get'], url_path='credit', url_name='credit')
+    def credit(self, request, pk=None):
+        """Where the customer stands on credit (G48): balance, open orders, exposure, limit, what is available,
+        overdue invoices (oldest first, over the company's `credit_overdue_days`) and what would stop a new order."""
+        customer = self._own_customer()
+        reasons, report = credit.blocks(customer)
+        return Response(CreditStatusSerializer({**report, 'blocks': reasons}).data)
+
+    @extend_schema(request=AdjustmentSerializer, responses={201: LedgerEntrySerializer})
+    @action(detail=True, methods=['post'])
+    def adjustments(self, request, pk=None):
+        """Post a manual adjustment (staff): `amount` to the penny, not 0, and a `reason`. It never changes VAT
+        (that is a credit note) and cannot be edited: correct one with the opposite adjustment."""
+        customer = self._own_customer()
+        body = AdjustmentSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        try:
+            entry = ledger.post_adjustment(customer, body.validated_data['amount'], body.validated_data['reason'],
+                                           request.user, client_ref=body.validated_data.get('client_ref'))
+        except ledger.AdjustmentConflict as error:
+            raise Conflict(str(error)) from None
+        except ledger.LedgerError as error:
+            raise ValidationError({'amount': str(error)}) from None
+        return Response(LedgerEntrySerializer(entry).data, status=200 if entry.repeated else 201)
+
+    def _own_customer(self):
+        # Money is posted and read only on the user's own company's accounts, superusers included.
+        customer = self.get_object()
+        if customer.company_id != self.request.user.company_id:
+            raise Http404
+        return customer
 
     def perform_create(self, serializer):
         self._save_once(super().perform_create, serializer)
@@ -236,6 +314,13 @@ class PriceResolveView(APIView):
         return Response(ResolveResponseSerializer({'customer': customer.pk, 'on': on, 'lines': rows}).data)
 
 
+def _credit_blocked(error, user):
+    if getattr(user, 'role', ''):  # an operator (the stock role picking): which rule, not the figures
+        reasons = credit.for_operator(error.reasons)
+        return Response({'detail': credit.OPERATOR_MESSAGE, 'code': 'credit_blocked', 'reasons': reasons}, status=400)
+    return Response({'detail': error.detail, 'code': 'credit_blocked', 'reasons': error.reasons}, status=400)
+
+
 ORDER_STATUSES = {value for value, _label in SalesOrder.STATUSES}
 
 
@@ -271,7 +356,7 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
         'lines', queryset=SalesOrderLine.objects.select_related('product').prefetch_related(Prefetch(
             'reservations', queryset=StockReservation.objects.filter(released_at__isnull=True),
             to_attr='active_reservations'), 'picks__batch'),
-    ))
+    ), 'credit_overrides')
     serializer_class = SalesOrderSerializer
     permission_classes = [CompanyMemberReadsStaffWrites]
 
@@ -309,6 +394,8 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
     def _moved(self, step, *args, **kwargs):
         try:
             result = step(self.get_object(), *args, **kwargs)
+        except credit.CreditBlocked as error:
+            return _credit_blocked(error, self.request.user)
         except orders.OrderStateError as error:
             raise ValidationError({'detail': error.detail}) from None
         if isinstance(result, SalesOrder):
@@ -318,12 +405,40 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
     def _order(self, order):
         return Response(self.get_serializer(self.get_queryset().get(pk=order.pk)).data)
 
-    @extend_schema(request=None, responses=SalesOrderSerializer)
+    @extend_schema(request=ConfirmRequestSerializer, responses={200: SalesOrderSerializer,
+                                                                400: CreditBlockedSerializer})
     @action(detail=True, methods=['post'])
     def confirm(self, request, pk=None):
         """Fix each line's price (lists valid on the delivery date, then the wholesale price) and confirm. Refused
-        when a line has no trade price or the customer is on hold or closed."""
-        return self._moved(orders.confirm, self.request.user)
+        when a line has no trade price, the customer is on hold or closed, or on credit (G48: `code`
+        `credit_blocked` with `reasons`); staff send `credit_override_reason` to confirm past a limit or overdue
+        block, which is logged."""
+        body = ConfirmRequestSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        if 'credit_override_reason' in body.validated_data and self.get_object().company_id != request.user.company_id:
+            raise Http404  # superusers too: credit is decided per company
+        return self._moved(orders.confirm, self.request.user,
+                           override_reason=body.validated_data.get('credit_override_reason'))
+
+    @extend_schema(request=CreditOverrideRequestSerializer, responses={200: SalesOrderSerializer,
+                                                                       400: CreditBlockedSerializer})
+    @action(detail=True, methods=['post'], url_path='credit-override', url_name='credit-override')
+    def credit_override(self, request, pk=None):
+        """Staff let a confirmed or picking order past its credit limit or overdue block (G48), with a reason;
+        logged with what blocked it. Never lifts a manual hold. A draft is overridden on confirm."""
+        order = self.get_object()
+        if order.company_id != request.user.company_id:  # superusers too: credit is decided per company
+            raise Http404
+        body = CreditOverrideRequestSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        if order.status not in (SalesOrder.CONFIRMED, SalesOrder.PICKING):
+            raise ValidationError({'detail': 'Only a confirmed or picking order is overridden here (a draft on '
+                                             'confirm).'})
+        try:
+            credit.override(order, request.user, body.validated_data['reason'])
+        except credit.CreditError as error:
+            raise ValidationError({'detail': error.detail}) from None
+        return self._order(order)
 
     @extend_schema(request=None, responses=SalesOrderSerializer)
     @action(detail=True, methods=['post'])
@@ -419,11 +534,35 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
         """Reject a proposed swap (staff, not the proposer)."""
         return self._decide(line_id, False)
 
+    @extend_schema(request=LaterReturnSerializer, responses={201: CustomerReturnSerializer})
+    @action(detail=True, methods=['post'])
+    def returns(self, request, pk=None):
+        """Record goods the customer gave back after delivery (G45): to stock or waste by reason, at once."""
+        order = self.get_object()
+        serializer = LaterReturnSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        lines = [dict(line) for line in serializer.validated_data['lines']]
+        for line in lines:
+            location = line.get('location')
+            if location is not None and location.company_id != order.company_id:
+                raise ValidationError({'lines': "Another company's location can't take stock."})
+        try:
+            customer_return = returns.record_return(order, request.user, lines,
+                                                    note=serializer.validated_data.get('note', ''))
+        except returns.ReturnError as error:
+            raise ValidationError({'detail': str(error)}) from None
+        return Response(CustomerReturnSerializer(customer_return).data, status=201)
+
     @extend_schema(request=None, responses={(200, 'application/pdf'): OpenApiTypes.BINARY})
     @action(detail=True, methods=['get'], url_path='pick-list', url_name='pick-list')
     def pick_list(self, request, pk=None):
         """The printable pick list (PDF), one table per zone: ambient, chilled, frozen, then butchery."""
         order = self.get_object()
+        if order.status in (SalesOrder.CONFIRMED, SalesOrder.PICKING):  # a finished pick list can be printed again
+            try:
+                credit.check(order, order.customer)  # G48
+            except credit.CreditBlocked as error:
+                return _credit_blocked(error, request.user)
         response = HttpResponse(build_pick_list(order), content_type='application/pdf')
         response['Content-Disposition'] = f'inline; filename="pick-list-{order.number_display}.pdf"'
         return response
@@ -514,4 +653,215 @@ class InvoiceViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveMo
         invoice = self.get_object()
         response = HttpResponse(build_invoice_pdf(invoice), content_type='application/pdf')
         response['Content-Disposition'] = f'inline; filename="{invoice.number_display}.pdf"'
+        return response
+
+
+RUN_STATUSES = {value for value, _label in DeliveryRun.STATUSES}
+
+
+def _is_driver(user):
+    return bool(getattr(user, 'is_operator', False)) and user.role == DRIVER
+
+
+class MayRecordDelivery(BasePermission):
+    """Staff, and drivers (only their own runs are in their queryset, so any other is a 404)."""
+
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(getattr(user, 'company_id', None)) and (user.is_staff or user.is_superuser or _is_driver(user))
+
+
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter('status', str, enum=sorted(RUN_STATUSES), description='Only runs in this status.'),
+    OpenApiParameter('date', OpenApiTypes.DATE, description='Only runs on this day.'),
+]))
+class DeliveryRunViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin,
+                         mixins.CreateModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
+    """
+    Delivery runs (G44): a date, a van, a driver and picked orders as stops in driving order. ``start`` moves the
+    orders from DISPATCH onto the van; each stop is delivered (proof of delivery) or failed; ``complete`` brings
+    stops not delivered back to DISPATCH. Staff plan and move runs; members read; a driver (operator role) sees only
+    their own runs and records their stops. No delete: cancel a planned run.
+    """
+
+    queryset = DeliveryRun.objects.select_related('vehicle', 'driver').prefetch_related('stops__order__customer', 'stops__order__lines__product')
+    serializer_class = DeliveryRunSerializer
+    permission_classes = [CompanyMemberReadsStaffWrites]
+    POD_ACTIONS = {'deliver', 'fail', 'photo'}
+
+    def get_permissions(self):
+        if self.action in self.POD_ACTIONS:
+            return [MayRecordDelivery()]
+        return super().get_permissions()
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if _is_driver(self.request.user):
+            queryset = queryset.filter(driver=self.request.user)
+        params = self.request.query_params
+        status = params.get('status')
+        if status is not None:
+            if status not in RUN_STATUSES:
+                raise ValidationError({'status': f'One of {", ".join(sorted(RUN_STATUSES))}.'})
+            queryset = queryset.filter(status=status)
+        day = _date_param(params, 'date')
+        if day is not None:
+            queryset = queryset.filter(run_date=day)
+        return queryset
+
+    def _done(self, step, *args, **kwargs):
+        try:
+            step(*args, **kwargs)
+        except runs.RunError as error:
+            raise ValidationError({'detail': str(error)}) from None
+        run = self.get_queryset().get(pk=self.kwargs['pk'])
+        return Response(self.get_serializer(run).data)
+
+    def _stop(self, stop_id):
+        return get_object_or_404(DeliveryStop, pk=stop_id, run=self.get_object())
+
+    @extend_schema(request=None, responses=DeliveryRunSerializer)
+    @action(detail=True, methods=['post'])
+    def start(self, request, pk=None):
+        """Take the run out: its orders move from DISPATCH onto the van and become dispatched."""
+        return self._done(runs.start_run, self.get_object(), request.user)
+
+    @extend_schema(request=None, responses=DeliveryRunSerializer)
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        """Close the run once every stop is recorded; stops not delivered go back to DISPATCH."""
+        return self._done(runs.complete_run, self.get_object(), request.user)
+
+    @extend_schema(request=None, responses=DeliveryRunSerializer)
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """Cancel a planned run; its orders can go on another."""
+        return self._done(runs.cancel_run, self.get_object(), request.user)
+
+    @extend_schema(request=DeliverSerializer, responses=DeliveryRunSerializer)
+    @action(detail=True, methods=['post'], url_path=r'stops/(?P<stop_id>\d+)/deliver', url_name='deliver',
+            parser_classes=[MultiPartParser, FormParser, JSONParser])
+    def deliver(self, request, pk=None, stop_id=None):
+        """Proof of delivery: who received it, when, notes, an optional photo. The order's stock goes to the
+        customer and the order is delivered (invoiced if its invoice is issued)."""
+        stop = self._stop(stop_id)
+        serializer = DeliverSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return self._done(runs.deliver, stop, request.user, **serializer.validated_data)
+
+    @extend_schema(request=FailStopSerializer, responses=DeliveryRunSerializer)
+    @action(detail=True, methods=['post'], url_path=r'stops/(?P<stop_id>\d+)/fail', url_name='fail')
+    def fail(self, request, pk=None, stop_id=None):
+        """Record a stop as not delivered, with the reason; its stock stays on the van until the run is completed."""
+        stop = self._stop(stop_id)
+        serializer = FailStopSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return self._done(runs.fail_stop, stop, request.user, serializer.validated_data['reason'])
+
+    @extend_schema(request=None, responses={(200, 'image/*'): OpenApiTypes.BINARY})
+    @action(detail=True, methods=['get'], url_path=r'stops/(?P<stop_id>\d+)/photo', url_name='photo')
+    def photo(self, request, pk=None, stop_id=None):
+        """A stop's proof-of-delivery photo (staff and the run's driver)."""
+        stop = self._stop(stop_id)
+        if not stop.photo:
+            raise Http404('No photo for this stop.')
+        extension = stop.photo.name.rsplit('.', 1)[-1].lower()
+        return FileResponse(stop.photo.open('rb'), content_type='image/png' if extension == 'png' else 'image/jpeg',
+                            filename=f'{run_label(stop)}.{extension}')
+
+    @extend_schema(request=None, responses={(200, 'application/pdf'): OpenApiTypes.BINARY})
+    @action(detail=True, methods=['get'])
+    def manifest(self, request, pk=None):
+        """The run's manifest (PDF): stops in driving order with addresses, goods and signature boxes."""
+        run = self.get_object()
+        response = HttpResponse(build_manifest_pdf(run), content_type='application/pdf')
+        response['Content-Disposition'] = f'inline; filename="manifest-{run.number_display}.pdf"'
+        return response
+
+
+def run_label(stop):
+    return f'pod-{stop.run.number_display}-stop-{stop.position}'
+
+
+RETURN_KINDS = {value for value, _label in CustomerReturn.KINDS}
+
+
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter('order', int, description="Only this order's returns."),
+    OpenApiParameter('kind', str, enum=sorted(RETURN_KINDS), description='door or later.'),
+]))
+class CustomerReturnViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin,
+                            viewsets.GenericViewSet):
+    """Goods given back (G45): refusals recorded at the door and returns recorded on the order. Members read."""
+
+    queryset = CustomerReturn.objects.select_related('order').prefetch_related('lines__order_line__product')
+    serializer_class = CustomerReturnSerializer
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        order = _id_param(params, 'order')
+        if order is not None:
+            queryset = queryset.filter(order_id=order)
+        kind = params.get('kind')
+        if kind is not None:
+            if kind not in RETURN_KINDS:
+                raise ValidationError({'kind': 'door or later.'})
+            queryset = queryset.filter(kind=kind)
+        return queryset
+
+
+class CreditNoteViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin,
+                        mixins.CreateModelMixin, mixins.DestroyModelMixin, viewsets.GenericViewSet):
+    """
+    Credit notes (G45). POST ``{customer_return}`` drafts one against the order's issued invoice; ``issue`` numbers
+    (``CN-``, gap-free per company), freezes and emails it. Only drafts are deleted. Members read; staff write.
+    """
+
+    queryset = CreditNote.objects.select_related('invoice').prefetch_related('lines')
+    serializer_class = CreditNoteSerializer
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    def _done(self, step, *args):
+        try:
+            note = step(*args)
+        except credit_notes.CreditNoteError as error:
+            raise ValidationError({'detail': str(error)}) from None
+        note = note or self.get_object()
+        return Response(self.get_serializer(self.get_queryset().get(pk=note.pk)).data)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        response = self._done(credit_notes.create_credit_note, serializer.validated_data['customer_return'],
+                              request.user)
+        response.status_code = 201
+        return response
+
+    def perform_destroy(self, instance):
+        try:
+            credit_notes.discard_draft(instance)
+        except credit_notes.CreditNoteError as error:
+            raise ValidationError({'detail': str(error)}) from None
+
+    @extend_schema(request=None, responses=CreditNoteSerializer)
+    @action(detail=True, methods=['post'])
+    def issue(self, request, pk=None):
+        """Number, freeze and email the credit note; refused if it would credit more than was invoiced."""
+        return self._done(credit_notes.issue_credit_note, self.get_object(), request.user)
+
+    @extend_schema(request=None, responses=CreditNoteSerializer)
+    @action(detail=True, methods=['post'])
+    def email(self, request, pk=None):
+        """Send an issued credit note's PDF to the customer again."""
+        return self._done(credit_notes.resend, self.get_object())
+
+    @extend_schema(request=None, responses={(200, 'application/pdf'): OpenApiTypes.BINARY})
+    @action(detail=True, methods=['get'])
+    def pdf(self, request, pk=None):
+        """The credit note as a PDF."""
+        note = self.get_object()
+        response = HttpResponse(build_credit_note_pdf(note), content_type='application/pdf')
+        response['Content-Disposition'] = f'inline; filename="{note.number_display}.pdf"'
         return response

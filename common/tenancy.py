@@ -81,7 +81,15 @@ TENANT_LOOKUPS = {
     'wholesale.SalesOrderLine': 'order__company',
     'wholesale.SalesOrderPick': 'line__order__company',
     'wholesale.Invoice': 'company',
+    'wholesale.LedgerEntry': 'customer__company',
+    'wholesale.CreditOverride': 'order__company',
     'wholesale.InvoiceLine': 'invoice__company',
+    'wholesale.DeliveryRun': 'company',
+    'wholesale.DeliveryStop': 'run__company',
+    'wholesale.CustomerReturn': 'company',
+    'wholesale.ReturnLine': 'customer_return__company',
+    'wholesale.CreditNote': 'company',
+    'wholesale.CreditNoteLine': 'credit_note__company',
     'inventory.StockReservation': 'batch__product__company',
 }
 

@@ -29,7 +29,8 @@ TRANSITIONS = {
     S.CONFIRMED: {S.PICKING, S.CANCELLED},
     S.PICKING: {S.PICKED, S.CANCELLED},
     S.PICKED: {S.DISPATCHED},
-    S.DISPATCHED: {S.DELIVERED},
+    # Back to picked: not delivered and returned to DISPATCH. Only runs.complete_run takes it (it moves the stock).
+    S.DISPATCHED: {S.DELIVERED, S.PICKED},
     S.DELIVERED: {S.INVOICED},
     S.INVOICED: set(),
     S.CANCELLED: set(),
@@ -72,12 +73,13 @@ def _ordered_amount(line):
 
 
 @transaction.atomic
-def confirm(order, user):
-    """Price the lines (once) and confirm. Refused for a customer on hold or closed, or a line with no price."""
+def confirm(order, user, override_reason=None):
+    """Price the lines (once) and confirm. Refused for a customer on hold or closed, a line with no price, or a
+    credit block (G48) — which staff may lift for this order with ``override_reason``."""
     order = _locked(order, S.CONFIRMED)
     # Locked like a customer edit, so a hold put on at the same moment is seen (or waits for this).
     customer = TradeCustomer.objects.select_for_update().get(pk=order.customer_id)
-    if customer.status != TradeCustomer.ACTIVE:
+    if customer.status == TradeCustomer.CLOSED:  # on hold is a credit block, with its reason (G48)
         raise OrderStateError(f'The customer is {customer.get_status_display().lower()}; it can\'t be confirmed.')
     lines = list(order.lines.select_related('product').order_by('id'))
     if not lines:
@@ -85,6 +87,15 @@ def confirm(order, user):
     source = _source(order)
     price_lines(order, customer, lines)
     set_estimates(order)
+    from . import credit  # credit imports this module
+
+    # Under the customer's lock: two orders confirmed at once see each other.
+    try:
+        credit.check(order, customer)
+    except credit.CreditBlocked:
+        if override_reason is None:
+            raise
+        credit.override(order, user, override_reason, customer)
     order.status, order.confirmed_by, order.confirmed_at = S.CONFIRMED, user, timezone.now()
     order.save()
     _reserve_all(order, lines, source)  # what the warehouse can't cover stays short

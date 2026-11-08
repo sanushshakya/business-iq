@@ -12,6 +12,7 @@ DEMAND = 'demand'
 FREIGHT = 'freight'
 SUPPLIER = 'supplier'
 STOCK = 'stock'
+DRIVER = 'driver'  # delivery runs (G44): their own runs and proof of delivery
 
 ROLE_CHOICES = [
     (TILL, 'Till operator'),
@@ -19,5 +20,6 @@ ROLE_CHOICES = [
     (FREIGHT, 'Freight manager'),
     (SUPPLIER, 'Supplier manager'),
     (STOCK, 'Stock controller'),
+    (DRIVER, 'Delivery driver'),
 ]
 ROLE_LABELS = dict(ROLE_CHOICES)

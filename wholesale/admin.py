@@ -6,11 +6,19 @@ from common.tenancy import TenantAdminMixin
 from inventory.admin import ViewOnlyAdmin
 
 from .models import (
+    CreditNote,
+    CreditNoteLine,
+    CreditOverride,
     CustomerGroup,
+    CustomerReturn,
+    DeliveryRun,
+    DeliveryStop,
     Invoice,
+    LedgerEntry,
     InvoiceLine,
     PriceList,
     PriceListEntry,
+    ReturnLine,
     SalesOrder,
     SalesOrderLine,
     SalesOrderPick,
@@ -269,3 +277,52 @@ class InvoiceAdmin(TenantAdminMixin, ViewOnlyAdmin):
 @admin.register(InvoiceLine)
 class InvoiceLineAdmin(TenantAdminMixin, ViewOnlyAdmin):
     """Changed through the invoice only."""
+
+
+class DeliveryStopInline(admin.TabularInline):
+    model = DeliveryStop
+    extra = 0
+    can_delete = False
+    exclude = ('photo',)  # fetched through the run's endpoint only
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(DeliveryRun)
+class DeliveryRunAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """View only: runs move stock, so they change through the API (start, deliver, complete)."""
+
+    list_display = ('number_display', 'run_date', 'vehicle', 'driver', 'status')
+    list_filter = ('status', 'run_date')
+    inlines = [DeliveryStopInline]
+
+
+@admin.register(DeliveryStop)
+class DeliveryStopAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """Changed through the run only."""
+
+    exclude = ('photo',)
+
+
+@admin.register(CustomerReturn, ReturnLine, CreditNote, CreditNoteLine)
+class ReturnsAndCreditsAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """View only: returns move stock and credit notes are frozen once issued (G45); both change through the API."""
+
+
+@admin.register(LedgerEntry)
+class LedgerEntryAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """View only: the customer ledger is append-only (G47); adjustments are posted through the API."""
+
+    list_display = ['customer', 'entry_date', 'kind', 'amount', 'description']
+    list_filter = ['kind']
+
+
+@admin.register(CreditOverride)
+class CreditOverrideAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """View only: a credit override is a logged decision (G48), made through the API."""
+
+    list_display = ['order', 'created_at', 'created_by', 'blocks', 'exposure', 'credit_limit']

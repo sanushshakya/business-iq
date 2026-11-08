@@ -1,6 +1,8 @@
+import json
 from decimal import Decimal
 
 from django.db import transaction
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from common.tenancy import TenantModelSerializer
@@ -8,11 +10,19 @@ from inventory.models import Location, Product
 
 from .models import (
     WEEKDAYS,
+    CreditNote,
+    CreditNoteLine,
     CustomerGroup,
+    CustomerReturn,
+    DeliveryRun,
+    DeliveryStop,
     Invoice,
+    CreditOverride,
     InvoiceLine,
+    LedgerEntry,
     PriceList,
     PriceListEntry,
+    ReturnLine,
     SalesOrder,
     SalesOrderLine,
     SalesOrderPick,
@@ -72,14 +82,25 @@ class TradeCustomerSerializer(TenantModelSerializer):
     )
     addresses = TradeCustomerAddressSerializer(many=True, required=False)
     contacts = TradeCustomerContactSerializer(many=True, required=False)
+    balance = serializers.SerializerMethodField(help_text='What they owe: the sum of their ledger entries (G47).')
 
     class Meta:
         model = TradeCustomer
         fields = [
-            'id', 'account_code', 'legal_name', 'trading_name', 'vat_number', 'status', 'delivery_days', 'note',
-            'group', 'invoice_email', 'payment_terms_days', 'addresses', 'contacts', 'created_at', 'updated_at',
+            'id', 'account_code', 'legal_name', 'trading_name', 'vat_number', 'status', 'hold_reason',
+            'delivery_days', 'note', 'group', 'invoice_email', 'payment_terms_days', 'credit_limit', 'addresses',
+            'contacts', 'balance', 'created_at',
+            'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    @extend_schema_field(serializers.DecimalField(max_digits=14, decimal_places=2))
+    def get_balance(self, customer):
+        from .ledger import balance
+
+        # Lists annotate it (one query); a just-saved customer is summed on its own.
+        total = getattr(customer, 'ledger_balance', None)
+        return f'{(balance(customer) if total is None else total):.2f}'
 
     def to_internal_value(self, data):
         # Normalise before the unique (company, account_code) check sees it.
@@ -400,6 +421,53 @@ class SalesOrderLineSerializer(TenantModelSerializer):
         return attrs
 
 
+class CreditOverrideSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CreditOverride
+        fields = ['id', 'order', 'reason', 'blocks', 'balance', 'exposure', 'credit_limit', 'overdue', 'created_by',
+                  'created_at']
+        read_only_fields = fields
+
+
+class CreditReasonSerializer(serializers.Serializer):
+    code = serializers.ChoiceField(choices=['on_hold', 'over_limit', 'overdue'])
+    message = serializers.CharField()
+
+
+class OverdueInvoiceSerializer(serializers.Serializer):
+    invoice = serializers.IntegerField()
+    number = serializers.CharField()
+    due_date = serializers.DateField()
+    open = serializers.DecimalField(max_digits=14, decimal_places=2)
+
+
+class CreditStatusSerializer(serializers.Serializer):
+    balance = serializers.DecimalField(max_digits=14, decimal_places=2)
+    open_orders = serializers.DecimalField(max_digits=14, decimal_places=2,
+                                           help_text='Estimated gross of confirmed-to-delivered orders not invoiced.')
+    exposure = serializers.DecimalField(max_digits=14, decimal_places=2)
+    credit_limit = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
+    available = serializers.DecimalField(max_digits=14, decimal_places=2, allow_null=True)
+    overdue = OverdueInvoiceSerializer(many=True)
+    overdue_days = serializers.IntegerField()
+    blocks = CreditReasonSerializer(many=True, help_text='What would stop a new order now.')
+
+
+class CreditBlockedSerializer(serializers.Serializer):
+    detail = serializers.CharField()
+    code = serializers.CharField(help_text='credit_blocked')
+    reasons = CreditReasonSerializer(many=True)
+
+
+class CreditOverrideRequestSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=255)
+
+
+class ConfirmRequestSerializer(serializers.Serializer):
+    credit_override_reason = serializers.CharField(
+        max_length=255, required=False, help_text='Staff: confirm past a credit limit or overdue block (G48).')
+
+
 class SalesOrderSerializer(TenantModelSerializer):
     """
     A trade sales order (G40). On create, ``address`` picks one of the customer's addresses (the default when left
@@ -416,6 +484,10 @@ class SalesOrderSerializer(TenantModelSerializer):
     address = serializers.PrimaryKeyRelatedField(queryset=TradeCustomerAddress.objects.all(), write_only=True,
                                                  required=False, help_text="One of the customer's addresses.")
     lines = SalesOrderLineSerializer(many=True, allow_empty=False)
+    credit_blocks = serializers.SerializerMethodField(
+        help_text='What stops confirm, start-pick and the pick list now (G48): [{code, message, ...}]; on a single '
+                  'order only (empty in lists and once picked; a draft\'s own amount counts from confirm).')
+    credit_override = serializers.SerializerMethodField(help_text='The latest staff credit override, if any.')
 
     class Meta:
         model = SalesOrder
@@ -423,8 +495,8 @@ class SalesOrderSerializer(TenantModelSerializer):
             'id', 'number', 'number_display', 'customer', 'customer_code', 'customer_name', 'delivery_date',
             'off_delivery_day', 'customer_ref', 'note', 'status', 'source_location', 'is_short', 'address', 'delivery_label', 'line1', 'line2',
             'town', 'postcode', 'instructions', 'lines', 'estimated_net', 'estimated_vat', 'estimated_gross',
-            'created_by', 'confirmed_by', 'confirmed_at', 'cancelled_at', 'cancel_reason', 'created_at',
-            'updated_at',
+            'created_by', 'confirmed_by', 'confirmed_at', 'cancelled_at', 'cancel_reason', 'credit_blocks',
+            'credit_override', 'created_at', 'updated_at',
         ]
         read_only_fields = [
             'id', 'number', 'status', 'delivery_label', 'line1', 'line2', 'town', 'postcode', 'instructions',
@@ -441,6 +513,28 @@ class SalesOrderSerializer(TenantModelSerializer):
 
     def get_customer_name(self, order) -> str:
         return order.customer.trading_name or order.customer.legal_name
+
+    def _operator(self):
+        request = self.context.get('request')
+        return bool(getattr(getattr(request, 'user', None), 'role', ''))
+
+    @extend_schema_field(CreditReasonSerializer(many=True))
+    def get_credit_blocks(self, order):
+        from .credit import for_operator, order_blocks
+
+        view = self.context.get('view')
+        if getattr(view, 'action', None) == 'list' or order.status not in (SalesOrder.DRAFT, SalesOrder.CONFIRMED,
+                                                                            SalesOrder.PICKING):
+            return []
+        reasons = order_blocks(order, order.customer)
+        return for_operator(reasons) if self._operator() else reasons
+
+    @extend_schema_field(CreditOverrideSerializer(allow_null=True))
+    def get_credit_override(self, order):
+        if self._operator():  # pickers see that it may go ahead, not the figures or the reason
+            return None
+        latest = next(iter(order.credit_overrides.all()), None)  # newest first; prefetched in lists
+        return CreditOverrideSerializer(latest).data if latest else None
 
     def get_is_short(self, order) -> bool:
         return any((SalesOrderLineSerializer.amounts(line)[1] or 0) > 0 for line in order.lines.all())
@@ -601,3 +695,276 @@ class InvoiceSerializer(serializers.ModelSerializer):
         if order.company_id != self.context['request'].user.company_id:  # superusers included
             raise serializers.ValidationError("Another company's order can't be invoiced here.")
         return order
+
+
+PHOTO_SIGNATURES = {'png': (b'\x89PNG\r\n\x1a\n',), 'jpg': (b'\xff\xd8\xff',), 'jpeg': (b'\xff\xd8\xff',)}
+
+
+class StopLineSerializer(serializers.ModelSerializer):
+    """What a stop's order carries (G46b): enough for the driver to refuse by line, without the order API."""
+
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    sold_by = serializers.CharField(source='product.sold_by', read_only=True)
+    is_catch_weight = serializers.BooleanField(source='product.is_catch_weight', read_only=True)
+
+    class Meta:
+        model = SalesOrderLine
+        fields = ['id', 'product_name', 'sold_by', 'is_catch_weight', 'picked_quantity', 'picked_weight_kg']
+        read_only_fields = fields
+
+
+class DeliveryStopSerializer(serializers.ModelSerializer):
+    """A stop on a run, in driving order, with its proof of delivery. The photo is fetched from ``photo/``."""
+
+    lines = serializers.SerializerMethodField()
+
+    order_number = serializers.CharField(source='order.number_display', read_only=True)
+    customer_code = serializers.CharField(source='order.customer.account_code', read_only=True)
+    customer_name = serializers.SerializerMethodField()
+    line1 = serializers.CharField(source='order.line1', read_only=True)
+    line2 = serializers.CharField(source='order.line2', read_only=True)
+    town = serializers.CharField(source='order.town', read_only=True)
+    postcode = serializers.CharField(source='order.postcode', read_only=True)
+    instructions = serializers.CharField(source='order.instructions', read_only=True)
+    has_photo = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DeliveryStop
+        fields = ['id', 'position', 'order', 'order_number', 'customer_code', 'customer_name', 'line1', 'line2',
+                  'town', 'postcode', 'instructions', 'status', 'received_by', 'delivered_at', 'notes', 'has_photo',
+                  'failed_reason', 'recorded_by', 'lines']
+        read_only_fields = fields
+
+    @extend_schema_field(StopLineSerializer(many=True))
+    def get_lines(self, stop):
+        lines = [line for line in stop.order.lines.all()
+                 if line.substitution not in (SalesOrderLine.PROPOSED, SalesOrderLine.REJECTED)]
+        return StopLineSerializer(lines, many=True).data
+
+    def get_customer_name(self, stop) -> str:
+        customer = stop.order.customer
+        return customer.trading_name or customer.legal_name
+
+    def get_has_photo(self, stop) -> bool:
+        return bool(stop.photo)
+
+
+class DeliveryRunSerializer(TenantModelSerializer):
+    """
+    A delivery run (G44). ``orders`` (picked orders, in driving order) sets the stops on create and re-plans them
+    while the run is planned. Status moves through the actions: start, deliver/fail each stop, complete or cancel.
+    """
+
+    number_display = serializers.CharField(read_only=True)
+    vehicle_code = serializers.CharField(source='vehicle.code', read_only=True)
+    driver_name = serializers.CharField(source='driver.name', read_only=True)
+    orders = serializers.ListField(child=serializers.IntegerField(min_value=1), write_only=True, required=False,
+                                   max_length=200, help_text='Picked orders, in the order they are delivered.')
+    stops = DeliveryStopSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = DeliveryRun
+        fields = ['id', 'number', 'number_display', 'run_date', 'vehicle', 'vehicle_code', 'driver', 'driver_name',
+                  'status', 'note', 'orders', 'stops', 'created_by', 'created_at', 'started_at', 'completed_at']
+        read_only_fields = ['id', 'number', 'status', 'created_by', 'created_at', 'started_at', 'completed_at']
+
+    def get_fields(self):
+        fields = super().get_fields()
+        if self.instance is None:
+            fields['orders'].required = True
+        return fields
+
+    def _orders(self, ids):
+        company_id = self.context['request'].user.company_id
+        found = SalesOrder.objects.filter(company_id=company_id).in_bulk(ids)
+        missing = [order_id for order_id in ids if order_id not in found]
+        if missing:
+            raise serializers.ValidationError({'orders': f'Not your orders: {missing}.'})
+        return [found[order_id] for order_id in ids]
+
+    def create(self, validated_data):
+        from .runs import RunError, create_run
+
+        request = self.context['request']
+        try:
+            return create_run(request.user.company_id, request.user, run_date=validated_data['run_date'],
+                              vehicle=validated_data['vehicle'], driver=validated_data['driver'],
+                              orders=self._orders(validated_data['orders']), note=validated_data.get('note', ''))
+        except RunError as error:
+            raise serializers.ValidationError({'detail': str(error)}) from None
+
+    def update(self, instance, validated_data):
+        from .runs import RunError, update_run
+
+        orders = validated_data.get('orders')
+        try:
+            return update_run(instance, run_date=validated_data.get('run_date'),
+                              vehicle=validated_data.get('vehicle'), driver=validated_data.get('driver'),
+                              note=validated_data.get('note'),
+                              orders=None if orders is None else self._orders(orders))
+        except RunError as error:
+            raise serializers.ValidationError({'detail': str(error)}) from None
+
+
+class ReturnRequestLineSerializer(serializers.Serializer):
+    line = serializers.IntegerField(min_value=1, help_text='The order line.')
+    quantity = serializers.IntegerField(min_value=1, max_value=MAX_ORDER_UNITS, required=False)
+    weight_kg = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=Decimal('0.001'),
+                                        max_value=MAX_ORDER_KG, required=False)
+    reason = serializers.ChoiceField(choices=ReturnLine.REASONS)
+
+
+class RefusedField(serializers.JSONField):
+    """Refused amounts per line (G45): a list, or the same list as a JSON string in a multipart form."""
+
+    def to_internal_value(self, data):
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except ValueError:
+                raise serializers.ValidationError('A JSON list of refused lines.') from None
+        lines = ReturnRequestLineSerializer(data=data, many=True, max_length=200)
+        lines.is_valid(raise_exception=True)
+        return lines.validated_data
+
+
+class DeliverSerializer(serializers.Serializer):
+    """Proof of delivery: who received it, when (now if left out), notes, and an optional JPEG or PNG photo.
+    ``refused`` (G45) lists what the customer refused at the door, by line, with a reason."""
+
+    refused = RefusedField(required=False, help_text='[{line, quantity?, weight_kg?, reason}]')
+
+    received_by = serializers.CharField(max_length=120)
+    delivered_at = serializers.DateTimeField(required=False)
+    notes = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+    photo = serializers.FileField(required=False)
+
+    def validate_photo(self, upload):
+        from django.conf import settings
+
+        extension = upload.name.rsplit('.', 1)[-1].lower() if '.' in upload.name else ''
+        if extension not in PHOTO_SIGNATURES:
+            raise serializers.ValidationError('Upload a JPEG or PNG photo.')
+        if upload.size > settings.POD_MAX_UPLOAD_BYTES:
+            raise serializers.ValidationError(
+                f'The photo is larger than {settings.POD_MAX_UPLOAD_BYTES // (1024 * 1024)} MB.')
+        head = upload.read(8)
+        upload.seek(0)
+        if not any(head.startswith(signature) for signature in PHOTO_SIGNATURES[extension]):
+            raise serializers.ValidationError(f'This does not look like a real .{extension} photo.')
+        return upload
+
+
+class FailStopSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=255, help_text='Why it was not delivered.')
+
+
+class ReturnLineSerializer(serializers.ModelSerializer):
+    product = serializers.IntegerField(source='order_line.product_id', read_only=True)
+    product_name = serializers.CharField(source='order_line.product.name', read_only=True)
+
+    class Meta:
+        model = ReturnLine
+        fields = ['id', 'order_line', 'product', 'product_name', 'batch_number', 'quantity', 'weight_kg', 'reason',
+                  'disposition', 'location']
+        read_only_fields = fields
+
+
+class CustomerReturnSerializer(serializers.ModelSerializer):
+    """Goods given back (G45): refused at the door (``door``) or returned later (``later``), line by lot."""
+
+    number_display = serializers.CharField(read_only=True)
+    order_number = serializers.CharField(source='order.number_display', read_only=True)
+    lines = ReturnLineSerializer(many=True, read_only=True)
+    credit_note = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CustomerReturn
+        fields = ['id', 'number', 'number_display', 'order', 'order_number', 'stop', 'kind', 'status', 'note',
+                  'lines', 'credit_note', 'created_by', 'created_at', 'received_at']
+        read_only_fields = fields
+
+    def get_credit_note(self, customer_return) -> int | None:
+        note = CreditNote.objects.filter(customer_return=customer_return).values_list('pk', flat=True).first()
+        return note
+
+
+class LaterReturnLineSerializer(ReturnRequestLineSerializer):
+    location = _OwnCompanyPrimaryKey(queryset=Location.objects.all(), required=False,
+                                                  help_text="Where restocked goods go (default: the order's "
+                                                            'warehouse).')
+
+
+class LaterReturnSerializer(serializers.Serializer):
+    lines = LaterReturnLineSerializer(many=True, allow_empty=False, max_length=200)
+    note = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+
+
+class CreditNoteLineSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CreditNoteLine
+        fields = ['id', 'invoice_line', 'description', 'quantity', 'weight_kg', 'unit_price', 'vat_code',
+                  'vat_rate', 'net', 'vat', 'gross']
+        read_only_fields = fields
+
+
+class CreditNoteSerializer(TenantModelSerializer):
+    """
+    A credit note (G45): POST ``{customer_return}`` drafts it against the order's issued invoice; ``issue``
+    numbers and freezes it. It never credits more than the invoice billed.
+    """
+
+    number_display = serializers.CharField(read_only=True)
+    invoice_number = serializers.CharField(source='invoice.number_display', read_only=True)
+    lines = CreditNoteLineSerializer(many=True, read_only=True)
+    vat_summary = VatSummaryRowSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = CreditNote
+        fields = [
+            'id', 'customer_return', 'invoice', 'invoice_number', 'status', 'number', 'number_display',
+            'credit_date', 'seller_name', 'seller_vat_number', 'customer_code', 'customer_name',
+            'customer_vat_number', 'lines', 'net_total', 'vat_total', 'gross_total', 'vat_summary', 'created_by',
+            'created_at', 'issued_by', 'issued_at', 'emailed_to', 'emailed_at', 'email_status',
+        ]
+        read_only_fields = [name for name in fields if name != 'customer_return']
+
+    def validate_customer_return(self, customer_return):
+        if customer_return.company_id != self.context['request'].user.company_id:  # superusers included
+            raise serializers.ValidationError("Another company's return can't be credited here.")
+        return customer_return
+
+
+class LedgerEntrySerializer(serializers.ModelSerializer):
+    """A customer ledger entry (G47): read only; ``amount`` positive = owed more, negative = owed less."""
+
+    class Meta:
+        model = LedgerEntry
+        fields = ['id', 'kind', 'entry_date', 'amount', 'description', 'reason', 'invoice', 'credit_note',
+                  'payment_ref', 'created_by', 'created_at']
+        read_only_fields = fields
+
+
+class StatementEntrySerializer(LedgerEntrySerializer):
+    running = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True,
+                                       help_text='The balance after this entry.')
+
+    class Meta(LedgerEntrySerializer.Meta):
+        fields = [*LedgerEntrySerializer.Meta.fields, 'running']
+        read_only_fields = fields
+
+
+class StatementSerializer(serializers.Serializer):
+    customer = serializers.IntegerField()
+    start = serializers.DateField(source='from')
+    end = serializers.DateField(source='to')
+    opening = serializers.DecimalField(max_digits=14, decimal_places=2)
+    entries = StatementEntrySerializer(many=True)
+    closing = serializers.DecimalField(max_digits=14, decimal_places=2)
+
+
+class AdjustmentSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=8, decimal_places=2,
+                                      help_text='Positive: they owe more; negative: they owe less. Not 0.')
+    reason = serializers.CharField(max_length=255)
+    client_ref = serializers.UUIDField(required=False, help_text='Send the same one again on a retry: posted once.')

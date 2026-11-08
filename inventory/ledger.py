@@ -301,6 +301,57 @@ def transfer_batch(batch, quantity, to, *, transfer=None):
     return held
 
 
+def relocate(batch, *, quantity, weight_kg, to):
+    """
+    Move exact amounts of a (locked) lot into the same lot at ``to`` (G44: dispatch -> van -> back): ``quantity``
+    units or pieces and, for weighed products, ``weight_kg``. More than the lot holds is a ``LedgerError``; nothing
+    is booked to ADJUSTMENT here. Returns the lot at ``to``. Inside ``transaction.atomic()``.
+    """
+    product = Product.objects.get(pk=batch.product_id)
+    if to.company_id != product.company_id:
+        raise LedgerError('Stock can only move between locations of the same company.')
+    pieces, kg = StockBatch.objects.filter(pk=batch.pk).values_list('quantity', 'weight_kg').get()
+    if quantity > pieces or (product.is_weighed and weight_kg > kg):
+        raise LedgerError(f'Batch {batch.batch_number} at {batch.location.code} holds {pieces} unit(s) and {kg} kg, '
+                          'less than this needs.')
+    lot, _ = StockBatch.objects.get_or_create(
+        product_id=batch.product_id, batch_number=batch.batch_number, location=to,
+        defaults={'quantity': 0, 'weight_kg': Decimal('0'), 'expiration_date': batch.expiration_date,
+                  'supplier_id': batch.supplier_id, 'unit_cost': batch.unit_cost},
+    )
+    lot = StockBatch.objects.select_for_update(of=('self',)).select_related('location').get(pk=lot.pk)
+    if lot.expiration_date != batch.expiration_date:
+        raise LedgerError(f'Batch {batch.batch_number} at {to.code} has another expiry; correct the lot number first.')
+    kg_moved = weight_kg if product.is_weighed else None
+    move(batch, quantity, 'outbound', counterpart=to, weight_kg=kg_moved)
+    move(lot, quantity, 'inbound', counterpart=batch.location, weight_kg=kg_moved)
+    lot.refresh_from_db()
+    return lot
+
+
+def take_back(template, *, quantity, weight_kg, to):
+    """
+    Goods a customer gave back (G45): into the lot with ``template``'s batch number and expiry at ``to`` (created
+    empty if missing), inbound from CUSTOMER. Returns the lot (locked). Inside ``transaction.atomic()``.
+    """
+    product = Product.objects.get(pk=template.product_id)
+    if to.company_id != product.company_id:
+        raise LedgerError('Stock can only move between locations of the same company.')
+    lot, _ = StockBatch.objects.get_or_create(
+        product_id=template.product_id, batch_number=template.batch_number, location=to,
+        defaults={'quantity': 0, 'weight_kg': Decimal('0'), 'expiration_date': template.expiration_date,
+                  'supplier_id': template.supplier_id, 'unit_cost': template.unit_cost},
+    )
+    lot = StockBatch.objects.select_for_update(of=('self',)).select_related('location').get(pk=lot.pk)
+    if lot.expiration_date != template.expiration_date:
+        raise LedgerError(f'Batch {template.batch_number} at {to.code} has another expiry; correct the lot number '
+                          'first.')
+    move(lot, quantity, 'inbound', counterpart=virtual_location(product.company_id, Location.CUSTOMER),
+         weight_kg=weight_kg if product.is_weighed else None)
+    lot.refresh_from_db()
+    return lot
+
+
 def dispatch_location(company):
     """The company's DISPATCH location (created if missing): where picked trade orders wait (G42)."""
     company_id = getattr(company, 'pk', company)

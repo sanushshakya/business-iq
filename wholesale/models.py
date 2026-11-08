@@ -8,6 +8,7 @@ tests.
 """
 
 import re
+import uuid
 from decimal import Decimal
 
 from django.conf import settings
@@ -91,6 +92,10 @@ class TradeCustomer(models.Model):
                               related_name='customers')
     # Invoicing (G43): where invoices are emailed (blank: the primary contact's email) and how long to pay.
     invoice_email = models.EmailField(blank=True, help_text="Where invoices go; blank: the primary contact's email.")
+    credit_limit = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True,
+                                       validators=[MinValueValidator(Decimal('0'))],
+                                       help_text='What they may owe, incl. open orders (G48); blank: no limit.')
+    hold_reason = models.CharField(max_length=255, blank=True, help_text='Why they are on hold (shown on orders).')
     payment_terms_days = models.PositiveSmallIntegerField(default=30, validators=[MaxValueValidator(120)],
                                                           help_text='Days to pay an invoice (0-120).')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -397,36 +402,40 @@ class SalesOrderPick(models.Model):
 FROZEN = 'An issued invoice cannot be changed; correct it with a credit note.'
 
 
-class InvoiceQuerySet(models.QuerySet):
-    """Bulk updates follow the model: an issued invoice changes only in its email fields."""
+class FrozenDocumentQuerySet(models.QuerySet):
+    """Bulk updates follow the model: an issued invoice or credit note changes only in its email fields."""
 
     def update(self, **kwargs):
-        if not set(kwargs) <= Invoice.EMAIL_FIELDS and self.filter(status=Invoice.ISSUED).exists():
+        if not set(kwargs) <= self.model.EMAIL_FIELDS and self.filter(status='issued').exists():
             raise ValidationError(FROZEN)
         return super().update(**kwargs)
 
 
-class InvoiceLineQuerySet(models.QuerySet):
-    """No bulk path writes lines of an issued invoice."""
+class FrozenLineQuerySet(models.QuerySet):
+    """No bulk path writes lines of an issued document (the line model names its ``DOCUMENT_FIELD``)."""
 
-    def _refuse(self, invoice_ids):
-        if Invoice.objects.filter(pk__in=set(invoice_ids), status=Invoice.ISSUED).exists():
+    def _refuse(self, document_ids):
+        document = self.model._meta.get_field(self.model.DOCUMENT_FIELD).related_model
+        if document.objects.filter(pk__in=set(document_ids), status='issued').exists():
             raise ValidationError(FROZEN)
 
     def update(self, **kwargs):
-        self._refuse(self.values_list('invoice_id', flat=True))
+        self._refuse(self.values_list(f'{self.model.DOCUMENT_FIELD}_id', flat=True))
         return super().update(**kwargs)
 
     def bulk_update(self, objs, fields, *args, **kwargs):
         objs = list(objs)
-        self._refuse(InvoiceLine.objects.filter(pk__in=[obj.pk for obj in objs]).values_list('invoice_id',
-                                                                                              flat=True))
+        self._refuse(self.model.objects.filter(pk__in=[obj.pk for obj in objs]).values_list(
+            f'{self.model.DOCUMENT_FIELD}_id', flat=True))
         return super().bulk_update(objs, fields, *args, **kwargs)
 
     def bulk_create(self, objs, *args, **kwargs):
         objs = list(objs)
-        self._refuse(obj.invoice_id for obj in objs)
+        self._refuse(getattr(obj, f'{self.model.DOCUMENT_FIELD}_id') for obj in objs)
         return super().bulk_create(objs, *args, **kwargs)
+
+
+InvoiceQuerySet, InvoiceLineQuerySet = FrozenDocumentQuerySet, FrozenLineQuerySet
 
 
 class Invoice(models.Model):
@@ -527,6 +536,7 @@ class InvoiceLine(models.Model):
     gross = models.DecimalField(max_digits=12, decimal_places=2)
 
     objects = InvoiceLineQuerySet.as_manager()
+    DOCUMENT_FIELD = 'invoice'
 
     class Meta:
         ordering = ['invoice', 'id']
@@ -554,3 +564,369 @@ def _refuse_if_issued(invoice_id):
 def _issued_invoices_are_kept(sender, instance, **kwargs):
     # Also runs for queryset deletes. An issued invoice is never deleted (numbers stay gap-free).
     _refuse_if_issued(instance.pk if sender is Invoice else instance.invoice_id)
+
+
+def pod_photo_path(instance, filename):
+    """``pod/<company>/<random>.<ext>``: the client's file name is never used."""
+    extension = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'bin'
+    return f'pod/{instance.run.company_id}/{uuid.uuid4().hex}.{extension}'
+
+
+class DeliveryRun(models.Model):
+    """
+    A van's delivery run (G44): a date, a van location, a driver (an operator with the driver role) and stops in
+    the order they are driven. Starting it moves the orders' picked lots from DISPATCH onto the van; each delivery
+    moves an order on to the customer; stops not delivered come back to DISPATCH when it is completed.
+    """
+
+    PLANNED, OUT, COMPLETED, CANCELLED = 'planned', 'out', 'completed', 'cancelled'
+    STATUSES = [(PLANNED, 'Planned'), (OUT, 'Out'), (COMPLETED, 'Completed'), (CANCELLED, 'Cancelled')]
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='delivery_runs')
+    number = models.PositiveIntegerField()  # per company: 1, 2, 3...
+    run_date = models.DateField()
+    vehicle = models.ForeignKey('inventory.Location', on_delete=models.PROTECT, related_name='delivery_runs')
+    driver = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='delivery_runs')
+    status = models.CharField(max_length=10, choices=STATUSES, default=PLANNED)
+    note = models.TextField(blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                   related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-run_date', '-number']
+        constraints = [models.UniqueConstraint(fields=['company', 'number'], name='unique_delivery_run_number')]
+
+    def __str__(self):
+        return self.number_display
+
+    @property
+    def number_display(self):
+        return f'RUN-{self.number:06d}'
+
+
+class DeliveryStop(models.Model):
+    """One order on a run, at its place in the drive, with its proof of delivery once delivered."""
+
+    PENDING, DELIVERED, FAILED = 'pending', 'delivered', 'failed'
+    STATUSES = [(PENDING, 'Pending'), (DELIVERED, 'Delivered'), (FAILED, 'Not delivered')]
+
+    run = models.ForeignKey(DeliveryRun, on_delete=models.CASCADE, related_name='stops')
+    order = models.ForeignKey(SalesOrder, on_delete=models.PROTECT, related_name='delivery_stops')
+    position = models.PositiveSmallIntegerField()
+    status = models.CharField(max_length=10, choices=STATUSES, default=PENDING)
+    # Proof of delivery. The recipient's name is personal data: shown to staff and the driver, never logged.
+    received_by = models.CharField(max_length=120, blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+    photo = models.FileField(upload_to=pod_photo_path, blank=True)
+    recorded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                    related_name='+')
+    failed_reason = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ['run', 'position']
+        constraints = [models.UniqueConstraint(fields=['run', 'position'], name='unique_stop_position')]
+
+    def __str__(self):
+        return f'Stop {self.position}'
+
+
+class CustomerReturn(models.Model):
+    """
+    Goods a trade customer gave back (G45): refused at the door during a delivery (``door``: on the van until the
+    run is completed) or returned later (``later``: received when recorded). Each line goes to a location or to
+    waste by its reason; a credit note against the issued invoice credits it.
+    """
+
+    DOOR, LATER = 'door', 'later'
+    KINDS = [(DOOR, 'Refused at the door'), (LATER, 'Returned later')]
+    ON_VAN, RECEIVED = 'on_van', 'received'
+    STATUSES = [(ON_VAN, 'On the van'), (RECEIVED, 'Received')]
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='customer_returns')
+    number = models.PositiveIntegerField()  # per company: 1, 2, 3...
+    order = models.ForeignKey(SalesOrder, on_delete=models.PROTECT, related_name='returns')
+    stop = models.ForeignKey(DeliveryStop, on_delete=models.PROTECT, null=True, blank=True, related_name='returns')
+    kind = models.CharField(max_length=6, choices=KINDS)
+    status = models.CharField(max_length=10, choices=STATUSES)
+    note = models.TextField(blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                   related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+    received_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-number']
+        constraints = [models.UniqueConstraint(fields=['company', 'number'], name='unique_customer_return_number')]
+
+    def __str__(self):
+        return self.number_display
+
+    @property
+    def number_display(self):
+        return f'RET-{self.number:06d}'
+
+
+class ReturnLine(models.Model):
+    """What came back of one order line from one lot (by batch number): units or pieces and/or kg."""
+
+    DAMAGED, OUT_OF_DATE, WRONG_ITEM, NOT_WANTED = 'damaged', 'out_of_date', 'wrong_item', 'not_wanted'
+    REASONS = [(DAMAGED, 'Damaged'), (OUT_OF_DATE, 'Out of date'), (WRONG_ITEM, 'Wrong item'),
+               (NOT_WANTED, 'Not wanted')]
+    WASTE_REASONS = {DAMAGED, OUT_OF_DATE}
+    RESTOCK, WASTE = 'restock', 'waste'
+    DISPOSITIONS = [(RESTOCK, 'Back to stock'), (WASTE, 'Waste')]
+
+    customer_return = models.ForeignKey(CustomerReturn, on_delete=models.CASCADE, related_name='lines')
+    order_line = models.ForeignKey(SalesOrderLine, on_delete=models.PROTECT, related_name='return_lines')
+    batch_number = models.CharField(max_length=50)
+    quantity = models.PositiveIntegerField(null=True, blank=True)
+    weight_kg = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
+    reason = models.CharField(max_length=12, choices=REASONS)
+    disposition = models.CharField(max_length=8, choices=DISPOSITIONS)
+    location = models.ForeignKey('inventory.Location', on_delete=models.PROTECT, null=True, blank=True,
+                                 related_name='+')
+
+    class Meta:
+        ordering = ['customer_return', 'id']
+
+    def __str__(self):
+        return f'{self.order_line.product} {self.batch_number}'
+
+
+
+class CreditNote(models.Model):
+    """
+    A credit note (G45) for a return, against the order's issued invoice: its lines credit invoice lines at their
+    price and VAT rate, never more than invoiced. Drawn up as a draft (seller and customer copied from the invoice),
+    then issued: numbered gap-free per company (``CN-000001``) and frozen like an invoice.
+    """
+
+    DRAFT, ISSUED = 'draft', 'issued'
+    STATUSES = [(DRAFT, 'Draft'), (ISSUED, 'Issued')]
+    EMAIL_STATUSES = Invoice.EMAIL_STATUSES
+    EMAIL_FIELDS = Invoice.EMAIL_FIELDS
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.PROTECT, related_name='credit_notes')
+    customer_return = models.OneToOneField(CustomerReturn, on_delete=models.PROTECT, related_name='credit_note')
+    invoice = models.ForeignKey(Invoice, on_delete=models.PROTECT, related_name='credit_notes')
+    status = models.CharField(max_length=8, choices=STATUSES, default=DRAFT)
+    number = models.PositiveIntegerField(null=True, blank=True)
+    credit_date = models.DateField(null=True, blank=True)
+    seller_name = models.CharField(max_length=255, blank=True)
+    seller_address = models.TextField(blank=True)
+    seller_vat_number = models.CharField(max_length=14, blank=True)
+    customer_code = models.CharField(max_length=20, blank=True)
+    customer_name = models.CharField(max_length=150, blank=True)
+    customer_vat_number = models.CharField(max_length=14, blank=True)
+    customer_ref = models.CharField(max_length=40, blank=True)
+    address_line1 = models.CharField(max_length=120, blank=True)
+    address_line2 = models.CharField(max_length=120, blank=True)
+    address_town = models.CharField(max_length=80, blank=True)
+    address_postcode = models.CharField(max_length=8, blank=True)
+    net_total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    vat_total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    gross_total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    vat_summary = models.JSONField(default=list, blank=True, help_text='By rate: [{rate, net, vat}] as strings.')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                   related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+    issued_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                  related_name='+')
+    issued_at = models.DateTimeField(null=True, blank=True)
+    emailed_to = models.EmailField(blank=True)
+    emailed_at = models.DateTimeField(null=True, blank=True)
+    email_status = models.CharField(max_length=10, choices=EMAIL_STATUSES, default=Invoice.NOT_SENT)
+
+    objects = FrozenDocumentQuerySet.as_manager()
+
+    class Meta:
+        ordering = ['-number', '-id']
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'number'], condition=Q(number__isnull=False),
+                                    name='unique_credit_note_number'),
+            models.CheckConstraint(condition=Q(status='draft', number__isnull=True) | Q(status='issued',
+                                                                                       number__isnull=False),
+                                   name='credit_note_numbered_when_issued'),
+        ]
+
+    def __str__(self):
+        return self.number_display
+
+    @property
+    def number_display(self):
+        return f'CN-{self.number:06d}' if self.number else f'Draft #{self.pk}'
+
+    def save(self, *args, update_fields=None, **kwargs):
+        issued = self.pk is not None and CreditNote.objects.filter(pk=self.pk, status=self.ISSUED).exists()
+        if issued and not (update_fields and set(update_fields) <= self.EMAIL_FIELDS):
+            raise ValidationError(FROZEN)
+        super().save(*args, update_fields=update_fields, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        with transaction.atomic():
+            CreditNote.objects.select_for_update().filter(pk=self.pk).first()
+            _refuse_if_credit_issued(self.pk)
+            return super().delete(*args, **kwargs)
+
+
+class CreditNoteLine(models.Model):
+    """Credits one invoice line: units or pieces and/or kg, at the invoice line's price and VAT rate."""
+
+    credit_note = models.ForeignKey(CreditNote, on_delete=models.CASCADE, related_name='lines')
+    invoice_line = models.ForeignKey(InvoiceLine, on_delete=models.PROTECT, related_name='credit_lines')
+    description = models.CharField(max_length=255)
+    quantity = models.PositiveIntegerField(null=True, blank=True)
+    weight_kg = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=4)
+    vat_code = models.CharField(max_length=10, choices=VAT_CODES, blank=True)
+    vat_rate = models.DecimalField(max_digits=5, decimal_places=2)
+    net = models.DecimalField(max_digits=12, decimal_places=2)
+    vat = models.DecimalField(max_digits=12, decimal_places=2)
+    gross = models.DecimalField(max_digits=12, decimal_places=2)
+
+    objects = FrozenLineQuerySet.as_manager()
+    DOCUMENT_FIELD = 'credit_note'
+
+    class Meta:
+        ordering = ['credit_note', 'id']
+
+    def __str__(self):
+        return self.description
+
+    def save(self, *args, **kwargs):
+        if CreditNote.objects.filter(pk=self.credit_note_id, status=CreditNote.ISSUED).exists():
+            raise ValidationError(FROZEN)
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        _refuse_if_credit_issued(self.credit_note_id)
+        return super().delete(*args, **kwargs)
+
+
+def _refuse_if_credit_issued(credit_note_id):
+    if CreditNote.objects.filter(pk=credit_note_id, status=CreditNote.ISSUED).exists():
+        raise ValidationError('An issued credit note cannot be deleted.')
+
+
+@receiver(pre_delete, sender=CreditNote)
+@receiver(pre_delete, sender=CreditNoteLine)
+def _issued_credit_notes_are_kept(sender, instance, **kwargs):
+    _refuse_if_credit_issued(instance.pk if sender is CreditNote else instance.credit_note_id)
+
+
+LEDGER_FROZEN = 'A ledger entry cannot be changed or deleted; post a reversing adjustment.'
+
+
+class LedgerEntryQuerySet(models.QuerySet):
+    """Only new rows: no bulk path changes or deletes an entry."""
+
+    def update(self, **kwargs):
+        raise ValidationError(LEDGER_FROZEN)
+
+    def delete(self):
+        raise ValidationError(LEDGER_FROZEN)
+
+    def bulk_update(self, objs, fields, *args, **kwargs):
+        raise ValidationError(LEDGER_FROZEN)
+
+    def bulk_create(self, objs, *args, update_conflicts=False, **kwargs):
+        if update_conflicts:  # an "upsert" would rewrite the entry it collides with
+            raise ValidationError(LEDGER_FROZEN)
+        return super().bulk_create(objs, *args, **kwargs)
+
+
+class LedgerEntry(models.Model):
+    """
+    One line of a trade customer's account (G47), append-only: what they owe is the sum of their entries, never a
+    stored balance. Positive = they owe more (an issued invoice, a debit adjustment); negative = they owe less (an
+    issued credit note, a payment, a credit adjustment). Invoices and credit notes post themselves when issued;
+    staff post adjustments with a reason. A mistake is corrected by a reversing adjustment.
+    """
+
+    INVOICE, CREDIT_NOTE, PAYMENT, ADJUSTMENT = 'invoice', 'credit_note', 'payment', 'adjustment'
+    KINDS = [(INVOICE, 'Invoice'), (CREDIT_NOTE, 'Credit note'), (PAYMENT, 'Payment'), (ADJUSTMENT, 'Adjustment')]
+    objects = LedgerEntryQuerySet.as_manager()
+
+    customer = models.ForeignKey(TradeCustomer, on_delete=models.PROTECT, related_name='ledger_entries')
+    kind = models.CharField(max_length=12, choices=KINDS)
+    entry_date = models.DateField(help_text="The document's date (UK); an adjustment's posting date.")
+    amount = models.DecimalField(max_digits=12, decimal_places=2, help_text='Signed: positive = owed more.')
+    invoice = models.OneToOneField(Invoice, on_delete=models.PROTECT, null=True, blank=True,
+                                   related_name='ledger_entry')
+    credit_note = models.OneToOneField(CreditNote, on_delete=models.PROTECT, null=True, blank=True,
+                                       related_name='ledger_entry')
+    payment_ref = models.CharField(max_length=60, blank=True)  # G49
+    description = models.CharField(max_length=120)
+    reason = models.CharField(max_length=255, blank=True)
+    client_ref = models.UUIDField(null=True, blank=True, help_text='An adjustment sent again with it posts once.')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                   related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        base_manager_name = 'objects'  # so no internal path gets a plain, writable manager
+        ordering = ['customer', 'entry_date', 'id']
+        indexes = [models.Index(fields=['customer', 'entry_date'], name='ledger_customer_date')]
+        constraints = [
+            models.CheckConstraint(condition=~Q(amount=0), name='ledger_amount_not_zero'),
+            models.CheckConstraint(
+                condition=(
+                    Q(kind='invoice', amount__gt=0, invoice__isnull=False, credit_note__isnull=True)
+                    | Q(kind='credit_note', amount__lt=0, credit_note__isnull=False, invoice__isnull=True)
+                    | Q(kind='payment', amount__lt=0, invoice__isnull=True, credit_note__isnull=True)
+                    | (Q(kind='adjustment', invoice__isnull=True, credit_note__isnull=True) & ~Q(reason=''))
+                ),
+                name='ledger_kind_sign_and_document',
+            ),
+            models.UniqueConstraint(fields=['customer', 'client_ref'], condition=Q(client_ref__isnull=False),
+                                    name='unique_ledger_client_ref'),
+        ]
+
+    def __str__(self):
+        return f'{self.description} {self.amount}'
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError(LEDGER_FROZEN)
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError(LEDGER_FROZEN)
+
+
+@receiver(pre_delete, sender=LedgerEntry)
+def _ledger_entries_are_kept(sender, instance, **kwargs):
+    raise ValidationError(LEDGER_FROZEN)
+
+
+class CreditOverride(models.Model):
+    """
+    A staff decision to let one order past its credit blocks (G48): over the limit and/or overdue invoices (never a
+    manual hold). It covers that order's confirm, start-pick and pick list, and keeps what blocked it at the time.
+    Never changed once written.
+    """
+
+    order = models.ForeignKey(SalesOrder, on_delete=models.PROTECT, related_name='credit_overrides')
+    reason = models.CharField(max_length=255)
+    blocks = models.JSONField(default=list, help_text='What it lifted: over_limit, overdue.')
+    balance = models.DecimalField(max_digits=14, decimal_places=2)
+    exposure = models.DecimalField(max_digits=14, decimal_places=2)
+    credit_limit = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    overdue = models.JSONField(default=list, blank=True, help_text='[{invoice, number, due_date, open}] then.')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['order', '-created_at', '-id']
+
+    def __str__(self):
+        return f'Credit override #{self.pk}'
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError('A credit override is never changed.')
+        super().save(*args, **kwargs)

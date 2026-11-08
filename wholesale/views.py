@@ -314,7 +314,10 @@ class PriceResolveView(APIView):
         return Response(ResolveResponseSerializer({'customer': customer.pk, 'on': on, 'lines': rows}).data)
 
 
-def _credit_blocked(error):
+def _credit_blocked(error, user):
+    if getattr(user, 'role', ''):  # an operator (the stock role picking): which rule, not the figures
+        reasons = credit.for_operator(error.reasons)
+        return Response({'detail': credit.OPERATOR_MESSAGE, 'code': 'credit_blocked', 'reasons': reasons}, status=400)
     return Response({'detail': error.detail, 'code': 'credit_blocked', 'reasons': error.reasons}, status=400)
 
 
@@ -392,7 +395,7 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
         try:
             result = step(self.get_object(), *args, **kwargs)
         except credit.CreditBlocked as error:
-            return _credit_blocked(error)
+            return _credit_blocked(error, self.request.user)
         except orders.OrderStateError as error:
             raise ValidationError({'detail': error.detail}) from None
         if isinstance(result, SalesOrder):
@@ -412,10 +415,13 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
         block, which is logged."""
         body = ConfirmRequestSerializer(data=request.data)
         body.is_valid(raise_exception=True)
+        if 'credit_override_reason' in body.validated_data and self.get_object().company_id != request.user.company_id:
+            raise Http404  # superusers too: credit is decided per company
         return self._moved(orders.confirm, self.request.user,
                            override_reason=body.validated_data.get('credit_override_reason'))
 
-    @extend_schema(request=CreditOverrideRequestSerializer, responses=SalesOrderSerializer)
+    @extend_schema(request=CreditOverrideRequestSerializer, responses={200: SalesOrderSerializer,
+                                                                       400: CreditBlockedSerializer})
     @action(detail=True, methods=['post'], url_path='credit-override', url_name='credit-override')
     def credit_override(self, request, pk=None):
         """Staff let a confirmed or picking order past its credit limit or overdue block (G48), with a reason;
@@ -552,10 +558,11 @@ class SalesOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
     def pick_list(self, request, pk=None):
         """The printable pick list (PDF), one table per zone: ambient, chilled, frozen, then butchery."""
         order = self.get_object()
-        try:
-            credit.check(order)  # G48
-        except credit.CreditBlocked as error:
-            return _credit_blocked(error)
+        if order.status in (SalesOrder.CONFIRMED, SalesOrder.PICKING):  # a finished pick list can be printed again
+            try:
+                credit.check(order, order.customer)  # G48
+            except credit.CreditBlocked as error:
+                return _credit_blocked(error, request.user)
         response = HttpResponse(build_pick_list(order), content_type='application/pdf')
         response['Content-Disposition'] = f'inline; filename="pick-list-{order.number_display}.pdf"'
         return response

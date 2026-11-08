@@ -79,7 +79,7 @@ def confirm(order, user, override_reason=None):
     order = _locked(order, S.CONFIRMED)
     # Locked like a customer edit, so a hold put on at the same moment is seen (or waits for this).
     customer = TradeCustomer.objects.select_for_update().get(pk=order.customer_id)
-    if customer.status != TradeCustomer.ACTIVE:
+    if customer.status == TradeCustomer.CLOSED:  # on hold is a credit block, with its reason (G48)
         raise OrderStateError(f'The customer is {customer.get_status_display().lower()}; it can\'t be confirmed.')
     lines = list(order.lines.select_related('product').order_by('id'))
     if not lines:

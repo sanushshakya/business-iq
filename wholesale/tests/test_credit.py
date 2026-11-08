@@ -99,7 +99,12 @@ class CreditTests(CreditCase):
         order = self.draft()
         with self.later(1):
             self.blocked(lambda: confirm(order, self.staff), 'overdue')
-        for bad in ('soon', '-3', '2.5'):
+        Setting.objects.filter(pk=setting.pk).update(value='3')
+        with self.later(3):
+            self.assertEqual(credit.status(self.customer)['overdue'], [])
+        with self.later(4):
+            self.assertEqual(len(credit.status(self.customer)['overdue']), 1)
+        for bad in ('soon', '-3', '2.5', '²', '99999999999'):
             Setting.objects.filter(pk=setting.pk).update(value=bad)
             with self.subTest(value=bad), self.later(7):
                 self.assertEqual(credit.overdue_days(self.company.pk), 7)
@@ -112,6 +117,29 @@ class CreditTests(CreditCase):
         self.blocked(lambda: credit.check(order), 'over_limit')
         order.refresh_from_db()
         self.assertEqual(order.status, 'confirmed')
+
+    def test_confirm_on_hold_says_why(self):
+        TradeCustomer.objects.filter(pk=self.customer.pk).update(status='on_hold', hold_reason='Fake dispute')
+        error = self.blocked(lambda: confirm(self.draft(), self.staff), 'on_hold')
+        self.assertIn('Fake dispute', error.detail)
+
+    def test_an_override_lifts_only_what_it_was_made_for(self):
+        issue(create_invoice(self.picked_order(), self.staff), self.staff)  # due today
+        self.limit(D('1.00'))
+        order = confirm(self.draft(rice=2), self.staff, override_reason='Fake: owner agreed')  # over_limit only
+        with self.later(8):
+            self.blocked(lambda: start_pick(order), 'overdue')
+        start_pick(order)  # not overdue yet: the over-limit override still holds
+
+    def test_another_companys_order_is_never_overridden(self):
+        from common.tests.factories import CompanyFactory, UserFactory
+
+        self.limit(D('1.00'))
+        order = self.draft(rice=2)
+        outsider = UserFactory(company=CompanyFactory(), is_staff=True, is_superuser=True)
+        with self.assertRaises(credit.CreditError):
+            confirm(order, outsider, override_reason='Fake')
+        self.assertFalse(CreditOverride.objects.exists())
 
     def test_the_manual_hold_blocks_picking_and_is_not_overridden(self):
         order = confirm(self.draft(), self.staff)

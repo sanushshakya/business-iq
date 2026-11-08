@@ -103,3 +103,44 @@ class CreditApiTests(CreditCase):
         admin.force_authenticate(UserFactory(company=self.company, is_staff=True, is_superuser=True))
         self.assertEqual(admin.get(reverse('tradecustomer-credit', args=[theirs.pk])).status_code, 404)
         self.assertEqual(self.post(order, 'credit-override', {'reason': 'Fake'}, admin).status_code, 404)
+        self.assertEqual(self.post(order, 'confirm', {'credit_override_reason': 'Fake'}, admin).status_code, 404)
+        self.assertFalse(CreditOverride.objects.exists())
+
+    def test_a_finished_pick_list_can_be_printed_again(self):
+        picked = self.picked_order()
+        self.limit(D('1.00'))
+        self.assertEqual(self.picker.get(reverse('salesorder-pick-list', args=[picked.pk])).status_code, 200)
+
+    def test_pickers_are_told_to_ask_the_office_without_the_figures(self):
+        TradeCustomer.objects.filter(pk=self.customer.pk).update(hold_reason='Fake: cheque bounced')
+        order = confirm(self.draft(rice=3), self.staff)
+        self.limit(D('1.00'))
+        refused = self.post(order, 'start-pick', client=self.picker).json()
+        self.assertEqual(refused['reasons'], [{'code': 'over_limit', 'message': 'Credit hold: ask the office.'}])
+        self.assertEqual(refused['detail'], 'Credit hold: ask the office.')
+        self.post(order, 'credit-override', {'reason': 'Fake: paid by phone'})
+        self.limit(D('0.50'))
+        TradeCustomer.objects.filter(pk=self.customer.pk).update(status='on_hold')
+        seen = self.picker.get(reverse('salesorder-detail', args=[order.pk])).json()
+        self.assertEqual(seen['credit_blocks'], [{'code': 'on_hold', 'message': 'Credit hold: ask the office.'}])
+        self.assertEqual(seen['credit_override'], None)
+        self.assertNotIn('cheque', str(seen))
+        self.assertEqual(self.post(order, 'confirm', {'credit_override_reason': 'Fake'}, self.picker).status_code,
+                         403)
+
+    def test_order_detail_queries_do_not_grow_with_the_ledger(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        from wholesale.ledger import post_adjustment
+
+        order = confirm(self.draft(), self.staff)
+        url = reverse('salesorder-detail', args=[order.pk])
+        with CaptureQueriesContext(connection) as before:
+            self.api.get(url)
+        for amount in ('5.00', '-1.00', '3.00', '-2.00', '4.00'):
+            post_adjustment(self.customer, D(amount), 'Fake', self.staff)
+        with CaptureQueriesContext(connection) as after:
+            self.api.get(url)
+        self.assertEqual(len(after), len(before))
+        self.assertLessEqual(len(after), 16)

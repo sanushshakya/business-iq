@@ -46,10 +46,15 @@ def _line(order, line_id):
     return line
 
 
+@transaction.atomic
 def start_pick(order):
     from . import credit  # credit imports orders, which this module imports
 
-    credit.check(order)  # G48: the limit, overdue invoices and the manual hold stop picking too
+    # G48: the limit, overdue invoices and the manual hold stop picking too. Order then customer locked, as confirm
+    # takes them, so a hold or a lower limit committed meanwhile is seen.
+    order = SalesOrder.objects.select_for_update().get(pk=order.pk)
+    customer = TradeCustomer.objects.select_for_update().get(pk=order.customer_id)
+    credit.check(order, customer)
     return advance(order, S.PICKING)
 
 

@@ -514,18 +514,25 @@ class SalesOrderSerializer(TenantModelSerializer):
     def get_customer_name(self, order) -> str:
         return order.customer.trading_name or order.customer.legal_name
 
+    def _operator(self):
+        request = self.context.get('request')
+        return bool(getattr(getattr(request, 'user', None), 'role', ''))
+
     @extend_schema_field(CreditReasonSerializer(many=True))
     def get_credit_blocks(self, order):
-        from .credit import order_blocks
+        from .credit import for_operator, order_blocks
 
         view = self.context.get('view')
         if getattr(view, 'action', None) == 'list' or order.status not in (SalesOrder.DRAFT, SalesOrder.CONFIRMED,
                                                                             SalesOrder.PICKING):
             return []
-        return order_blocks(order)
+        reasons = order_blocks(order, order.customer)
+        return for_operator(reasons) if self._operator() else reasons
 
     @extend_schema_field(CreditOverrideSerializer(allow_null=True))
     def get_credit_override(self, order):
+        if self._operator():  # pickers see that it may go ahead, not the figures or the reason
+            return None
         latest = next(iter(order.credit_overrides.all()), None)  # newest first; prefetched in lists
         return CreditOverrideSerializer(latest).data if latest else None
 

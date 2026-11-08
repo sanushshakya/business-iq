@@ -13,7 +13,7 @@ A staff ``CreditOverride`` with a reason lifts ``over_limit`` and ``overdue`` fo
 from datetime import timedelta
 from decimal import Decimal
 
-from django.db.models import Sum
+from django.db.models import F, Sum, Window
 
 from common.services.settings_service import get_company_setting
 from vat.services import uk_date
@@ -23,7 +23,8 @@ from .models import CreditOverride, Invoice, LedgerEntry, SalesOrder, TradeCusto
 from .orders import OrderStateError
 
 ZERO = Decimal('0.00')
-DAYS_KEY, DEFAULT_DAYS = 'credit_overdue_days', 7
+DAYS_KEY, DEFAULT_DAYS, MAX_DAYS = 'credit_overdue_days', 7, 3650
+OPERATOR_MESSAGE = 'Credit hold: ask the office.'
 OPEN_STATUSES = [SalesOrder.CONFIRMED, SalesOrder.PICKING, SalesOrder.PICKED, SalesOrder.DISPATCHED,
                  SalesOrder.DELIVERED]
 OVERRIDABLE = {'over_limit', 'overdue'}
@@ -41,21 +42,24 @@ class CreditBlocked(CreditError):
 
 def overdue_days(company_id):
     raw = get_company_setting(company_id, DAYS_KEY, str(DEFAULT_DAYS))
-    return int(raw) if raw.isdigit() else DEFAULT_DAYS  # a typo must neither stop all orders nor wave them through
+    # A typo must neither stop all orders nor wave them through.
+    if raw.isascii() and raw.isdigit() and int(raw) <= MAX_DAYS:
+        return int(raw)
+    return DEFAULT_DAYS
 
 
-def open_invoices(customer, today=None):
+def open_invoices(customer):
     """The invoices still partly open, oldest first: credits pay off debits (invoices and debit adjustments) in
-    entry order. ``[(invoice entry, open amount)]``."""
-    entries = list(LedgerEntry.objects.filter(customer=customer).select_related('invoice').order_by('entry_date',
-                                                                                                    'id'))
-    paid = -sum((entry.amount for entry in entries if entry.amount < 0), ZERO)
+    entry order. ``[(invoice, open amount)]``. Only the debits the credits don't cover are read."""
+    entries = LedgerEntry.objects.filter(customer=customer)
+    paid = -(entries.filter(amount__lt=0).aggregate(total=Sum('amount'))['total'] or ZERO)
+    debits = (entries.filter(amount__gt=0)
+              .annotate(running=Window(Sum('amount'), order_by=[F('entry_date').asc(), F('id').asc()]))
+              .filter(running__gt=paid).select_related('invoice').order_by('entry_date', 'id'))
     still_open = []
-    for entry in (entry for entry in entries if entry.amount > 0):
-        covered = min(paid, entry.amount)
-        paid -= covered
-        if entry.amount > covered and entry.invoice_id:
-            still_open.append((entry.invoice, entry.amount - covered))
+    for entry in debits:
+        if entry.invoice_id:
+            still_open.append((entry.invoice, min(entry.amount, entry.running - paid)))
     return still_open
 
 
@@ -102,17 +106,26 @@ def blocks(customer, order=None):
     return reasons, report
 
 
-def _overridden(order):
-    return order.pk is not None and CreditOverride.objects.filter(order_id=order.pk).exists()
+def _lifted(order):
+    """The rules this order's overrides were made for (each override lifts only what blocked it then)."""
+    if order.pk is None:
+        return set()
+    cached = getattr(order, '_prefetched_objects_cache', {}).get('credit_overrides')
+    rows = cached if cached is not None else CreditOverride.objects.filter(order_id=order.pk)
+    return {code for override in rows for code in override.blocks}
 
 
 def order_blocks(order, customer=None):
-    """What stops this order now, after its override (which lifts the limit and overdue rules)."""
+    """What stops this order now, after its overrides."""
     customer = customer or TradeCustomer.objects.get(pk=order.customer_id)
     reasons, _report = blocks(customer, order)
-    if _overridden(order):
-        reasons = [reason for reason in reasons if reason['code'] not in OVERRIDABLE]
-    return reasons
+    lifted = _lifted(order)
+    return [reason for reason in reasons if reason['code'] not in lifted]
+
+
+def for_operator(reasons):
+    """What a warehouse operator sees: which rule, not the figures or what staff typed."""
+    return [{'code': reason['code'], 'message': OPERATOR_MESSAGE} for reason in reasons]
 
 
 def check(order, customer=None):
@@ -126,6 +139,8 @@ def override(order, user, reason, customer=None):
     """Staff let ``order`` past its limit/overdue blocks, with a reason; logged with what blocked it."""
     if not getattr(user, 'is_staff', False):
         raise CreditError('Only staff override a credit block.')
+    if order.company_id != getattr(user, 'company_id', None):  # superusers too: credit is decided per company
+        raise CreditError("Only the order's own company overrides its credit.")
     reason = (reason or '').strip()
     if not reason:
         raise CreditError('Give a reason for the override.')

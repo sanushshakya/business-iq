@@ -22,7 +22,7 @@ from inventory.views import CompanyMemberReadsStaffWrites, Conflict
 from tenants.roles import DRIVER, STOCK
 from vat.services import uk_date
 
-from . import credit, credit_notes, invoices, ledger, orders, picking, returns, runs
+from . import credit, credit_notes, invoices, ledger, orders, payments, picking, returns, runs
 from .manifest_pdf import build_manifest_pdf
 from .invoice_pdf import build_credit_note_pdf, build_invoice_pdf
 from .pick_list import build_pick_list
@@ -33,7 +33,9 @@ from .models import (
     DeliveryRun,
     DeliveryStop,
     Invoice,
+    Allocation,
     LedgerEntry,
+    Payment,
     PriceList,
     PriceListEntry,
     SalesOrder,
@@ -52,6 +54,12 @@ from .serializers import (
     FailStopSerializer,
     InvoiceSerializer,
     AdjustmentSerializer,
+    AllocateRequestSerializer,
+    AllocationSerializer,
+    OpenItemsSerializer,
+    PaymentCreateSerializer,
+    PaymentSerializer,
+    ReverseRequestSerializer,
     ConfirmRequestSerializer,
     CreditBlockedSerializer,
     CreditOverrideRequestSerializer,
@@ -123,6 +131,26 @@ class TradeCustomerViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retr
             raise ValidationError({'from': 'At most 366 days at a time.'})
         report = ledger.statement(customer, start, end)
         return Response(StatementSerializer({'customer': customer.pk, 'from': start, 'to': end, **report}).data)
+
+    @extend_schema(responses=OpenItemsSerializer)
+    @action(detail=True, methods=['get'], url_path='open-items', url_name='open-items')
+    def open_items(self, request, pk=None):
+        """What is still open by allocation (G49): invoices and charges, and money on account."""
+        return Response(_open_items(self._own_customer()))
+
+    @extend_schema(request=AllocateRequestSerializer, responses=OpenItemsSerializer)
+    @action(detail=True, methods=['post'], url_path='allocations', url_name='allocations')
+    def allocations(self, request, pk=None):
+        """Allocate money on account (staff): oldest first, or to the invoices given. Answers the open items."""
+        customer = self._own_customer()
+        body = AllocateRequestSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        credit_entry = get_object_or_404(LedgerEntry, pk=body.validated_data['credit'], customer=customer)
+        try:
+            payments.allocate(credit_entry, request.user, body.targets())
+        except payments.PaymentError as error:
+            raise ValidationError({'detail': error.detail}) from None
+        return Response(_open_items(customer))
 
     @extend_schema(responses=CreditStatusSerializer)
     @action(detail=True, methods=['get'], url_path='credit', url_name='credit')
@@ -312,6 +340,11 @@ class PriceResolveView(APIView):
                            min_quantity=price.min_quantity)
             rows.append(row)
         return Response(ResolveResponseSerializer({'customer': customer.pk, 'on': on, 'lines': rows}).data)
+
+
+def _open_items(customer):
+    return OpenItemsSerializer({'debits': payments.open_debits(customer),
+                                'credits': payments.on_account(customer)}).data
 
 
 def _credit_blocked(error, user):
@@ -865,3 +898,92 @@ class CreditNoteViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retriev
         response = HttpResponse(build_credit_note_pdf(note), content_type='application/pdf')
         response['Content-Disposition'] = f'inline; filename="{note.number_display}.pdf"'
         return response
+
+
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter('customer', int, description='Only this customer\'s payments.'),
+    OpenApiParameter('method', str, enum=sorted(payments.METHODS)),
+    OpenApiParameter('reversed', bool, description='Only reversed (true) or standing (false) payments.'),
+]))
+class PaymentViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    """
+    Customer payments (G49). Recording one posts it to the ledger and allocates it (oldest first by default, as
+    given, or kept on account). Never edited or deleted: reverse it with a reason. Members read; staff write.
+    """
+
+    queryset = Payment.objects.select_related('customer').prefetch_related(Prefetch(
+        'ledger_entries', queryset=LedgerEntry.objects.prefetch_related('allocations_out__debit__invoice')))
+    serializer_class = PaymentSerializer
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        if params.get('customer'):
+            try:
+                queryset = queryset.filter(customer_id=int(params['customer']))
+            except ValueError:
+                raise ValidationError({'customer': 'A customer id.'}) from None
+        if params.get('method'):
+            queryset = queryset.filter(method=params['method'])
+        if params.get('reversed') in ('true', 'false'):
+            queryset = queryset.filter(reversed_at__isnull=params['reversed'] == 'false')
+        return queryset
+
+    def _answer(self, payment, status=200):
+        return Response(self.get_serializer(self.get_queryset().get(pk=payment.pk)).data, status=status)
+
+    @extend_schema(request=PaymentCreateSerializer, responses={201: PaymentSerializer, 200: PaymentSerializer})
+    def create(self, request, *args, **kwargs):
+        """Record a payment; the same `client_ref` again answers 200 with the first one (409 if it differs)."""
+        body = PaymentCreateSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        data = body.validated_data
+        customer = TradeCustomer.objects.filter(pk=data['customer'], company_id=request.user.company_id).first()
+        if customer is None:  # superusers too: payments are taken per company
+            raise ValidationError({'customer': 'Not one of your customers.'})
+        try:
+            payment = payments.record_payment(
+                customer, request.user, amount=data['amount'], method=data['method'],
+                received_on=data['received_on'], reference=data['reference'], note=data['note'],
+                allocate=body.targets(), client_ref=data.get('client_ref'))
+        except payments.PaymentConflict as error:
+            raise Conflict(error.detail) from None
+        except payments.PaymentError as error:
+            raise ValidationError({'detail': error.detail}) from None
+        return self._answer(payment, status=200 if payment.repeated else 201)
+
+    @extend_schema(request=ReverseRequestSerializer, responses=PaymentSerializer)
+    @action(detail=True, methods=['post'])
+    def reverse(self, request, pk=None):
+        """Reverse a payment (keyed wrongly, a bounced cheque), with a reason: its allocations are released."""
+        payment = self.get_object()
+        if payment.customer.company_id != request.user.company_id:
+            raise Http404
+        body = ReverseRequestSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        try:
+            payments.reverse_payment(payment, request.user, body.validated_data['reason'])
+        except payments.PaymentError as error:
+            raise ValidationError({'detail': error.detail}) from None
+        return self._answer(payment)
+
+
+class AllocationViewSet(TenantScopedMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    """Allocations (G49): read one, or release it (staff), which puts that money back on account."""
+
+    queryset = Allocation.objects.select_related('debit__invoice', 'credit__payment', 'debit__customer')
+    serializer_class = AllocationSerializer
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    @extend_schema(request=None, responses=AllocationSerializer)
+    @action(detail=True, methods=['post'])
+    def release(self, request, pk=None):
+        allocation = self.get_object()
+        if allocation.debit.customer.company_id != request.user.company_id:
+            raise Http404
+        try:
+            payments.release(allocation, request.user)
+        except payments.PaymentError as error:
+            raise ValidationError({'detail': error.detail}) from None
+        return Response(self.get_serializer(self.get_queryset().get(pk=allocation.pk)).data)

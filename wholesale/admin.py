@@ -14,7 +14,9 @@ from .models import (
     DeliveryRun,
     DeliveryStop,
     Invoice,
+    Allocation,
     LedgerEntry,
+    Payment,
     InvoiceLine,
     PriceList,
     PriceListEntry,
@@ -326,3 +328,8 @@ class CreditOverrideAdmin(TenantAdminMixin, ViewOnlyAdmin):
     """View only: a credit override is a logged decision (G48), made through the API."""
 
     list_display = ['order', 'created_at', 'created_by', 'blocks', 'exposure', 'credit_limit']
+
+
+@admin.register(Payment, Allocation)
+class PaymentsAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """View only: payments are reversed and allocations released through the API (G49), never edited."""

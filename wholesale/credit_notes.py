@@ -25,6 +25,7 @@ from vat.services import HUNDRED, PENNY, uk_date
 
 from .invoices import recipient
 from .ledger import post_credit_note
+from .payments import allocate_credit_note
 from .models import CreditNote, CreditNoteLine, CustomerReturn, Invoice, InvoiceLine, SalesOrder
 
 logger = logging.getLogger(__name__)
@@ -156,8 +157,9 @@ def issue_credit_note(credit_note, user):
     credit_note.email_status = Invoice.QUEUED
     credit_note.save()
     # The customer owes that much less (G47), in this transaction.
-    post_credit_note(credit_note, SalesOrder.objects.values_list('customer_id', flat=True).get(
+    entry = post_credit_note(credit_note, SalesOrder.objects.values_list('customer_id', flat=True).get(
         invoice__pk=credit_note.invoice_id))
+    allocate_credit_note(entry, user)  # G49: it pays its own invoice first
     pk = credit_note.pk
     transaction.on_commit(lambda: _queue_email(pk))
     return credit_note

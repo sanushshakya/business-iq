@@ -839,6 +839,34 @@ class LedgerEntryQuerySet(models.QuerySet):
         return super().bulk_create(objs, *args, **kwargs)
 
 
+class FrozenRowQuerySet(models.QuerySet):
+    """Rows changed only through their model's own narrow ``save`` (G49 payments, allocations)."""
+
+    def update(self, **kwargs):
+        raise ValidationError('Change these one at a time.')
+
+    def delete(self):
+        raise ValidationError('These are never deleted.')
+
+    def bulk_update(self, objs, fields, *args, **kwargs):
+        raise ValidationError('Change these one at a time.')
+
+    def bulk_create(self, objs, *args, update_conflicts=False, **kwargs):
+        if update_conflicts:  # an upsert would rewrite the row it collides with
+            raise ValidationError('These are never rewritten.')
+        return super().bulk_create(objs, *args, **kwargs)
+
+
+def _only_once(instance, field, update_fields, allowed, message):
+    """An existing row may only have ``allowed`` fields set, once: stored ``field`` empty, the new one set."""
+    if instance._state.adding:
+        return
+    stored = type(instance).objects.filter(pk=instance.pk).values_list(field, flat=True).first()
+    if not (update_fields and set(update_fields) <= allowed and stored is None
+            and getattr(instance, field) is not None):
+        raise ValidationError(message)
+
+
 class LedgerEntry(models.Model):
     """
     One line of a trade customer's account (G47), append-only: what they owe is the sum of their entries, never a
@@ -848,18 +876,22 @@ class LedgerEntry(models.Model):
     """
 
     INVOICE, CREDIT_NOTE, PAYMENT, ADJUSTMENT = 'invoice', 'credit_note', 'payment', 'adjustment'
-    KINDS = [(INVOICE, 'Invoice'), (CREDIT_NOTE, 'Credit note'), (PAYMENT, 'Payment'), (ADJUSTMENT, 'Adjustment')]
+    PAYMENT_REVERSAL = 'payment_reversal'
+    KINDS = [(INVOICE, 'Invoice'), (CREDIT_NOTE, 'Credit note'), (PAYMENT, 'Payment'), (ADJUSTMENT, 'Adjustment'),
+             (PAYMENT_REVERSAL, 'Payment reversal')]
     objects = LedgerEntryQuerySet.as_manager()
 
     customer = models.ForeignKey(TradeCustomer, on_delete=models.PROTECT, related_name='ledger_entries')
-    kind = models.CharField(max_length=12, choices=KINDS)
+    kind = models.CharField(max_length=16, choices=KINDS)
     entry_date = models.DateField(help_text="The document's date (UK); an adjustment's posting date.")
     amount = models.DecimalField(max_digits=12, decimal_places=2, help_text='Signed: positive = owed more.')
     invoice = models.OneToOneField(Invoice, on_delete=models.PROTECT, null=True, blank=True,
                                    related_name='ledger_entry')
     credit_note = models.OneToOneField(CreditNote, on_delete=models.PROTECT, null=True, blank=True,
                                        related_name='ledger_entry')
-    payment_ref = models.CharField(max_length=60, blank=True)  # G49
+    payment = models.ForeignKey('Payment', on_delete=models.PROTECT, null=True, blank=True,
+                                related_name='ledger_entries')  # G49: its entry and, if reversed, the reversal
+    payment_ref = models.CharField(max_length=60, blank=True)
     description = models.CharField(max_length=120)
     reason = models.CharField(max_length=255, blank=True)
     client_ref = models.UUIDField(null=True, blank=True, help_text='An adjustment sent again with it posts once.')
@@ -875,10 +907,16 @@ class LedgerEntry(models.Model):
             models.CheckConstraint(condition=~Q(amount=0), name='ledger_amount_not_zero'),
             models.CheckConstraint(
                 condition=(
-                    Q(kind='invoice', amount__gt=0, invoice__isnull=False, credit_note__isnull=True)
-                    | Q(kind='credit_note', amount__lt=0, credit_note__isnull=False, invoice__isnull=True)
-                    | Q(kind='payment', amount__lt=0, invoice__isnull=True, credit_note__isnull=True)
-                    | (Q(kind='adjustment', invoice__isnull=True, credit_note__isnull=True) & ~Q(reason=''))
+                    Q(kind='invoice', amount__gt=0, invoice__isnull=False, credit_note__isnull=True,
+                      payment__isnull=True)
+                    | Q(kind='credit_note', amount__lt=0, credit_note__isnull=False, invoice__isnull=True,
+                        payment__isnull=True)
+                    | Q(kind='payment', amount__lt=0, payment__isnull=False, invoice__isnull=True,
+                        credit_note__isnull=True)
+                    | Q(kind='payment_reversal', amount__gt=0, payment__isnull=False, invoice__isnull=True,
+                        credit_note__isnull=True)
+                    | (Q(kind='adjustment', invoice__isnull=True, credit_note__isnull=True, payment__isnull=True)
+                       & ~Q(reason=''))
                 ),
                 name='ledger_kind_sign_and_document',
             ),
@@ -930,3 +968,95 @@ class CreditOverride(models.Model):
         if not self._state.adding:
             raise ValidationError('A credit override is never changed.')
         super().save(*args, **kwargs)
+
+
+class Payment(models.Model):
+    """
+    Money a trade customer paid (G49), posted to their ledger as a ``payment`` entry (dated ``received_on``) and
+    allocated to invoices. Never edited: a wrong one or a bounced cheque is reversed (a ``payment_reversal`` entry,
+    its allocations released), so both stay on the statement.
+    """
+
+    BANK_TRANSFER, CASH, CARD, CHEQUE = 'bank_transfer', 'cash', 'card', 'cheque'
+    METHODS = [(BANK_TRANSFER, 'Bank transfer'), (CASH, 'Cash'), (CARD, 'Card'), (CHEQUE, 'Cheque')]
+    REVERSAL_FIELDS = {'reversed_at', 'reversed_by', 'reversal_reason'}
+
+    customer = models.ForeignKey(TradeCustomer, on_delete=models.PROTECT, related_name='payments')
+    method = models.CharField(max_length=14, choices=METHODS)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    received_on = models.DateField()
+    reference = models.CharField(max_length=60, blank=True, help_text='Bank reference, cheque number...')
+    note = models.CharField(max_length=255, blank=True)
+    client_ref = models.UUIDField(null=True, blank=True, help_text='Sent again on a retry: recorded once.')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+    reversed_at = models.DateTimeField(null=True, blank=True)
+    reversed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                    related_name='+')
+    reversal_reason = models.CharField(max_length=255, blank=True)
+
+    objects = FrozenRowQuerySet.as_manager()
+
+    class Meta:
+        base_manager_name = 'objects'
+        ordering = ['-received_on', '-id']
+        constraints = [
+            models.CheckConstraint(condition=Q(amount__gt=0), name='payment_amount_positive'),
+            models.UniqueConstraint(fields=['customer', 'client_ref'], condition=Q(client_ref__isnull=False),
+                                    name='unique_payment_client_ref'),
+        ]
+
+    def __str__(self):
+        return f'Payment #{self.pk}'
+
+    def save(self, *args, update_fields=None, **kwargs):
+        _only_once(self, 'reversed_at', update_fields, self.REVERSAL_FIELDS,
+                   'A payment is never changed; reverse it (once).')
+        super().save(*args, update_fields=update_fields, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError('A payment is never deleted; reverse it.')
+
+
+class Allocation(models.Model):
+    """
+    Part of a credit (a payment, credit note or credit adjustment: a negative entry) paying a debit (an invoice or a
+    debit adjustment) of the same customer (G49). Active ones never exceed either side. Released, never deleted:
+    only ``released_at``/``released_by`` change.
+    """
+
+    RELEASE_FIELDS = {'released_at', 'released_by'}
+
+    credit = models.ForeignKey(LedgerEntry, on_delete=models.PROTECT, related_name='allocations_out')
+    debit = models.ForeignKey(LedgerEntry, on_delete=models.PROTECT, related_name='allocations_in')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                   related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+    released_at = models.DateTimeField(null=True, blank=True)
+    released_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                    related_name='+')
+
+    objects = FrozenRowQuerySet.as_manager()
+
+    class Meta:
+        base_manager_name = 'objects'
+        ordering = ['id']
+        constraints = [models.CheckConstraint(condition=Q(amount__gt=0), name='allocation_amount_positive')]
+
+    def __str__(self):
+        return f'Allocation #{self.pk}'
+
+    def save(self, *args, update_fields=None, **kwargs):
+        _only_once(self, 'released_at', update_fields, self.RELEASE_FIELDS,
+                   'An allocation is never changed; release it (once).')
+        super().save(*args, update_fields=update_fields, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError('An allocation is never deleted; release it.')
+
+
+@receiver(pre_delete, sender=Payment)
+@receiver(pre_delete, sender=Allocation)
+def _payment_history_is_kept(sender, instance, **kwargs):
+    raise ValidationError('Payment history is kept.')

@@ -18,8 +18,10 @@ from .models import (
     DeliveryStop,
     Invoice,
     CreditOverride,
+    Allocation,
     InvoiceLine,
     LedgerEntry,
+    Payment,
     PriceList,
     PriceListEntry,
     ReturnLine,
@@ -968,3 +970,144 @@ class AdjustmentSerializer(serializers.Serializer):
                                       help_text='Positive: they owe more; negative: they owe less. Not 0.')
     reason = serializers.CharField(max_length=255)
     client_ref = serializers.UUIDField(required=False, help_text='Send the same one again on a retry: posted once.')
+
+
+def _entry_label(entry):
+    return entry.invoice.number_display if entry.invoice_id else entry.description
+
+
+class AllocationSerializer(serializers.ModelSerializer):
+    """Part of a credit paying a debit (G49); a released one no longer counts."""
+
+    number = serializers.SerializerMethodField(help_text="The invoice's number, or the entry's description.")
+
+    class Meta:
+        model = Allocation
+        fields = ['id', 'credit', 'debit', 'number', 'amount', 'created_by', 'created_at', 'released_at',
+                  'released_by']
+        read_only_fields = fields
+
+    def get_number(self, allocation) -> str:
+        return _entry_label(allocation.debit)
+
+
+class PaymentSerializer(serializers.ModelSerializer):
+    """A payment (G49) with what it pays (released allocations included, with ``released_at``)."""
+
+    customer_code = serializers.CharField(source='customer.account_code', read_only=True)
+    allocations = serializers.SerializerMethodField()
+    allocated = serializers.SerializerMethodField(help_text='Active allocations to invoices and charges.')
+    on_account = serializers.SerializerMethodField(help_text='Not allocated yet (0 once reversed).')
+
+    class Meta:
+        model = Payment
+        fields = ['id', 'customer', 'customer_code', 'method', 'amount', 'received_on', 'reference', 'note',
+                  'client_ref', 'allocations', 'allocated', 'on_account', 'created_by', 'created_at', 'reversed_at',
+                  'reversed_by', 'reversal_reason']
+        read_only_fields = fields
+
+    @staticmethod
+    def _rows(payment):
+        entry = next((row for row in payment.ledger_entries.all() if row.kind == LedgerEntry.PAYMENT), None)
+        if entry is None:
+            return []
+        # The match to its own reversal is bookkeeping, not something it pays.
+        return [row for row in entry.allocations_out.all() if row.debit.kind != LedgerEntry.PAYMENT_REVERSAL]
+
+    @extend_schema_field(AllocationSerializer(many=True))
+    def get_allocations(self, payment):
+        return AllocationSerializer(self._rows(payment), many=True).data
+
+    def _allocated(self, payment):
+        return sum((row.amount for row in self._rows(payment) if row.released_at is None), Decimal('0.00'))
+
+    @extend_schema_field(serializers.DecimalField(max_digits=12, decimal_places=2))
+    def get_allocated(self, payment):
+        return f'{self._allocated(payment):.2f}'
+
+    @extend_schema_field(serializers.DecimalField(max_digits=12, decimal_places=2))
+    def get_on_account(self, payment):
+        return '0.00' if payment.reversed_at else f'{payment.amount - self._allocated(payment):.2f}'
+
+
+class AllocationTargetSerializer(serializers.Serializer):
+    debit = serializers.IntegerField(help_text='An open ledger entry (invoice or charge) from open-items.')
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+
+ALLOCATE_CHOICES = [('oldest', 'Oldest first'), ('manual', 'As given'), ('none', 'Keep on account')]
+
+
+class _Allocating(serializers.Serializer):
+    allocate = serializers.ChoiceField(choices=ALLOCATE_CHOICES, default='oldest')
+    allocations = AllocationTargetSerializer(many=True, required=False)
+
+    def validate(self, data):
+        if data['allocate'] == 'manual' and not data.get('allocations'):
+            raise serializers.ValidationError({'allocations': 'Say which invoices it pays.'})
+        if data['allocate'] != 'manual' and data.get('allocations'):
+            raise serializers.ValidationError({'allocations': 'Only with allocate: manual.'})
+        return data
+
+    def targets(self):
+        mode = self.validated_data['allocate']
+        if mode == 'manual':
+            return [dict(row) for row in self.validated_data['allocations']]
+        return 'oldest' if mode == 'oldest' else None
+
+
+class PaymentCreateSerializer(_Allocating):
+    customer = serializers.IntegerField()
+    amount = serializers.DecimalField(max_digits=9, decimal_places=2)
+    method = serializers.ChoiceField(choices=Payment.METHODS)
+    received_on = serializers.DateField()
+    reference = serializers.CharField(max_length=60, required=False, allow_blank=True, default='')
+    note = serializers.CharField(max_length=255, required=False, allow_blank=True, default='')
+    client_ref = serializers.UUIDField(required=False)
+
+
+class AllocateRequestSerializer(_Allocating):
+    credit = serializers.IntegerField(help_text='An on-account credit (payment, credit note, credit adjustment).')
+
+    def validate(self, data):
+        data = super().validate(data)
+        if data['allocate'] == 'none':
+            raise serializers.ValidationError({'allocate': 'oldest or manual.'})
+        return data
+
+
+class ReverseRequestSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=255)
+
+
+class OpenDebitSerializer(serializers.Serializer):
+    entry = serializers.IntegerField(source='pk')
+    kind = serializers.CharField()
+    entry_date = serializers.DateField()
+    description = serializers.CharField()
+    invoice = serializers.IntegerField(source='invoice_id', allow_null=True)
+    number = serializers.SerializerMethodField()
+    due_date = serializers.SerializerMethodField()
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    open = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+    def get_number(self, entry) -> str:
+        return _entry_label(entry)
+
+    @extend_schema_field(serializers.DateField(allow_null=True))
+    def get_due_date(self, entry):
+        return entry.invoice.due_date.isoformat() if entry.invoice_id else None
+
+
+class OpenCreditSerializer(serializers.Serializer):
+    entry = serializers.IntegerField(source='pk')
+    kind = serializers.CharField()
+    entry_date = serializers.DateField()
+    description = serializers.CharField()
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    remaining = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+
+class OpenItemsSerializer(serializers.Serializer):
+    debits = OpenDebitSerializer(many=True, help_text='Open invoices and charges, oldest first.')
+    credits = OpenCreditSerializer(many=True, help_text='Money on account, oldest first.')

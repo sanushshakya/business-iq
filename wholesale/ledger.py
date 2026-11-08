@@ -43,10 +43,12 @@ def post_credit_note(note, customer_id):
         created_by=note.issued_by)
 
 
+@transaction.atomic
 def post_adjustment(customer, amount, reason, user, client_ref=None):
     """Staff only; ``amount`` a Decimal to the penny, not 0, at most £999,999.99 either way; a reason. Sent again
     with the same ``client_ref`` (a retry after a lost answer), it returns the first entry with ``repeated`` set;
-    with the same ref but a different amount or reason it raises ``AdjustmentConflict``."""
+    with the same ref but a different amount or reason it raises ``AdjustmentConflict``. A credit adjustment pays
+    the oldest open debits (G49), as a payment does; what is left stays on account."""
     if not getattr(user, 'is_staff', False):
         raise LedgerError('Only staff post adjustments.')
     if not isinstance(amount, Decimal):
@@ -80,6 +82,10 @@ def post_adjustment(customer, amount, reason, user, client_ref=None):
         if not earlier:
             raise
         return earlier  # the same retry, committed meanwhile
+    if entry.amount < 0:
+        from .payments import allocate  # payments imports only models
+
+        allocate(entry, user)
     entry.repeated = False
     return entry
 

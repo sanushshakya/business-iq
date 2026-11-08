@@ -6,6 +6,7 @@ Nothing here changes or deletes an entry.
 
 from decimal import Decimal, InvalidOperation
 
+from django.db import IntegrityError, transaction
 from django.db.models import Sum
 
 from vat.services import uk_date
@@ -18,6 +19,10 @@ ADJUSTMENT_LIMIT = Decimal('999999.99')
 
 class LedgerError(ValueError):
     pass
+
+
+class AdjustmentConflict(LedgerError):
+    """The ``client_ref`` was already used for a different adjustment."""
 
 
 def post_invoice(invoice, customer_id):
@@ -38,8 +43,10 @@ def post_credit_note(note, customer_id):
         created_by=note.issued_by)
 
 
-def post_adjustment(customer, amount, reason, user):
-    """Staff only; ``amount`` a Decimal to the penny, not 0, at most £999,999.99 either way; a reason."""
+def post_adjustment(customer, amount, reason, user, client_ref=None):
+    """Staff only; ``amount`` a Decimal to the penny, not 0, at most £999,999.99 either way; a reason. Sent again
+    with the same ``client_ref`` (a retry after a lost answer), it returns the first entry with ``repeated`` set;
+    with the same ref but a different amount or reason it raises ``AdjustmentConflict``."""
     if not getattr(user, 'is_staff', False):
         raise LedgerError('Only staff post adjustments.')
     if not isinstance(amount, Decimal):
@@ -58,9 +65,33 @@ def post_adjustment(customer, amount, reason, user):
         raise LedgerError('Give a reason for the adjustment.')
     if len(reason) > 255:
         raise LedgerError('The reason is at most 255 characters.')
-    return LedgerEntry.objects.create(
-        customer=customer, kind=LedgerEntry.ADJUSTMENT, entry_date=uk_date(), amount=amount.quantize(ZERO),
-        description='Debit adjustment' if amount > 0 else 'Credit adjustment', reason=reason, created_by=user)
+    if client_ref is not None:
+        earlier = _repeat(customer, client_ref, amount, reason)
+        if earlier is not None:
+            return earlier
+    try:
+        with transaction.atomic():
+            entry = LedgerEntry.objects.create(
+                customer=customer, kind=LedgerEntry.ADJUSTMENT, entry_date=uk_date(), amount=amount.quantize(ZERO),
+                description='Debit adjustment' if amount > 0 else 'Credit adjustment', reason=reason,
+                client_ref=client_ref, created_by=user)
+    except IntegrityError:
+        earlier = client_ref is not None and _repeat(customer, client_ref, amount, reason)
+        if not earlier:
+            raise
+        return earlier  # the same retry, committed meanwhile
+    entry.repeated = False
+    return entry
+
+
+def _repeat(customer, client_ref, amount, reason):
+    earlier = LedgerEntry.objects.filter(customer=customer, client_ref=client_ref).first()
+    if earlier is None:
+        return None
+    if (earlier.amount, earlier.reason) != (amount, reason):
+        raise AdjustmentConflict('This client_ref was used for a different adjustment.')
+    earlier.repeated = True
+    return earlier
 
 
 def _sum(entries):

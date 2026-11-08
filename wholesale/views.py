@@ -18,7 +18,7 @@ from rest_framework.views import APIView
 
 from common.tenancy import TenantScopedMixin
 from inventory.models import StockReservation
-from inventory.views import CompanyMemberReadsStaffWrites
+from inventory.views import CompanyMemberReadsStaffWrites, Conflict
 from tenants.roles import DRIVER, STOCK
 from vat.services import uk_date
 
@@ -110,7 +110,7 @@ class TradeCustomerViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retr
     def ledger(self, request, pk=None):
         """The customer's statement (G47): the balance before `from`, every entry to `to` with the balance after
         it, and the closing balance. At most 366 days."""
-        customer = self.get_object()
+        customer = self._own_customer()
         end = _date_param(request.query_params, 'to') or uk_date()
         start = _date_param(request.query_params, 'from') or end - timedelta(days=89)
         if start > end:
@@ -125,15 +125,24 @@ class TradeCustomerViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retr
     def adjustments(self, request, pk=None):
         """Post a manual adjustment (staff): `amount` to the penny, not 0, and a `reason`. It never changes VAT
         (that is a credit note) and cannot be edited: correct one with the opposite adjustment."""
-        customer = self.get_object()
+        customer = self._own_customer()
         body = AdjustmentSerializer(data=request.data)
         body.is_valid(raise_exception=True)
         try:
             entry = ledger.post_adjustment(customer, body.validated_data['amount'], body.validated_data['reason'],
-                                           request.user)
+                                           request.user, client_ref=body.validated_data.get('client_ref'))
+        except ledger.AdjustmentConflict as error:
+            raise Conflict(str(error)) from None
         except ledger.LedgerError as error:
             raise ValidationError({'amount': str(error)}) from None
-        return Response(LedgerEntrySerializer(entry).data, status=201)
+        return Response(LedgerEntrySerializer(entry).data, status=200 if entry.repeated else 201)
+
+    def _own_customer(self):
+        # Money is posted and read only on the user's own company's accounts, superusers included.
+        customer = self.get_object()
+        if customer.company_id != self.request.user.company_id:
+            raise Http404
+        return customer
 
     def perform_create(self, serializer):
         self._save_once(super().perform_create, serializer)

@@ -892,3 +892,4 @@ class AdjustmentSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=8, decimal_places=2,
                                       help_text='Positive: they owe more; negative: they owe less. Not 0.')
     reason = serializers.CharField(max_length=255)
+    client_ref = serializers.UUIDField(required=False, help_text='Send the same one again on a retry: posted once.')

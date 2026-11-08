@@ -77,10 +77,26 @@ class LedgerApiTests(CreditBase):
         url = reverse('tradecustomer-ledger', args=[self.customer.pk])
         for method in ('put', 'patch', 'delete', 'post'):
             self.assertEqual(getattr(self.api, method)(url, {}, format='json').status_code, 405)
+        url = reverse('tradecustomer-adjustments', args=[self.customer.pk])
+        for method in ('get', 'put', 'patch', 'delete'):
+            self.assertEqual(getattr(self.api, method)(url, {}, format='json').status_code, 405)
+
+    def test_a_retried_adjustment_posts_once(self):
+        body = {'amount': '1.00', 'reason': 'Fake', 'client_ref': '0b6f3c1e-5d0a-4c1e-9a53-6b7f2f0c9e11'}
+        first = self.adjust(body)
+        again = self.adjust(body)
+        self.assertEqual((first.status_code, again.status_code), (201, 200))
+        self.assertEqual(first.json()['id'], again.json()['id'])
+        self.assertEqual(self.adjust({**body, 'amount': '2.00'}).status_code, 409)
+        self.assertEqual(LedgerEntry.objects.filter(kind='adjustment').count(), 1)
 
     def test_tenancy(self):
         other = CompanyFactory()
         theirs = TradeCustomer.objects.create(company=other, account_code='C-1', legal_name='E2E Fake Other')
         self.assertEqual(self.ledger(customer=theirs).status_code, 404)
         self.assertEqual(self.adjust({'amount': '1.00', 'reason': 'Fake'}, customer=theirs).status_code, 404)
+        admin = APIClient()
+        admin.force_authenticate(UserFactory(company=self.company, is_staff=True, is_superuser=True))
+        self.assertEqual(self.ledger(admin, customer=theirs).status_code, 404)
+        self.assertEqual(self.adjust({'amount': '1.00', 'reason': 'Fake'}, admin, customer=theirs).status_code, 404)
         self.assertFalse(LedgerEntry.objects.filter(customer=theirs).exists())

@@ -829,6 +829,11 @@ class LedgerEntryQuerySet(models.QuerySet):
     def bulk_update(self, objs, fields, *args, **kwargs):
         raise ValidationError(LEDGER_FROZEN)
 
+    def bulk_create(self, objs, *args, update_conflicts=False, **kwargs):
+        if update_conflicts:  # an "upsert" would rewrite the entry it collides with
+            raise ValidationError(LEDGER_FROZEN)
+        return super().bulk_create(objs, *args, **kwargs)
+
 
 class LedgerEntry(models.Model):
     """
@@ -853,11 +858,13 @@ class LedgerEntry(models.Model):
     payment_ref = models.CharField(max_length=60, blank=True)  # G49
     description = models.CharField(max_length=120)
     reason = models.CharField(max_length=255, blank=True)
+    client_ref = models.UUIDField(null=True, blank=True, help_text='An adjustment sent again with it posts once.')
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
                                    related_name='+')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        base_manager_name = 'objects'  # so no internal path gets a plain, writable manager
         ordering = ['customer', 'entry_date', 'id']
         indexes = [models.Index(fields=['customer', 'entry_date'], name='ledger_customer_date')]
         constraints = [
@@ -871,6 +878,8 @@ class LedgerEntry(models.Model):
                 ),
                 name='ledger_kind_sign_and_document',
             ),
+            models.UniqueConstraint(fields=['customer', 'client_ref'], condition=Q(client_ref__isnull=False),
+                                    name='unique_ledger_client_ref'),
         ]
 
     def __str__(self):

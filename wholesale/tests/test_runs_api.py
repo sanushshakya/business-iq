@@ -175,3 +175,17 @@ class RunApiTests(Base):
         self.assertEqual((lines['Fake Rice']['picked_quantity'], lines['Fake Rice']['sold_by']), (3, 'each'))
         self.assertEqual((lines['Fake Chops']['picked_weight_kg'], lines['Fake Chops']['is_catch_weight']),
                          ('1.040', True))
+        self.assertEqual(set(stop['lines'][0]), {'id', 'product_name', 'sold_by', 'is_catch_weight', 'picked_quantity',
+                                                 'picked_weight_kg'})  # no prices, VAT or customer data
+
+    def test_stop_lines_leave_out_proposed_and_rejected_swaps(self):
+        from wholesale.models import SalesOrderLine
+
+        order = self.picked_order(rice=3)
+        original = order.lines.get(product=self.rice)
+        for state in ('proposed', 'rejected'):
+            SalesOrderLine.objects.create(order=order, product=self.chops, quantity=1, substitute_for=original,
+                                          substitution=state)
+        run_id = self.create(order).json()['id']
+        stop = self.api.get(reverse('deliveryrun-detail', args=[run_id])).json()['stops'][0]
+        self.assertEqual(sorted(line['product_name'] for line in stop['lines']), ['Fake Chops', 'Fake Rice'])

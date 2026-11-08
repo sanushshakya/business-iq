@@ -45,6 +45,12 @@ class CreditCase(CreditBase):
         self.assertEqual([reason['code'] for reason in caught.exception.reasons], list(codes))
         return caught.exception
 
+    def pay(self, amount):
+        from wholesale.payments import record_payment
+
+        return record_payment(self.customer, self.staff, amount=amount, method='bank_transfer',
+                              received_on=self.today)
+
     def later(self, days):
         return mock.patch.object(credit, 'uk_date', return_value=self.today + timedelta(days=days))
 
@@ -79,7 +85,7 @@ class CreditTests(CreditCase):
     def test_overdue_oldest_first_after_n_days(self):
         first = issue(create_invoice(self.picked_order(), self.staff), self.staff)  # 12.24, due today
         second = issue(create_invoice(self.picked_order(rice=1), self.staff), self.staff)  # 2.00 + 6.24 = 8.24
-        post_adjustment(self.customer, D('-15.00'), 'Fake part payment', self.staff)  # pays the first, 2.76 of 2nd
+        self.pay(D('15.00'))  # oldest first (G49): pays the first, 2.76 of the second
         with self.later(7):  # due + 7 is not before today: not yet
             confirm(self.draft(), self.staff)
         order = self.draft()
@@ -89,7 +95,7 @@ class CreditTests(CreditCase):
             {'invoice': second.pk, 'number': second.number_display, 'due_date': second.due_date.isoformat(),
              'open': '5.48'}])
         self.assertNotIn(first.number_display, error.detail)
-        post_adjustment(self.customer, D('-5.48'), 'Fake rest', self.staff)
+        self.pay(D('5.48'))
         with self.later(30):
             confirm(order, self.staff)
 

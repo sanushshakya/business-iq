@@ -83,6 +83,8 @@ TENANT_LOOKUPS = {
     'wholesale.Invoice': 'company',
     'wholesale.LedgerEntry': 'customer__company',
     'wholesale.CreditOverride': 'order__company',
+    'wholesale.Payment': 'customer__company',
+    'wholesale.Allocation': 'debit__customer__company',
     'wholesale.InvoiceLine': 'invoice__company',
     'wholesale.DeliveryRun': 'company',
     'wholesale.DeliveryStop': 'run__company',

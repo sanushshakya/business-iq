@@ -5,7 +5,7 @@ Credit control (G48). An order is blocked from confirm, start-pick and the pick 
 - ``over_limit``: exposure (ledger balance + the estimated gross of their confirmed-to-delivered orders not yet
   invoiced, this one included) is above ``credit_limit`` (blank: no limit);
 - ``overdue``: an invoice is still partly open more than N days (company ``Setting`` ``credit_overdue_days``,
-  default 7) after its due date. Until payments are allocated (G49), credits pay the oldest debits first.
+  default 7) after its due date; what is open comes from the allocations (G49).
 
 A staff ``CreditOverride`` with a reason lifts ``over_limit`` and ``overdue`` for that one order.
 """
@@ -13,14 +13,15 @@ A staff ``CreditOverride`` with a reason lifts ``over_limit`` and ``overdue`` fo
 from datetime import timedelta
 from decimal import Decimal
 
-from django.db.models import F, Sum, Window
+from django.db.models import Sum
 
 from common.services.settings_service import get_company_setting
 from vat.services import uk_date
 
 from .ledger import balance
-from .models import CreditOverride, Invoice, LedgerEntry, SalesOrder, TradeCustomer
+from .models import CreditOverride, Invoice, SalesOrder, TradeCustomer
 from .orders import OrderStateError
+from .payments import open_debits
 
 ZERO = Decimal('0.00')
 DAYS_KEY, DEFAULT_DAYS, MAX_DAYS = 'credit_overdue_days', 7, 3650
@@ -49,18 +50,8 @@ def overdue_days(company_id):
 
 
 def open_invoices(customer):
-    """The invoices still partly open, oldest first: credits pay off debits (invoices and debit adjustments) in
-    entry order. ``[(invoice, open amount)]``. Only the debits the credits don't cover are read."""
-    entries = LedgerEntry.objects.filter(customer=customer)
-    paid = -(entries.filter(amount__lt=0).aggregate(total=Sum('amount'))['total'] or ZERO)
-    debits = (entries.filter(amount__gt=0)
-              .annotate(running=Window(Sum('amount'), order_by=[F('entry_date').asc(), F('id').asc()]))
-              .filter(running__gt=paid).select_related('invoice').order_by('entry_date', 'id'))
-    still_open = []
-    for entry in debits:
-        if entry.invoice_id:
-            still_open.append((entry.invoice, min(entry.amount, entry.running - paid)))
-    return still_open
+    """The invoices still partly open by their allocations (G49), oldest first: ``[(invoice, open amount)]``."""
+    return [(entry.invoice, entry.open) for entry in open_debits(customer).filter(invoice__isnull=False)]
 
 
 def _open_orders(customer, leave_out=None):

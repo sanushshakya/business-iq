@@ -162,7 +162,10 @@ class BackfillTests(CreditBase):
         returned = record_return(order, self.staff, [
             {'line': self.line(order, self.rice).pk, 'reason': 'not_wanted', 'quantity': 1}])
         note = issue_credit_note(create_credit_note(returned, self.staff), self.staff)
-        LedgerEntry.objects.all()._raw_delete('default')  # as before G47
+        from wholesale.models import Allocation
+
+        Allocation.objects.all()._raw_delete('default')  # as before G47 (and G49)
+        LedgerEntry.objects.all()._raw_delete('default')
         self.migration.backfill(apps, None)
         self.migration.backfill(apps, None)  # twice: no duplicates
         self.assertEqual(sorted(LedgerEntry.objects.values_list('kind', 'amount', 'entry_date', 'description')),

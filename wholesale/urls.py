@@ -12,6 +12,8 @@ router.register(r'invoices', views.InvoiceViewSet, basename='invoice')
 router.register(r'runs', views.DeliveryRunViewSet, basename='deliveryrun')
 router.register(r'returns', views.CustomerReturnViewSet, basename='customerreturn')
 router.register(r'credit-notes', views.CreditNoteViewSet, basename='creditnote')
+router.register(r'payments', views.PaymentViewSet, basename='payment')
+router.register(r'allocations', views.AllocationViewSet, basename='allocation')
 
 urlpatterns = [
     path('prices/resolve/', views.PriceResolveView.as_view(), name='price-resolve'),

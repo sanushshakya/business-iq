@@ -153,8 +153,41 @@ class AllocationTests(PaymentCase):
             late = credit.status(self.customer)['overdue']
         self.assertEqual([(row['number'], row['open']) for row in late], [('INV-000001', '12.24')])
 
+    def test_a_credit_adjustment_pays_the_oldest_and_clears_overdue(self):
+        post_adjustment(self.customer, D('-12.24'), 'Fake goodwill', self.staff)
+        self.assertEqual(self.open_amounts(), {'INV-000002': D('8.24')})
+        with mock.patch.object(credit, 'uk_date', return_value=self.today + timedelta(days=40)):
+            self.assertEqual([row['number'] for row in credit.status(self.customer)['overdue']], ['INV-000002'])
+        self.assert_balance('8.24')
+
+    def test_a_mistake_and_its_correction_leave_the_invoices_to_payments(self):
+        post_adjustment(self.customer, D('500.00'), 'Fake: keyed wrongly', self.staff)
+        post_adjustment(self.customer, D('-500.00'), 'Fake: correction', self.staff)
+        self.pay('20.48')
+        self.assertEqual(self.open_amounts(), {})
+        self.assertEqual(list(on_account(self.customer)), [])
+        self.assert_balance('0.00')
+
+    def test_the_customer_is_locked_before_anything_is_allocated(self):
+        order = []
+        real_lock, real_create = payments._lock, Allocation.objects.bulk_create
+
+        def lock(customer):
+            order.append('lock')
+            return real_lock(customer)
+
+        def create(rows, *args, **kwargs):
+            order.append('allocate')
+            return real_create(rows, *args, **kwargs)
+
+        with mock.patch.object(payments, '_lock', side_effect=lock), \
+                mock.patch.object(Allocation.objects, 'bulk_create', side_effect=create):
+            self.pay('5.00')
+        self.assertEqual(order, ['lock', 'allocate'])
+
     def test_payment_rules_and_a_repeat(self):
         for fields in ({'amount': D('0')}, {'amount': D('1.005')}, {'amount': D('10000000.00')},
+                       {'received_on': self.today - timedelta(days=367)},
                        {'method': 'bitcoin'}, {'received_on': self.today + timedelta(days=1)},
                        {'reference': 'x' * 61}):
             body = {'amount': D('1.00'), 'method': 'cash', 'received_on': self.today, **fields}
@@ -179,7 +212,21 @@ class AllocationTests(PaymentCase):
         allocation.amount = D('1.00')
         with self.assertRaises(ValidationError):
             allocation.save()
+        release(allocation, self.staff)
+        allocation.refresh_from_db()
+        allocation.released_at = None  # never active again: it would skip the caps
+        with self.assertRaises(ValidationError):
+            allocation.save(update_fields=['released_at'])
+        reverse_payment(payment, self.staff, 'Fake')
+        payment.refresh_from_db()
+        payment.reversed_at = None
+        with self.assertRaises(ValidationError):
+            payment.save(update_fields=['reversed_at'])
+        upsert = Allocation(credit_id=allocation.credit_id, debit_id=allocation.debit_id, amount=D('1.00'))
+        upsert.pk = allocation.pk
         for attempt in (allocation.delete, lambda: Allocation.objects.filter(pk=allocation.pk).delete(),
+                        lambda: Allocation.objects.bulk_create([upsert], update_conflicts=True, unique_fields=['id'],
+                                                               update_fields=['amount']),
                         lambda: Allocation.objects.filter(pk=allocation.pk).update(amount=D('1.00')),
                         payment.delete, lambda: Payment.objects.filter(pk=payment.pk).update(amount=D('1.00'))):
             with self.assertRaises(ValidationError), transaction.atomic():
@@ -206,5 +253,19 @@ class BackfillTests(PaymentCase):
         self.migration.allocate(apps, None)
         self.assertEqual(list(Allocation.objects.values_list('credit__credit_note', 'debit__invoice', 'amount')),
                          [(note.pk, self.first.pk, D('2.00'))])
+        self.migration.unallocate(apps, None)
+        self.assertFalse(Allocation.objects.exists())
+
+
+class AdjustmentBackfillTests(PaymentCase):
+    migration = importlib.import_module('wholesale.migrations.0016_allocate_credit_adjustments')
+
+    def test_earlier_credit_adjustments_pay_the_oldest_once_and_back(self):
+        entry = post_adjustment(self.customer, D('-15.00'), 'Fake goodwill', self.staff)
+        Allocation.objects.all()._raw_delete('default')  # as before G49
+        self.migration.allocate(apps, None)
+        self.migration.allocate(apps, None)
+        self.assertEqual(list(Allocation.objects.filter(credit=entry).values_list('debit__invoice', 'amount')),
+                         [(self.first.pk, D('12.24')), (self.second.pk, D('2.76'))])
         self.migration.unallocate(apps, None)
         self.assertFalse(Allocation.objects.exists())

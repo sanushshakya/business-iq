@@ -851,6 +851,21 @@ class FrozenRowQuerySet(models.QuerySet):
     def bulk_update(self, objs, fields, *args, **kwargs):
         raise ValidationError('Change these one at a time.')
 
+    def bulk_create(self, objs, *args, update_conflicts=False, **kwargs):
+        if update_conflicts:  # an upsert would rewrite the row it collides with
+            raise ValidationError('These are never rewritten.')
+        return super().bulk_create(objs, *args, **kwargs)
+
+
+def _only_once(instance, field, update_fields, allowed, message):
+    """An existing row may only have ``allowed`` fields set, once: stored ``field`` empty, the new one set."""
+    if instance._state.adding:
+        return
+    stored = type(instance).objects.filter(pk=instance.pk).values_list(field, flat=True).first()
+    if not (update_fields and set(update_fields) <= allowed and stored is None
+            and getattr(instance, field) is not None):
+        raise ValidationError(message)
+
 
 class LedgerEntry(models.Model):
     """
@@ -995,8 +1010,8 @@ class Payment(models.Model):
         return f'Payment #{self.pk}'
 
     def save(self, *args, update_fields=None, **kwargs):
-        if not self._state.adding and not (update_fields and set(update_fields) <= self.REVERSAL_FIELDS):
-            raise ValidationError('A payment is never changed; reverse it.')
+        _only_once(self, 'reversed_at', update_fields, self.REVERSAL_FIELDS,
+                   'A payment is never changed; reverse it (once).')
         super().save(*args, update_fields=update_fields, **kwargs)
 
     def delete(self, *args, **kwargs):
@@ -1033,8 +1048,8 @@ class Allocation(models.Model):
         return f'Allocation #{self.pk}'
 
     def save(self, *args, update_fields=None, **kwargs):
-        if not self._state.adding and not (update_fields and set(update_fields) <= self.RELEASE_FIELDS):
-            raise ValidationError('An allocation is never changed; release it.')
+        _only_once(self, 'released_at', update_fields, self.RELEASE_FIELDS,
+                   'An allocation is never changed; release it (once).')
         super().save(*args, update_fields=update_fields, **kwargs)
 
     def delete(self, *args, **kwargs):

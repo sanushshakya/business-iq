@@ -78,7 +78,8 @@ class PaymentApiTests(PaymentCase):
 
     def test_bad_input_and_a_retry(self):
         for fields in ({'amount': '0'}, {'amount': '1.001'}, {'method': 'bitcoin'}, {'allocate': 'manual'},
-                       {'received_on': '2999-01-01'}):
+                       {'received_on': '2999-01-01'},
+                       {'allocate': 'none', 'allocations': [{'debit': 1, 'amount': '1.00'}]}):
             with self.subTest(fields=fields):
                 self.assertEqual(self.record(**fields).status_code, 400)
         body = {'client_ref': '1f0e9a0c-7f4b-4a77-9d0e-9e5d2b7a3c11', 'amount': '2.00'}

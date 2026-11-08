@@ -6,6 +6,7 @@ check, statements and aged debtors read that). Every change locks the customer r
 over-allocate. Staff only.
 """
 
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.db import IntegrityError, transaction
@@ -138,7 +139,7 @@ def allocate(credit, user, targets='oldest'):
 def release(allocation, user):
     _staff(user)
     customer = _lock(allocation.debit.customer)
-    allocation = Allocation.objects.select_for_update().get(pk=allocation.pk, debit__customer=customer)
+    allocation = Allocation.objects.select_for_update(of=('self',)).get(pk=allocation.pk, debit__customer=customer)
     if allocation.released_at is not None:
         raise PaymentError('This allocation is already released.')
     if allocation.credit.kind == LedgerEntry.PAYMENT and allocation.credit.payment.reversed_at is not None:
@@ -169,6 +170,8 @@ def record_payment(customer, user, *, amount, method, received_on, reference='',
         raise PaymentError(f'The method is one of {", ".join(sorted(METHODS))}.')
     if received_on > uk_date():
         raise PaymentError('A payment is not received in the future.')
+    if received_on < uk_date() - timedelta(days=366):  # a mistyped year would rewrite every statement's opening
+        raise PaymentError('A payment received more than a year ago is not recorded here.')
     reference, note = (reference or '').strip(), (note or '').strip()
     if len(reference) > 60 or len(note) > 255:
         raise PaymentError('The reference is at most 60 characters and the note 255.')

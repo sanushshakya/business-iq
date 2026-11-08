@@ -1045,6 +1045,8 @@ class _Allocating(serializers.Serializer):
     def validate(self, data):
         if data['allocate'] == 'manual' and not data.get('allocations'):
             raise serializers.ValidationError({'allocations': 'Say which invoices it pays.'})
+        if data['allocate'] != 'manual' and data.get('allocations'):
+            raise serializers.ValidationError({'allocations': 'Only with allocate: manual.'})
         return data
 
     def targets(self):

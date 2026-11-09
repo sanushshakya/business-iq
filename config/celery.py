@@ -51,6 +51,15 @@ app.conf.beat_schedule = {
         'task': 'sync.tasks.reconcile_storefront_stock',
         'schedule': crontab(hour=0, minute=30),
     },
+    # G51: last month's statements on the 1st (UK dates; 07:00 UTC is 07:00 or 08:00 UK), reminders every morning.
+    'send-monthly-statements': {
+        'task': 'wholesale.statements.run_monthly_statements',
+        'schedule': crontab(day_of_month=1, hour=7, minute=0),
+    },
+    'send-payment-reminders-daily': {
+        'task': 'wholesale.reminders.run_reminders',
+        'schedule': crontab(hour=8, minute=0),
+    },
     'deliver-storefront-events-every-30-seconds': {
         'task': 'sync.tasks.deliver_outbound_events',
         'schedule': 30.0,

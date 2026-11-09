@@ -78,6 +78,7 @@ INSTALLED_APPS = [
     "demand_calendar",
     "sales",
     "vat",
+    "accounting",
     "wholesale",
 ]
 

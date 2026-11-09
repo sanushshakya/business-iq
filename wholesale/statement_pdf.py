@@ -9,6 +9,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from .aged_debtors import due_date
 from .invoice_pdf import _lines_html
 
 AGEING = [('current', 'Current'), ('days_1_30', '1-30 days'), ('days_31_60', '31-60 days'),
@@ -56,9 +57,8 @@ def build_statement_pdf(data):
     if data['open_items']:
         rows = [['Date', 'Document', 'Due', 'Amount', 'Open']]
         for entry, still in data['open_items']:
-            due = entry.invoice.due_date if entry.invoice_id else entry.entry_date
             rows.append([f'{entry.entry_date:%d/%m/%Y}', Paragraph(escape(entry.description), small),
-                         f'{due:%d/%m/%Y}', f'{entry.amount}', f'{still}'])
+                         f'{due_date(entry):%d/%m/%Y}', f'{entry.amount}', f'{still}'])
         story += [_table(rows, [22, 88, 22, 25, 25], right_from=3)]
     else:
         story.append(Paragraph('Nothing.', small))

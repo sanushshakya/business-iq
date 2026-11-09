@@ -14,7 +14,7 @@ from vat.services import uk_date
 
 from . import ledger
 from .aged_debtors import COLUMNS, ZERO, open_items, report
-from .customer_emails import deliver_customer_email, queue_after_commit  # noqa: F401 - the task, for patching
+from .customer_emails import deliver_customer_email, logger, queue_after_commit  # noqa: F401 - the task, for patching
 from .models import CustomerEmail, LedgerEntry, TradeCustomer
 
 
@@ -56,16 +56,19 @@ def _has_something_to_say(customer, start, end):
 
 @shared_task
 def run_monthly_statements(today=None):
-    """On the 1st (beat): last month's statement for every customer not closed that takes them by email and had
+    """On the 1st to the 6th (beat; a run missed on the 1st is caught up, each goes once): last month's statement for every customer not closed that takes them by email and had
     activity or a balance."""
     start, end = previous_month(today or uk_date())
     customers = (TradeCustomer.objects.exclude(status=TradeCustomer.CLOSED).filter(statements_by_email=True)
                  .select_related('company').order_by('company_id', 'account_code'))
     sent = 0
     for customer in customers:
-        if _has_something_to_say(customer, start, end):
-            with transaction.atomic():
-                sent += send_statement(customer, start, end) is not None
+        try:  # one customer's problem never stops the others
+            if _has_something_to_say(customer, start, end):
+                with transaction.atomic():
+                    sent += send_statement(customer, start, end) is not None
+        except Exception:  # noqa: BLE001
+            logger.exception('Monthly statement failed for customer %s', customer.pk)
     return sent
 
 

@@ -1080,7 +1080,7 @@ class AllocationViewSet(TenantScopedMixin, mixins.RetrieveModelMixin, viewsets.G
 @extend_schema_view(list=extend_schema(parameters=[
     OpenApiParameter('customer', int, description='Only this customer.'),
     OpenApiParameter('kind', str, enum=['statement', 'reminder']),
-    OpenApiParameter('status', str, enum=['queued', 'sent', 'failed', 'no_address']),
+    OpenApiParameter('status', str, enum=['queued', 'sending', 'sent', 'failed', 'no_address']),
 ]))
 class CustomerEmailViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin,
                            viewsets.GenericViewSet):

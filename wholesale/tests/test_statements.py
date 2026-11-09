@@ -10,7 +10,8 @@ from django.db import IntegrityError, transaction
 from vat.services import UK
 from wholesale import statements
 from wholesale.aged_debtors import open_items
-from wholesale.models import CustomerEmail, TradeCustomer
+from wholesale.customer_emails import sweep_customer_emails
+from wholesale.models import CustomerEmail, LedgerEntry, TradeCustomer
 from wholesale.statement_pdf import build_statement_pdf
 from wholesale.statements import (
     month_of,
@@ -135,3 +136,79 @@ class StatementTests(StatementCase):
         with mock.patch('django.utils.timezone.now', return_value=moment):
             self.assertEqual(statements.uk_date(), moment.astimezone(UK).date())
         self.assertEqual(previous_month(moment.astimezone(UK).date()), (date(2026, 10, 1), date(2026, 10, 31)))
+
+
+class DeliveryTests(StatementCase):
+    def test_a_broker_failure_stays_queued_and_the_sweep_sends_it(self):
+        self.send.stop()
+        with mock.patch.object(statements.deliver_customer_email, 'apply_async', side_effect=OSError('Fake broker')), \
+                self.assertLogs('wholesale.statements', 'WARNING'), self.captureOnCommitCallbacks(execute=True):
+            run_monthly_statements(self.run_day)
+        self.send.start()
+        email = CustomerEmail.objects.get()
+        self.assertEqual(email.status, 'queued')
+        sweep_customer_emails()  # too new: its own task may still be on the way
+        self.assertEqual(mail.outbox, [])
+        with mock.patch('django.utils.timezone.now', return_value=email.created_at + timedelta(minutes=11)):
+            sweep_customer_emails()
+        email.refresh_from_db()
+        self.assertEqual((email.status, len(mail.outbox)), ('sent', 1))
+
+    def test_the_sweep_gives_up_and_never_resends_an_interrupted_send(self):
+        with self.captureOnCommitCallbacks(execute=False):
+            old = send_statement(self.customer, self.start, self.end, user=self.staff)
+            sending = send_statement(self.customer, self.start, self.end, user=self.staff)
+        CustomerEmail.objects.filter(pk=sending.pk).update(status='sending')
+        with mock.patch('django.utils.timezone.now', return_value=old.created_at + timedelta(days=3, minutes=1)):
+            sweep_customer_emails()
+        self.assertEqual(sorted(CustomerEmail.objects.values_list('status', 'error')),
+                         [('failed', 'Interrupted'), ('failed', 'NotSent')])
+        self.assertEqual(mail.outbox, [])
+
+    def test_one_customers_problem_does_not_stop_the_run(self):
+        other = TradeCustomer.objects.create(company=self.company, account_code='Z-9', legal_name='Fake Other Ltd',
+                                             invoice_email='other@example.test')
+        LedgerEntry.objects.create(customer=other, kind='adjustment', entry_date=self.today, amount=D('1.00'),
+                                   description='Debit adjustment', reason='Fake', created_by=self.staff)
+        real = statements.send_statement
+
+        def flaky(customer, *args, **kwargs):
+            if customer.pk == self.customer.pk:
+                raise RuntimeError('Fake')
+            return real(customer, *args, **kwargs)
+
+        with mock.patch.object(statements, 'send_statement', side_effect=flaky), \
+                self.assertLogs('wholesale.statements', 'ERROR') as logs:
+            self.run_statements()
+        self.assertEqual([message.to for message in mail.outbox], [['other@example.test']])
+        self.assertNotIn('example.test', ''.join(logs.output))
+
+    def test_statements_catch_up_on_the_first_six_days(self):
+        from config.celery import app
+
+        self.assertEqual(app.conf.beat_schedule['send-monthly-statements']['schedule'].day_of_month,
+                         set(range(1, 7)))
+        self.run_statements(self.run_day + timedelta(days=3))  # beat was down on the 1st
+        self.run_statements(self.run_day + timedelta(days=4))
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_a_second_delivery_of_the_same_email_sends_nothing(self):
+        with self.captureOnCommitCallbacks(execute=False) as callbacks:
+            email = send_statement(self.customer, self.start, self.end, user=self.staff)
+        self.assertEqual(len(callbacks), 1)
+        statements.deliver_customer_email(email.pk)
+        statements.deliver_customer_email(email.pk)  # a redelivered task
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_a_claimed_email_is_not_sent_again(self):
+        with self.captureOnCommitCallbacks(execute=False):
+            email = send_statement(self.customer, self.start, self.end, user=self.staff)
+        CustomerEmail.objects.filter(pk=email.pk).update(status='sending')  # another worker has it
+        statements.deliver_customer_email(email.pk)
+        self.assertEqual(mail.outbox, [])
+
+    def test_names_are_escaped_in_the_pdf(self):
+        TradeCustomer.objects.filter(pk=self.customer.pk).update(legal_name='Fake <b>Bold</b> & Co')
+        self.customer.refresh_from_db()
+        text = pdf_text(build_statement_pdf(statement_data(self.customer, self.start, self.end)))
+        self.assertIn('Fake<b>Bold</b>&Co', text.replace(' ', ''))  # shown as typed, not read as markup

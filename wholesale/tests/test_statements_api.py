@@ -85,5 +85,5 @@ class StatementApiTests(StatementCase):
         import wholesale.tasks  # noqa: F401 - what the worker's autodiscovery imports
 
         schedule = app.conf.beat_schedule
-        for name in ('send-monthly-statements', 'send-payment-reminders-daily'):
+        for name in ('send-monthly-statements', 'send-payment-reminders-daily', 'sweep-customer-emails-every-15-minutes'):
             self.assertIn(schedule[name]['task'], app.tasks)

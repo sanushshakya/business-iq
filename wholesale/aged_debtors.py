@@ -65,12 +65,15 @@ def _entries(company_id, as_at, customer_id=None):
     entries = LedgerEntry.objects.filter(customer__company_id=company_id, entry_date__lte=as_at)
     if customer_id is not None:
         entries = entries.filter(customer_id=customer_id)
-    for entry in entries.select_related('invoice').order_by('entry_date', 'id'):
+    entries = entries.select_related('invoice').only(
+        'id', 'customer_id', 'kind', 'amount', 'entry_date', 'description', 'invoice__id', 'invoice__due_date',
+        'invoice__number')
+    for entry in entries.order_by('entry_date', 'id'):
         sign = 1 if entry.amount > 0 else -1
         yield entry, entry.amount - sign * taken[entry.pk]
 
 
-def _due(entry):
+def due_date(entry):
     return entry.invoice.due_date if entry.invoice_id and entry.invoice.due_date else entry.entry_date
 
 
@@ -89,7 +92,7 @@ def report(company_id, as_at, customer=None):
         row = rows[entry.customer_id]
         if entry.amount > 0:
             if still:
-                row[_bucket((as_at - _due(entry)).days)] += still
+                row[_bucket((as_at - due_date(entry)).days)] += still
         else:
             row['on_account'] += still
         row['total'] += entry.amount

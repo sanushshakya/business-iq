@@ -1075,8 +1075,9 @@ class CustomerEmail(models.Model):
 
     STATEMENT, REMINDER = 'statement', 'reminder'
     KINDS = [(STATEMENT, 'Statement'), (REMINDER, 'Reminder')]
-    QUEUED, SENT, FAILED, NO_ADDRESS = 'queued', 'sent', 'failed', 'no_address'
-    STATUSES = [(QUEUED, 'Queued'), (SENT, 'Sent'), (FAILED, 'Failed'), (NO_ADDRESS, 'No address')]
+    QUEUED, SENDING, SENT, FAILED, NO_ADDRESS = 'queued', 'sending', 'sent', 'failed', 'no_address'
+    STATUSES = [(QUEUED, 'Queued'), (SENDING, 'Sending'), (SENT, 'Sent'), (FAILED, 'Failed'),
+                (NO_ADDRESS, 'No address')]
 
     customer = models.ForeignKey(TradeCustomer, on_delete=models.PROTECT, related_name='emails')
     kind = models.CharField(max_length=10, choices=KINDS)

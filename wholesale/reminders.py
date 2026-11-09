@@ -11,7 +11,7 @@ from django.db import IntegrityError, transaction
 
 from vat.services import uk_date
 
-from .customer_emails import queue_after_commit
+from .customer_emails import logger, queue_after_commit
 from .models import CustomerEmail, LedgerEntry, ReminderItem, TradeCustomer
 from .payments import open_debits
 
@@ -84,8 +84,11 @@ def run_reminders(today=None):
                  .order_by('company_id', 'account_code'))
     sent = 0
     for customer in customers:
-        with transaction.atomic():
-            sent += remind(customer, today) is not None
+        try:  # one customer's problem never stops the others
+            with transaction.atomic():
+                sent += remind(customer, today) is not None
+        except Exception:  # noqa: BLE001
+            logger.exception('Reminders failed for customer %s', customer.pk)
     return sent
 
 

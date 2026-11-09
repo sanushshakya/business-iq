@@ -23,11 +23,15 @@ from inventory.views import CompanyMemberReadsStaffWrites, Conflict
 from tenants.roles import DRIVER, STOCK
 from vat.services import uk_date
 
-from . import aged_debtors, credit, credit_notes, invoices, ledger, orders, payments, picking, returns, runs
+from . import (
+    aged_debtors, credit, credit_notes, invoices, ledger, orders, payments, picking, returns, runs, statements,
+)
 from .manifest_pdf import build_manifest_pdf
 from .invoice_pdf import build_credit_note_pdf, build_invoice_pdf
+from .statement_pdf import build_statement_pdf
 from .pick_list import build_pick_list
 from .models import (
+    CustomerEmail,
     CreditNote,
     CustomerGroup,
     CustomerReturn,
@@ -46,6 +50,8 @@ from .models import (
 )
 from .pricing import resolve_prices
 from .serializers import (
+    CustomerEmailSerializer,
+    SendStatementSerializer,
     AgedDebtorsSerializer,
     CancelOrderSerializer,
     CreditNoteSerializer,
@@ -150,6 +156,32 @@ class TradeCustomerViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retr
         if download == 'csv':
             return _aged_debtors_csv(data)
         return Response(AgedDebtorsSerializer(data).data)
+
+    @extend_schema(parameters=[OpenApiParameter('month', OpenApiTypes.STR, description='YYYY-MM; default this '
+                                                'month (so far).')],
+                   responses={(200, 'application/pdf'): OpenApiTypes.BINARY})
+    @action(detail=True, methods=['get'])
+    def statement(self, request, pk=None):
+        """The statement PDF for a month (G51): its entries with the balance, and what was still open at its end
+        (to today for this month) with the ageing."""
+        customer = self._own_customer()
+        start, end = _month_param(request.query_params.get('month'))
+        data = statements.statement_data(customer, start, end)
+        response = HttpResponse(build_statement_pdf(data), content_type='application/pdf')
+        response['Content-Disposition'] = (f'inline; filename="statement-{customer.account_code}-'
+                                           f'{start:%Y-%m}.pdf"')
+        return response
+
+    @extend_schema(request=SendStatementSerializer, responses={202: CustomerEmailSerializer})
+    @action(detail=True, methods=['post'], url_path='statement/send', url_name='send-statement')
+    def send_statement(self, request, pk=None):
+        """Email a month's statement now (staff; logged as sent by you, any number of times)."""
+        customer = self._own_customer()
+        body = SendStatementSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        start, end = _month_param(body.validated_data['month'])
+        email = statements.send_statement(customer, start, end, user=request.user)
+        return Response(CustomerEmailSerializer(email).data, status=202)
 
     @extend_schema(responses=OpenItemsSerializer)
     @action(detail=True, methods=['get'], url_path='open-items', url_name='open-items')
@@ -395,6 +427,22 @@ def _aged_debtors_csv(data):
                         + [f'{row[name]:.2f}' for name in aged_debtors.COLUMNS])
     writer.writerow(['Total', ''] + [f'{data["totals"][name]:.2f}' for name in aged_debtors.COLUMNS])
     return answer
+
+
+def _month_param(raw):
+    """``(first day, last day)`` of a ``YYYY-MM`` month (default this one), the last day at most today."""
+    today = uk_date()
+    if raw is None:
+        return today.replace(day=1), today
+    try:
+        if len(raw) != 7:
+            raise ValueError(raw)
+        start = date.fromisoformat(f'{raw}-01')
+    except ValueError:
+        raise ValidationError({'month': 'A month as YYYY-MM.'}) from None
+    if start > today:
+        raise ValidationError({'month': 'This month or an earlier one.'})
+    return start, min(statements.month_of(start)[1], today)
 
 
 def _date_param(params, name):
@@ -1027,3 +1075,35 @@ class AllocationViewSet(TenantScopedMixin, mixins.RetrieveModelMixin, viewsets.G
         except payments.PaymentError as error:
             raise ValidationError({'detail': error.detail}) from None
         return Response(self.get_serializer(self.get_queryset().get(pk=allocation.pk)).data)
+
+
+@extend_schema_view(list=extend_schema(parameters=[
+    OpenApiParameter('customer', int, description='Only this customer.'),
+    OpenApiParameter('kind', str, enum=['statement', 'reminder']),
+    OpenApiParameter('status', str, enum=['queued', 'sending', 'sent', 'failed', 'no_address']),
+]))
+class CustomerEmailViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin,
+                           viewsets.GenericViewSet):
+    """The log of statements and reminders emailed to trade customers (G51), newest first. Read only."""
+
+    queryset = CustomerEmail.objects.select_related('customer').prefetch_related('reminder_items__invoice')
+    serializer_class = CustomerEmailSerializer
+    permission_classes = [CompanyMemberReadsStaffWrites]
+    KINDS = {value for value, _label in CustomerEmail.KINDS}
+    STATUSES = {value for value, _label in CustomerEmail.STATUSES}
+
+    def get_queryset(self):
+        # The user's own company only, superusers included (as payments and the ledger).
+        queryset = super().get_queryset().filter(customer__company_id=self.request.user.company_id)
+        params = self.request.query_params
+        if params.get('customer'):
+            try:
+                queryset = queryset.filter(customer_id=int(params['customer']))
+            except ValueError:
+                raise ValidationError({'customer': 'A customer id.'}) from None
+        for name, allowed in (('kind', self.KINDS), ('status', self.STATUSES)):
+            if params.get(name):
+                if params[name] not in allowed:
+                    raise ValidationError({name: f'One of {", ".join(sorted(allowed))}.'})
+                queryset = queryset.filter(**{name: params[name]})
+        return queryset

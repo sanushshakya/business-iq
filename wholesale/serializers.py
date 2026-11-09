@@ -9,6 +9,8 @@ from common.tenancy import TenantModelSerializer
 from inventory.models import Location, Product
 
 from .models import (
+    CustomerEmail,
+    ReminderItem,
     WEEKDAYS,
     CreditNote,
     CreditNoteLine,
@@ -90,7 +92,8 @@ class TradeCustomerSerializer(TenantModelSerializer):
         model = TradeCustomer
         fields = [
             'id', 'account_code', 'legal_name', 'trading_name', 'vat_number', 'status', 'hold_reason',
-            'delivery_days', 'note', 'group', 'invoice_email', 'payment_terms_days', 'credit_limit', 'addresses',
+            'delivery_days', 'note', 'group', 'invoice_email', 'payment_terms_days', 'credit_limit',
+            'statements_by_email', 'reminders_by_email', 'addresses',
             'contacts', 'balance', 'created_at',
             'updated_at',
         ]
@@ -993,6 +996,34 @@ class AgedDebtorsSerializer(serializers.Serializer):
     as_at = serializers.DateField()
     customers = AgedDebtorRowSerializer(many=True, help_text='Customers owing or owed something, by account code.')
     totals = AgedDebtorTotalsSerializer()
+
+
+class ReminderItemSerializer(serializers.ModelSerializer):
+    number = serializers.CharField(source='invoice.number_display', read_only=True)
+
+    class Meta:
+        model = ReminderItem
+        fields = ['invoice', 'number', 'stage', 'open_amount']
+        read_only_fields = fields
+
+
+class CustomerEmailSerializer(serializers.ModelSerializer):
+    automatic = serializers.SerializerMethodField(help_text='Sent by the schedule (not by hand).')
+    items = ReminderItemSerializer(source='reminder_items', many=True, read_only=True,
+                                   help_text="A reminder's invoices and stages.")
+
+    class Meta:
+        model = CustomerEmail
+        fields = ['id', 'customer', 'kind', 'period_start', 'period_end', 'to', 'status', 'error', 'automatic',
+                  'created_by', 'created_at', 'sent_at', 'items']
+        read_only_fields = fields
+
+    def get_automatic(self, email) -> bool:
+        return email.created_by_id is None
+
+
+class SendStatementSerializer(serializers.Serializer):
+    month = serializers.CharField(help_text='YYYY-MM; this month or an earlier one.')
 
 
 class AdjustmentSerializer(serializers.Serializer):

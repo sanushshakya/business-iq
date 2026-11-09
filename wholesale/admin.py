@@ -6,6 +6,8 @@ from common.tenancy import TenantAdminMixin
 from inventory.admin import ViewOnlyAdmin
 
 from .models import (
+    CustomerEmail,
+    ReminderItem,
     CreditNote,
     CreditNoteLine,
     CreditOverride,
@@ -333,3 +335,8 @@ class CreditOverrideAdmin(TenantAdminMixin, ViewOnlyAdmin):
 @admin.register(Payment, Allocation)
 class PaymentsAdmin(TenantAdminMixin, ViewOnlyAdmin):
     """View only: payments are reversed and allocations released through the API (G49), never edited."""
+
+
+@admin.register(CustomerEmail, ReminderItem)
+class CustomerEmailAdmin(TenantAdminMixin, ViewOnlyAdmin):
+    """View only: the log of statements and reminders (G51), written by the schedule and the API."""

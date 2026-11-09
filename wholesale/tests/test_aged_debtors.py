@@ -15,9 +15,12 @@ from common.tests.factories import CompanyFactory, UserFactory
 from tenants.roles import STOCK
 from vat.services import UK
 from wholesale.aged_debtors import report
-from wholesale.ledger import balance
+from wholesale.credit_notes import create_credit_note, issue_credit_note
+from wholesale.ledger import balance, post_adjustment
 from wholesale.models import LedgerEntry, TradeCustomer
 from wholesale.payments import allocate, release, reverse_payment
+from wholesale.returns import record_return
+from wholesale.runs import complete_run, deliver, start_run
 from wholesale.tests.test_payments import PaymentCase
 
 D = Decimal
@@ -29,7 +32,7 @@ def on_day(day):
     return mock.patch('django.utils.timezone.now', return_value=datetime.combine(day, time(12), tzinfo=UK))
 
 
-class AgedDebtorsTests(PaymentCase):
+class AgedDebtorsBase(PaymentCase):
     """``first`` (12.24) and ``second`` (8.24) are issued today, due ``today + terms``."""
 
     def setUp(self):
@@ -58,6 +61,9 @@ class AgedDebtorsTests(PaymentCase):
         for name in BUCKETS + ('on_account', 'total'):
             self.assertEqual(result['totals'][name], sum((row[name] for row in result['customers']), D('0.00')))
 
+
+
+class AgedDebtorsTests(AgedDebtorsBase):
     def test_buckets_by_days_past_due(self):
         for days, expected in ((0, 0), (1, 1), (30, 1), (31, 2), (60, 2), (61, 3), (90, 3), (91, 4), (400, 4)):
             with self.subTest(days=days):
@@ -144,7 +150,26 @@ class AgedDebtorsTests(PaymentCase):
         self.assertEqual(report(self.company.pk, self.today)['totals']['total'], D('20.48'))
 
 
-class AgedDebtorsApiTests(AgedDebtorsTests):
+    def test_a_credit_note_on_a_paid_invoice_is_on_account(self):
+        self.pay('8.24', allocate=[{'debit': self.entry(self.second).pk, 'amount': D('8.24')}])
+        order = self.second.order
+        run = self.plan(order)
+        start_run(run, self.staff)
+        deliver(run.stops.get(), self.driver, received_by='Fake Chef')
+        complete_run(run, self.staff)
+        returned = record_return(order, self.staff, [
+            {'line': self.line(order, self.rice).pk, 'reason': 'not_wanted', 'quantity': 1}])
+        issue_credit_note(create_credit_note(returned, self.staff), self.staff)  # 2.00
+        self.assertEqual(self.buckets(self.today), (D('12.24'), 0, 0, 0, 0, D('-2.00'), D('10.24')))
+        self.assert_total_is_balance(self.today)
+
+    def test_a_credit_adjustment_pays_the_oldest(self):
+        post_adjustment(self.customer, D('-15.00'), 'Fake goodwill', self.staff)
+        self.assertEqual(self.buckets(self.due + timedelta(days=1)), (0, D('5.48'), 0, 0, 0, D('0.00'), D('5.48')))
+        self.assert_total_is_balance(self.today)
+
+
+class AgedDebtorsApiTests(AgedDebtorsBase):
     def setUp(self):
         super().setUp()
         self.api = APIClient()
@@ -192,3 +217,8 @@ class AgedDebtorsApiTests(AgedDebtorsTests):
         stranger.force_authenticate(UserFactory(company=CompanyFactory(), is_staff=True, is_superuser=True))
         self.assertEqual(stranger.get(self.url).json()['customers'], [])
         self.assertEqual(APIClient().get(self.url).status_code, 401)
+
+    def test_a_user_with_no_company_is_refused_not_shown_an_empty_report(self):
+        nobody = APIClient()
+        nobody.force_authenticate(UserFactory(company=None, is_staff=True, is_superuser=True))
+        self.assertEqual(nobody.get(self.url).status_code, 403)

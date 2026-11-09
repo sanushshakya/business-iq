@@ -98,6 +98,10 @@ class TradeCustomer(models.Model):
     hold_reason = models.CharField(max_length=255, blank=True, help_text='Why they are on hold (shown on orders).')
     payment_terms_days = models.PositiveSmallIntegerField(default=30, validators=[MaxValueValidator(120)],
                                                           help_text='Days to pay an invoice (0-120).')
+    # G51: the monthly statement and payment reminders go by email unless switched off (invoices always go).
+    statements_by_email = models.BooleanField(default=True, help_text='Email a statement on the 1st of each month.')
+    reminders_by_email = models.BooleanField(default=True,
+                                             help_text='Email reminders 3 days before and 7 and 14 days after due.')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1060,3 +1064,61 @@ class Allocation(models.Model):
 @receiver(pre_delete, sender=Allocation)
 def _payment_history_is_kept(sender, instance, **kwargs):
     raise ValidationError('Payment history is kept.')
+
+
+class CustomerEmail(models.Model):
+    """
+    The log of statements and reminders emailed to a trade customer (G51). Created in the transaction that decides
+    to send (its unique constraints, and ``ReminderItem``'s, make sure nothing goes twice), sent after commit; only
+    the outcome fields change. The email's text is not kept.
+    """
+
+    STATEMENT, REMINDER = 'statement', 'reminder'
+    KINDS = [(STATEMENT, 'Statement'), (REMINDER, 'Reminder')]
+    QUEUED, SENT, FAILED, NO_ADDRESS = 'queued', 'sent', 'failed', 'no_address'
+    STATUSES = [(QUEUED, 'Queued'), (SENT, 'Sent'), (FAILED, 'Failed'), (NO_ADDRESS, 'No address')]
+
+    customer = models.ForeignKey(TradeCustomer, on_delete=models.PROTECT, related_name='emails')
+    kind = models.CharField(max_length=10, choices=KINDS)
+    period_start = models.DateField(null=True, blank=True, help_text="A statement's month.")
+    period_end = models.DateField(null=True, blank=True)
+    to = models.EmailField(blank=True)
+    status = models.CharField(max_length=10, choices=STATUSES, default=QUEUED)
+    error = models.CharField(max_length=60, blank=True, help_text='The kind of failure only (no message).')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                   related_name='+', help_text='Blank: sent by the schedule.')
+    created_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+        indexes = [models.Index(fields=['customer', 'kind'], name='customer_email_kind')]
+        constraints = [
+            models.UniqueConstraint(fields=['customer', 'period_start'], name='unique_automatic_statement',
+                                    condition=Q(kind='statement', created_by__isnull=True)),
+            models.CheckConstraint(condition=Q(kind='reminder') | Q(period_start__isnull=False,
+                                                                    period_end__isnull=False),
+                                   name='statement_has_period'),
+        ]
+
+    def __str__(self):
+        return f'{self.get_kind_display()} to {self.customer.account_code}'
+
+
+class ReminderItem(models.Model):
+    """One invoice at one stage in a reminder (G51): at most once per invoice and stage, ever."""
+
+    BEFORE_DUE, OVERDUE_7, OVERDUE_14 = 'before_due', 'overdue_7', 'overdue_14'
+    STAGES = [(BEFORE_DUE, 'Due in 3 days'), (OVERDUE_7, '7 days overdue'), (OVERDUE_14, '14 days overdue')]
+
+    email = models.ForeignKey(CustomerEmail, on_delete=models.PROTECT, related_name='reminder_items')
+    invoice = models.ForeignKey(Invoice, on_delete=models.PROTECT, related_name='reminders')
+    stage = models.CharField(max_length=10, choices=STAGES)
+    open_amount = models.DecimalField(max_digits=12, decimal_places=2, help_text='Still to pay when reminded.')
+
+    class Meta:
+        ordering = ['id']
+        constraints = [models.UniqueConstraint(fields=['invoice', 'stage'], name='unique_reminder_stage')]
+
+    def __str__(self):
+        return f'{self.invoice} {self.stage}'

@@ -41,14 +41,15 @@ def _uk_day(moment):
     return timezone.localtime(moment, UK).date()
 
 
-def _allocated(company_id, as_at):
+def _allocated(company_id, as_at, customer_id=None):
     """{entry id: what active allocations take from it as at ``as_at``}, on both sides."""
     taken = defaultdict(lambda: ZERO)
-    rows = (Allocation.objects.filter(debit__customer__company_id=company_id, debit__entry_date__lte=as_at,
-                                      credit__entry_date__lte=as_at)
-            .values_list('credit_id', 'debit_id', 'amount', 'created_at', 'released_at', 'credit__entry_date',
-                         'debit__entry_date'))
-    for credit_id, debit_id, amount, created_at, released_at, credit_date, debit_date in rows:
+    rows = Allocation.objects.filter(debit__customer__company_id=company_id, debit__entry_date__lte=as_at,
+                                     credit__entry_date__lte=as_at)
+    if customer_id is not None:
+        rows = rows.filter(debit__customer_id=customer_id)
+    for credit_id, debit_id, amount, created_at, released_at, credit_date, debit_date in rows.values_list(
+            'credit_id', 'debit_id', 'amount', 'created_at', 'released_at', 'credit__entry_date', 'debit__entry_date'):
         if max(credit_date, debit_date, _uk_day(created_at)) > as_at:
             continue
         if released_at is not None and _uk_day(released_at) <= as_at:
@@ -58,22 +59,40 @@ def _allocated(company_id, as_at):
     return taken
 
 
-def report(company_id, as_at):
+def _entries(company_id, as_at, customer_id=None):
+    """Every entry dated on or before ``as_at`` with what was still open of it then (a credit's: negative)."""
+    taken = _allocated(company_id, as_at, customer_id)
+    entries = LedgerEntry.objects.filter(customer__company_id=company_id, entry_date__lte=as_at)
+    if customer_id is not None:
+        entries = entries.filter(customer_id=customer_id)
+    for entry in entries.select_related('invoice').order_by('entry_date', 'id'):
+        sign = 1 if entry.amount > 0 else -1
+        yield entry, entry.amount - sign * taken[entry.pk]
+
+
+def _due(entry):
+    return entry.invoice.due_date if entry.invoice_id and entry.invoice.due_date else entry.entry_date
+
+
+def open_items(customer, as_at):
+    """``[(entry, open)]``: the customer's invoices and charges still (partly) open at the end of ``as_at``, oldest
+    first, as the statement lists them."""
+    return [(entry, still) for entry, still in _entries(customer.company_id, as_at, customer.pk)
+            if entry.amount > 0 and still > 0]
+
+
+def report(company_id, as_at, customer=None):
     """``{as_at, customers: [{customer, account_code, name, current…days_90_plus, on_account, total}], totals}``:
-    customers owing or owed something, by account code."""
-    taken = _allocated(company_id, as_at)
+    customers owing or owed something, by account code (only ``customer`` when given)."""
     rows = defaultdict(lambda: dict.fromkeys(COLUMNS, ZERO))
-    entries = (LedgerEntry.objects.filter(customer__company_id=company_id, entry_date__lte=as_at)
-               .values_list('id', 'customer_id', 'amount', 'entry_date', 'invoice__due_date'))
-    for entry_id, customer_id, amount, entry_date, due_date in entries:
-        row = rows[customer_id]
-        if amount > 0:
-            open_amount = amount - taken[entry_id]
-            if open_amount:
-                row[_bucket((as_at - (due_date or entry_date)).days)] += open_amount
+    for entry, still in _entries(company_id, as_at, customer.pk if customer is not None else None):
+        row = rows[entry.customer_id]
+        if entry.amount > 0:
+            if still:
+                row[_bucket((as_at - _due(entry)).days)] += still
         else:
-            row['on_account'] -= -amount - taken[entry_id]
-        row['total'] += amount
+            row['on_account'] += still
+        row['total'] += entry.amount
     names = {pk: (code, trading or legal) for pk, code, trading, legal in TradeCustomer.objects.filter(
         pk__in=list(rows)).values_list('pk', 'account_code', 'trading_name', 'legal_name')}
     customers = [

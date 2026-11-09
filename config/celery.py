@@ -64,6 +64,11 @@ app.conf.beat_schedule = {
         'task': 'wholesale.reminders.run_reminders',
         'schedule': crontab(hour=8, minute=0),
     },
+    # G53: yesterday's till takings, customer documents, waste and butchery loss into the journal (UK day).
+    'post-journals-nightly': {
+        'task': 'accounting.postings.run_nightly',
+        'schedule': crontab(hour=1, minute=30),
+    },
     'deliver-storefront-events-every-30-seconds': {
         'task': 'sync.tasks.deliver_outbound_events',
         'schedule': 30.0,

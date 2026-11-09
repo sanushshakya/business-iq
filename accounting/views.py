@@ -5,11 +5,18 @@ from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from common.tenancy import TenantScopedMixin
 from inventory.views import CompanyMemberReadsStaffWrites
 
+from datetime import timedelta
+
+from vat.services import uk_date
+
 from . import journal as posting
+from .postings import run_postings
+from .reports import trial_balance
 from .models import Account, Journal, JournalLine, Period
 from .serializers import (
     AccountSerializer,
@@ -18,9 +25,12 @@ from .serializers import (
     LockSerializer,
     LockStateSerializer,
     PeriodSerializer,
+    PostingRunRequestSerializer,
+    PostingRunSerializer,
     ReopenSerializer,
     ReverseSerializer,
     StrictDateField,
+    TrialBalanceSerializer,
 )
 
 
@@ -149,3 +159,35 @@ class PeriodViewSet(OwnCompanyMixin, mixins.ListModelMixin, viewsets.GenericView
         body.is_valid(raise_exception=True)
         return self._run(lambda: posting.reopen_period(request.user.company, body.validated_data['month'],
                                                        request.user, body.validated_data['reason']))
+
+
+class PostingRunView(APIView):
+    """Post a range of UK days now (G53, staff): till takings and voids, customer ledger documents, waste and
+    butchery loss. What was posted before is not posted again. The nightly run does yesterday by itself."""
+
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    @extend_schema(request=PostingRunRequestSerializer, responses=PostingRunSerializer)
+    def post(self, request):
+        body = PostingRunRequestSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        start, end = body.validated_data['from'], body.validated_data['to']
+        if end >= uk_date():
+            raise ValidationError({'to': 'Yesterday at the latest: a day is posted once it is over.'})
+        if start > end:
+            raise ValidationError({'from': 'On or before `to`.'})
+        if end - start > timedelta(days=365):
+            raise ValidationError({'from': 'At most 366 days at a time.'})
+        return Response(PostingRunSerializer(run_postings(request.user.company, start, end, user=request.user)).data)
+
+
+class TrialBalanceView(APIView):
+    """The trial balance (G53): every account with something posted to the end of `on` (default: everything),
+    with its debits and credits; the totals are equal."""
+
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    @extend_schema(parameters=[OpenApiParameter('on', OpenApiTypes.DATE)], responses=TrialBalanceSerializer)
+    def get(self, request):
+        on = _strict_date(request.query_params, 'on')
+        return Response(TrialBalanceSerializer(trial_balance(request.user.company, on=on)).data)

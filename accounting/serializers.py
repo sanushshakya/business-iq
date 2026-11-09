@@ -117,3 +117,41 @@ class ReopenSerializer(serializers.Serializer):
 class LockStateSerializer(serializers.Serializer):
     locked_through = serializers.DateField(allow_null=True, help_text='The last locked month (its 1st), or null.')
     periods = PeriodSerializer(many=True)
+
+
+class PostingRunRequestSerializer(serializers.Serializer):
+    # ``from`` is a Python keyword, so the two fields are named in ``get_fields``.
+    def get_fields(self):
+        return {'from': StrictDateField(help_text='First UK day.'),
+                'to': StrictDateField(help_text='Last UK day: yesterday at the latest; at most 366 days.')}
+
+
+class PostingConflictSerializer(serializers.Serializer):
+    source = serializers.CharField()
+    ref = serializers.CharField()
+    detail = serializers.CharField()
+
+
+class PostingRunSerializer(serializers.Serializer):
+    posted = serializers.IntegerField(help_text='New journals.')
+    already = serializers.IntegerField(help_text='Posted before: nothing new.')
+    moved = serializers.IntegerField(help_text='Dated in a locked month: posted on the first open day.')
+    skipped = serializers.IntegerField(help_text='Write-offs and breakdowns with no cost.')
+    conflicts = PostingConflictSerializer(many=True)
+    error = serializers.CharField(allow_blank=True)
+
+
+class TrialBalanceRowSerializer(serializers.Serializer):
+    account = serializers.IntegerField()
+    code = serializers.CharField()
+    name = serializers.CharField()
+    type = serializers.CharField()
+    debit = serializers.DecimalField(max_digits=16, decimal_places=2)
+    credit = serializers.DecimalField(max_digits=16, decimal_places=2)
+
+
+class TrialBalanceSerializer(serializers.Serializer):
+    on = serializers.DateField(allow_null=True)
+    rows = TrialBalanceRowSerializer(many=True)
+    debit = serializers.DecimalField(max_digits=16, decimal_places=2)
+    credit = serializers.DecimalField(max_digits=16, decimal_places=2)

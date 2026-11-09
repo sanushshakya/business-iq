@@ -965,6 +965,36 @@ class StatementSerializer(serializers.Serializer):
     closing = serializers.DecimalField(max_digits=14, decimal_places=2)
 
 
+class AgedDebtorRowSerializer(serializers.Serializer):
+    customer = serializers.IntegerField()
+    account_code = serializers.CharField()
+    name = serializers.CharField()
+    current = serializers.DecimalField(max_digits=14, decimal_places=2, help_text='Open, not yet due.')
+    days_1_30 = serializers.DecimalField(max_digits=14, decimal_places=2, help_text='Open, 1–30 days past due.')
+    days_31_60 = serializers.DecimalField(max_digits=14, decimal_places=2)
+    days_61_90 = serializers.DecimalField(max_digits=14, decimal_places=2)
+    days_90_plus = serializers.DecimalField(max_digits=14, decimal_places=2)
+    on_account = serializers.DecimalField(max_digits=14, decimal_places=2,
+                                          help_text='Credits not yet allocated (0 or negative).')
+    total = serializers.DecimalField(max_digits=14, decimal_places=2, help_text='The balance as at that day.')
+
+
+class AgedDebtorTotalsSerializer(serializers.Serializer):
+    current = serializers.DecimalField(max_digits=14, decimal_places=2)
+    days_1_30 = serializers.DecimalField(max_digits=14, decimal_places=2)
+    days_31_60 = serializers.DecimalField(max_digits=14, decimal_places=2)
+    days_61_90 = serializers.DecimalField(max_digits=14, decimal_places=2)
+    days_90_plus = serializers.DecimalField(max_digits=14, decimal_places=2)
+    on_account = serializers.DecimalField(max_digits=14, decimal_places=2)
+    total = serializers.DecimalField(max_digits=14, decimal_places=2)
+
+
+class AgedDebtorsSerializer(serializers.Serializer):
+    as_at = serializers.DateField()
+    customers = AgedDebtorRowSerializer(many=True, help_text='Customers owing or owed something, by account code.')
+    totals = AgedDebtorTotalsSerializer()
+
+
 class AdjustmentSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=8, decimal_places=2,
                                       help_text='Positive: they owe more; negative: they owe less. Not 0.')

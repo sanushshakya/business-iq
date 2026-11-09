@@ -1,3 +1,4 @@
+import csv
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -22,7 +23,7 @@ from inventory.views import CompanyMemberReadsStaffWrites, Conflict
 from tenants.roles import DRIVER, STOCK
 from vat.services import uk_date
 
-from . import credit, credit_notes, invoices, ledger, orders, payments, picking, returns, runs
+from . import aged_debtors, credit, credit_notes, invoices, ledger, orders, payments, picking, returns, runs
 from .manifest_pdf import build_manifest_pdf
 from .invoice_pdf import build_credit_note_pdf, build_invoice_pdf
 from .pick_list import build_pick_list
@@ -45,6 +46,7 @@ from .models import (
 )
 from .pricing import resolve_prices
 from .serializers import (
+    AgedDebtorsSerializer,
     CancelOrderSerializer,
     CreditNoteSerializer,
     CustomerGroupSerializer,
@@ -131,6 +133,23 @@ class TradeCustomerViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retr
             raise ValidationError({'from': 'At most 366 days at a time.'})
         report = ledger.statement(customer, start, end)
         return Response(StatementSerializer({'customer': customer.pk, 'from': start, 'to': end, **report}).data)
+
+    @extend_schema(parameters=[
+        OpenApiParameter('as_at', OpenApiTypes.DATE, description='The day (UK); default today.'),
+        OpenApiParameter('download', OpenApiTypes.STR, enum=['csv'], description='`csv`: the same as a CSV file.'),
+    ], responses={(200, 'application/json'): AgedDebtorsSerializer, (200, 'text/csv'): OpenApiTypes.STR})
+    @action(detail=False, methods=['get'], url_path='aged-debtors', url_name='aged-debtors')
+    def aged_debtors(self, request):
+        """Aged debtors (G50): each customer's open invoices and charges by days past due (current, 1–30, 31–60,
+        61–90, 90+), money on account and the balance, as at the end of `as_at`. Totals are the balances."""
+        as_at = _date_param(request.query_params, 'as_at') or uk_date()
+        download = request.query_params.get('download')
+        if download not in (None, 'csv'):
+            raise ValidationError({'download': 'Only `csv`.'})
+        data = aged_debtors.report(request.user.company_id, as_at)
+        if download == 'csv':
+            return _aged_debtors_csv(data)
+        return Response(AgedDebtorsSerializer(data).data)
 
     @extend_schema(responses=OpenItemsSerializer)
     @action(detail=True, methods=['get'], url_path='open-items', url_name='open-items')
@@ -355,6 +374,27 @@ def _credit_blocked(error, user):
 
 
 ORDER_STATUSES = {value for value, _label in SalesOrder.STATUSES}
+
+
+CSV_HEADINGS = ['Account', 'Customer', 'Current', '1-30 days', '31-60 days', '61-90 days', '90+ days', 'On account',
+                'Total']
+
+
+def _cell(text):
+    # A spreadsheet runs a cell starting with one of these as a formula.
+    return f"'{text}" if text[:1] in ('=', '+', '-', '@', '\t', '\r') else text
+
+
+def _aged_debtors_csv(data):
+    answer = HttpResponse(content_type='text/csv; charset=utf-8')
+    answer['Content-Disposition'] = f'attachment; filename="aged-debtors-{data["as_at"].isoformat()}.csv"'
+    writer = csv.writer(answer)
+    writer.writerow(CSV_HEADINGS)
+    for row in data['customers']:
+        writer.writerow([_cell(row['account_code']), _cell(row['name'])]
+                        + [f'{row[name]:.2f}' for name in aged_debtors.COLUMNS])
+    writer.writerow(['Total', ''] + [f'{data["totals"][name]:.2f}' for name in aged_debtors.COLUMNS])
+    return answer
 
 
 def _date_param(params, name):

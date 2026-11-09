@@ -5,7 +5,7 @@ Nothing is posted into a locked month (a month is locked with every month before
 reopening lock the company row first, so a posting never slips into a month being locked, and numbers never clash.
 """
 
-from datetime import date as date_type
+from datetime import date as date_type, timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
@@ -20,6 +20,7 @@ from .models import Account, Journal, JournalLine, Period, PeriodEvent
 ZERO = Decimal('0.00')
 PENNY = Decimal('0.01')
 MAX_AMOUNT = Decimal('999999999999.99')
+EARLIEST = date_type(2000, 1, 1)  # a mistyped year must not reach back to year 1 (or forward to 9999)
 
 
 class JournalError(ValueError):
@@ -86,6 +87,8 @@ def locked_through(company):
 
 
 def _check_open(company, day):
+    if not EARLIEST <= day <= uk_date() + timedelta(days=366):
+        raise JournalError(f'A journal is dated from {EARLIEST:%Y} to a year from today.')
     last = locked_through(company)
     if last is not None and _month(day) <= last:
         raise JournalError(f'{day:%B %Y} is locked (up to {last:%B %Y}); reopen it or post in an open month.')
@@ -148,11 +151,14 @@ def reverse_journal(journal, user, reason, date=None):
         raise JournalError('A reversal is not reversed again; post the journal afresh.')
     if Journal.objects.filter(reverses=journal).exists():
         raise JournalError(f'Journal {journal.number} is reversed already.')
+    day = date or uk_date()
+    if day < journal.date:
+        raise JournalError(f'A reversal is dated on or after journal {journal.number} ({journal.date}).')
     lines = [{'account': line.account_id, 'debit': line.credit or None, 'credit': line.debit or None,
               'description': line.description} for line in journal.lines.all()]
     cleaned = _clean_lines(journal.company, lines, allow_inactive=True)  # undoing stays possible
     narrative = f'Reversal of journal {journal.number}: {journal.narrative}'[:255]
-    return _post(journal.company, date or uk_date(), narrative, cleaned, user, 'reversal', None, reverses=journal,
+    return _post(journal.company, day, narrative, cleaned, user, 'reversal', None, reverses=journal,
                  reason=reason)
 
 
@@ -168,14 +174,22 @@ def _months(first, last):
         first = _next_month(first)
 
 
+def _previous_month(day):
+    return (day - timedelta(days=1)).replace(day=1)
+
+
 def _next_month(day):
     return date_type(day.year + (day.month == 12), day.month % 12 + 1, 1)
 
 
 @transaction.atomic
 def lock_period(company, month, user):
-    """Lock ``month`` and every month before it (from the first with a journal or a period)."""
+    """Lock ``month`` (one that has ended) and every month before it (from the first with a journal or a period)."""
     month = _first_of_month(month)
+    if month >= uk_date().replace(day=1):
+        raise JournalError('Only a month that has ended is locked.')
+    if month < EARLIEST:
+        raise JournalError(f'Months from {EARLIEST:%B %Y}.')
     _lock_company(company)
     earliest = [month,
                 Journal.objects.filter(company=company).aggregate(first=Min('date'))['first'],
@@ -199,8 +213,16 @@ def reopen_period(company, month, user, reason):
     if not reason or len(reason) > 255:
         raise JournalError('Give a reason (at most 255 characters).')
     _lock_company(company)
-    if not Period.objects.filter(company=company, start=month, locked=True).exists():
+    last = locked_through(company)
+    if last is None or month > last:
         raise JournalError(f'{month:%B %Y} is not locked.')
+    now = timezone.now()
+    # A month locked with an earlier lock may have no row yet. The month before stays locked (with it, every month
+    # before that, which needs no row of its own).
+    first = _previous_month(month) if month > EARLIEST else month
+    for start in _months(first, last):
+        Period.objects.get_or_create(company=company, start=start,
+                                     defaults={'locked': True, 'locked_at': now, 'locked_by': user})
     for period in Period.objects.filter(company=company, start__gte=month, locked=True):
         period.locked, period.locked_at, period.locked_by = False, None, None
         period.save(update_fields=['locked', 'locked_at', 'locked_by'])

@@ -113,16 +113,18 @@ class Command(BaseCommand):
         elif fixture and User.objects.exists():
             self.stdout.write('Database already has users; fixture not loaded.')
         elif fixture:
+            from accounting.chart import ensure_default_chart
             from inventory.locations import ensure_default_locations
 
             with transaction.atomic():
                 with model_signals_muted():
                     fixture, legacy = split_legacy_stock(fixture)
                     call_command('loaddata', fixture, stdout=self.stdout)
-                # Default locations come from post_save receivers, which were muted for the load. Same
+                # Default locations (and the chart) come from post_save receivers, which were muted for the load. Same
                 # transaction: if this fails, the snapshot is not left loaded without them.
                 for company in Company.objects.all():
                     ensure_default_locations(company)
+                    ensure_default_chart(company)  # G52: the chart is a post_save default too
                 with model_signals_muted():
                     place_legacy_stock(legacy)
 

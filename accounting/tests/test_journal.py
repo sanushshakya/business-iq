@@ -192,3 +192,48 @@ class PeriodTests(JournalCase):
         lock_period(other, date(2026, 6, 1), UserFactory(company=other, is_staff=True))
         self.assertIsNone(locked_through(self.company))
         self.assertEqual(self.post().number, 1)
+
+
+class ReviewEdgeTests(JournalCase):
+    def test_dates_outside_a_sane_window_are_refused(self):
+        from vat.services import uk_date
+
+        for day in (date(1999, 12, 31), date(1, 1, 15), uk_date().replace(year=uk_date().year + 2)):
+            with self.subTest(day=day), self.assertRaises(JournalError):
+                self.post(day=day)
+        journal = self.post()
+        with self.assertRaises(JournalError):  # never before what it reverses
+            reverse_journal(journal, self.staff, 'Fake', date=date(2026, 6, 14))
+
+    def test_only_a_month_that_has_ended_is_locked(self):
+        from vat.services import uk_date
+
+        this_month = uk_date().replace(day=1)
+        for month in (this_month, date(9999, 12, 1)):
+            with self.subTest(month=month), self.assertRaises(JournalError):
+                lock_period(self.company, month, self.staff)
+        self.assertIsNone(locked_through(self.company))
+
+    def test_a_month_locked_without_a_row_can_be_reopened(self):
+        lock_period(self.company, date(2026, 6, 1), self.staff)  # no journals: only June has a row
+        reopen_period(self.company, date(2026, 3, 1), self.staff, 'Fake late bill')
+        self.assertEqual(locked_through(self.company), date(2026, 2, 1))
+        self.assertEqual(self.post(day=date(2026, 3, 9)).number, 1)
+        with self.assertRaises(JournalError):
+            self.post(day=date(2026, 2, 9))
+
+    def test_every_other_path_to_change_a_journal_is_refused(self):
+        from django.db.models import ProtectedError
+
+        journal = self.post()
+        for attempt in (lambda: journal.lines.update(debit=D('1.00')), lambda: journal.lines.all().delete(),
+                        lambda: JournalLine.objects.bulk_create(
+                            [JournalLine(journal=journal, account=self.bank, debit=D('1.00'))],
+                            update_conflicts=True, unique_fields=['id'], update_fields=['debit'])):
+            with self.assertRaises(ValidationError):
+                attempt()
+        with self.assertRaises((ProtectedError, ValidationError)):
+            self.bank.delete()
+        with self.assertRaises((ProtectedError, ValidationError)):
+            self.company.delete()
+        self.assertEqual(JournalLine.objects.count(), 3)

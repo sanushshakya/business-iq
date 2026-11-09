@@ -4,14 +4,38 @@ default-chart accounts nothing has been posted to."""
 from django.db import migrations
 
 # Frozen here, so a later change to accounting.chart does not change what this migration did.
-DEFAULT_CODES = ['1000', '1010', '1020', '1100', '1200', '2100', '2200', '2210', '2220', '3000', '3100', '4000',
-                 '4010', '4020', '4030', '4900', '5000', '5100', '5110', '5200', '7000', '7100', '7200', '7500',
-                 '7510', '9999']
+DEFAULT_CHART = [
+    ('1000', 'Bank current account', 'asset', 'bank'),
+    ('1010', 'Cash in tills', 'asset', 'cash'),
+    ('1020', 'Card clearing', 'asset', 'card_clearing'),
+    ('1100', 'Trade debtors', 'asset', 'debtors'),
+    ('1200', 'Stock', 'asset', 'stock'),
+    ('2100', 'Trade creditors', 'liability', 'creditors'),
+    ('2200', 'VAT on sales', 'liability', 'vat_output'),
+    ('2210', 'VAT on purchases', 'liability', 'vat_input'),
+    ('2220', 'VAT due to HMRC', 'liability', 'vat_hmrc'),
+    ('3000', 'Capital', 'equity', 'capital'),
+    ('3100', 'Retained earnings', 'equity', 'retained_earnings'),
+    ('4000', 'Sales - standard rate', 'income', 'sales_standard'),
+    ('4010', 'Sales - reduced rate', 'income', 'sales_reduced'),
+    ('4020', 'Sales - zero rate', 'income', 'sales_zero'),
+    ('4030', 'Sales - exempt', 'income', 'sales_exempt'),
+    ('4900', 'Other income', 'income', None),
+    ('5000', 'Purchases', 'expense', 'purchases'),
+    ('5100', 'Stock wastage', 'expense', 'wastage'),
+    ('5110', 'Butchery yield loss', 'expense', 'yield_loss'),
+    ('5200', 'Carriage inwards', 'expense', None),
+    ('7000', 'Wages', 'expense', None),
+    ('7100', 'Rent and rates', 'expense', None),
+    ('7200', 'Utilities', 'expense', None),
+    ('7500', 'Bank charges', 'expense', None),
+    ('7510', 'Card fees', 'expense', None),
+    ('9999', 'Suspense', 'asset', 'suspense'),
+]
+DEFAULT_CODES = [code for code, *_rest in DEFAULT_CHART]
 
 
 def add_default_chart(apps, schema_editor):
-    from accounting.chart import DEFAULT_CHART
-
     Company = apps.get_model('tenants', 'Company')
     Account = apps.get_model('accounting', 'Account')
     for company in Company.objects.all():
@@ -20,7 +44,7 @@ def add_default_chart(apps, schema_editor):
                    .values_list('system_key', flat=True))
         Account.objects.bulk_create([
             Account(company=company, code=code, name=name, type=kind, system_key=key if key not in keys else None)
-            for code, name, kind, key in DEFAULT_CHART if code in DEFAULT_CODES and code not in have])
+            for code, name, kind, key in DEFAULT_CHART if code not in have])
 
 
 def remove_default_chart(apps, schema_editor):

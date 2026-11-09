@@ -13,6 +13,7 @@ from accounting.journal import lock_period
 from accounting.models import Account, Journal, JournalLine
 from accounting.postings import run_nightly, run_postings
 from accounting.reports import trial_balance
+from inventory.test_breakdowns import BreakdownTestCase
 from inventory.models import Breakdown, BreakdownLine, StockBatch, WriteOff, YieldTemplate, YieldTemplateOutput
 from sales.models import Sale, SaleItem, TillSession
 from tenants.models import Branch, Till
@@ -38,6 +39,10 @@ class PostingCase(PaymentCase):
                                             code='HS')
         self.till = Till.objects.create(branch=self.branch, number=1, device_id=f'fake-till-{self.company.pk}')
         self.session = TillSession.objects.create(till=self.till, opened_by=self.staff)
+        # A day is posted once it is over: these tests post today, so "today" for the run is tomorrow.
+        later = mock.patch.object(postings, 'uk_date', return_value=self.today + timedelta(days=2))
+        later.start()
+        self.addCleanup(later.stop)
 
     def key(self, system_key):
         return Account.objects.get(company=self.company, system_key=system_key)
@@ -105,19 +110,49 @@ class TillPostingTests(PostingCase):
             ('sales_zero', D('0'), D('2.00')), ('sales_standard', D('0'), D('1.83')),
             ('sales_reduced', D('0'), D('1.00')), ('vat_output', D('0'), D('0.42'))]))
 
-    def test_voids_same_day_and_next_day(self):
-        self.sale('cash', [('zero', D('5.00'), D('0'))], voided_on=self.today)
-        self.sale('card', [('standard', D('10.00'), D('2.00'))], voided_on=self.today + timedelta(days=1))
+    def test_each_void_posts_once_on_its_day(self):
+        same = self.sale('cash', [('zero', D('5.00'), D('0'))], voided_on=self.today)
+        later = self.sale('card', [('standard', D('10.00'), D('2.00'))], voided_on=self.today + timedelta(days=1))
         self.post_range(self.today, self.today + timedelta(days=1))
         takings, = self.posted('till')
         self.assertIn(('sales_standard', D('0'), D('10.00')), self.lines_of(takings))  # voided later: still sold
-        same, next_day = self.posted('till_void')
-        self.assertEqual((same.date, self.lines_of(same)), (self.today, sorted([
+        first, second = self.posted('till_void')
+        self.assertEqual((first.source_ref, first.date, self.lines_of(first)), (str(same.pk), self.today, sorted([
             ('cash', D('0'), D('5.00')), ('sales_zero', D('5.00'), D('0'))])))
-        self.assertEqual(next_day.date, self.today + timedelta(days=1))
-        self.assertEqual(self.lines_of(next_day), sorted([
+        self.assertEqual((second.source_ref, second.date), (str(later.pk), self.today + timedelta(days=1)))
+        self.assertEqual(self.lines_of(second), sorted([
             ('card_clearing', D('0'), D('12.00')), ('sales_standard', D('10.00'), D('0')),
             ('vat_output', D('2.00'), D('0'))]))
+
+    def test_an_offline_void_synced_later_posts_on_the_sync_day_and_is_caught_up(self):
+        # Sold and voided on the till yesterday while offline; it reached the server today.
+        sale = self.sale('cash', [('zero', D('4.00'), D('0'))], voided_on=self.today - timedelta(days=1))
+        self.post_range(self.today - timedelta(days=1))  # yesterday: nothing had reached the server
+        self.assertEqual(self.posted('till') + self.posted('till_void'), [])
+        self.post_range(self.today)
+        [void] = self.posted('till_void')
+        self.assertEqual((void.source_ref, void.date), (str(sale.pk), self.today))
+        # A void of an older, already-posted sale learned of late (its time on the till is old) is still posted.
+        old = self.sale('card', [('zero', D('3.00'), D('0'))], day=self.today - timedelta(days=3))
+        self.post_range(self.today - timedelta(days=3))
+        Sale.objects.filter(pk=old.pk).update(status=Sale.VOIDED, voided_at=at(self.today - timedelta(days=3), 18))
+        self.post_range(self.today)  # a later range: the never-posted void is found anyway
+        self.assertIn(str(old.pk), [journal.source_ref for journal in self.posted('till_void')])
+
+    def test_uk_days_across_the_clock_change(self):
+        from datetime import date, timezone as dt_timezone
+
+        summer_midnight = datetime(2026, 7, 1, 23, 30, tzinfo=dt_timezone.utc)  # 00:30 on 2 July in the UK
+        with mock.patch('django.utils.timezone.now', return_value=summer_midnight):
+            sale = Sale.objects.create(session=self.session, cashier=self.staff, payment_method='cash',
+                                       total=D('1.00'), amount_tendered=D('1.00'))
+            SaleItem.objects.create(sale=sale, product=self.rice, product_name='Fake Rice', quantity=1,
+                                    unit_price=D('1.00'), line_total=D('1.00'), vat_code='zero', vat_rate=D('0'),
+                                    net_amount=D('1.00'), vat_amount=D('0.00'))
+        self.assertIsNone(postings.till_day(self.branch, date(2026, 7, 1)))
+        self.assertEqual(postings.till_day(self.branch, date(2026, 7, 2)).lines[0][1], D('1.00'))
+        start, end = postings._day_range(date(2026, 10, 25))  # the day the clocks go back
+        self.assertEqual(end.astimezone(dt_timezone.utc) - start.astimezone(dt_timezone.utc), timedelta(hours=25))
 
     def test_old_lines_without_vat_go_to_suspense(self):
         self.sale('cash', [(None, D('3.00'), D('0'))])
@@ -163,6 +198,41 @@ class LedgerPostingTests(PostingCase):
         self.assertEqual(by_kind['adjustment'], [sorted([('debtors', D('0'), D('1.50')),
                                                          ('suspense', D('1.50'), D('0'))])])
 
+    def test_a_credit_note_reverses_by_its_lines_and_debtors_still_agree(self):
+        from wholesale.credit_notes import create_credit_note, issue_credit_note
+        from wholesale.returns import record_return
+        from wholesale.runs import complete_run, deliver, start_run
+
+        order = self.first.order
+        run = self.plan(order)
+        start_run(run, self.staff)
+        deliver(run.stops.get(), self.driver, received_by='Fake Chef')
+        complete_run(run, self.staff)
+        returned = record_return(order, self.staff, [
+            {'line': self.line(order, self.rice).pk, 'reason': 'not_wanted', 'quantity': 1}])
+        note = issue_credit_note(create_credit_note(returned, self.staff), self.staff)
+        payment = self.pay('4.00')
+        reverse_payment(payment, self.staff, 'Fake bounced')
+        self.post_range()
+        entry = LedgerEntry.objects.get(credit_note=note)
+        [journal] = [j for j in self.posted('ledger') if j.source_ref == str(entry.pk)]
+        lines = self.lines_of(journal)
+        self.assertIn(('debtors', D('0'), note.gross_total), lines)
+        self.assertEqual(sum(row[1] for row in lines), note.gross_total)
+        debtors = sum(line.debit - line.credit for line in JournalLine.objects.filter(account=self.key('debtors')))
+        self.assertEqual(debtors, sum(e.amount for e in LedgerEntry.objects.filter(customer=self.customer)))
+
+    def test_a_source_posted_before_with_other_lines_is_a_conflict_and_the_rest_go_on(self):
+        from accounting.journal import post_journal
+
+        entry = LedgerEntry.objects.get(invoice=self.first)
+        post_journal(self.company, date=self.today, narrative='Fake earlier', source='ledger', source_ref=str(entry.pk),
+                     lines=[{'account': self.key('debtors'), 'debit': D('1.00')},
+                            {'account': self.key('suspense'), 'credit': D('1.00')}])
+        summary = self.post_range()
+        self.assertEqual([(c['source'], c['ref']) for c in summary['conflicts']], [('ledger_entry', str(entry.pk))])
+        self.assertEqual(summary['posted'], 1)  # the other invoice
+
     def test_debtors_equals_the_customer_ledger(self):
         self.pay('15.00')
         self.post_range()
@@ -183,16 +253,16 @@ class StockPostingTests(PostingCase):
         self.assertEqual(summary['skipped'], 1)
 
     def test_breakdown_loss_and_its_void(self):
-        self.breakdown(D('50.00'), D('41.30'), voided_on=self.today + timedelta(days=1))
+        self.breakdown(D('50.00'), D('41.30'), voided_on=self.today + timedelta(days=1))  # 4 of 5 kg are product
         self.breakdown(None, None)  # no input cost: skipped
-        self.breakdown(D('10.00'), D('10.00'))  # nothing lost at cost: nothing to post
-        self.post_range(self.today, self.today + timedelta(days=1))
+        summary = self.post_range(self.today, self.today + timedelta(days=1))
         [loss] = self.posted('breakdown')
-        self.assertEqual(self.lines_of(loss), sorted([('yield_loss', D('8.70'), D('0')),
-                                                      ('purchases', D('0'), D('8.70'))]))
+        self.assertEqual(self.lines_of(loss), sorted([('yield_loss', D('10.00'), D('0')),
+                                                      ('purchases', D('0'), D('10.00'))]))
         [void] = self.posted('breakdown_void')
         self.assertEqual((void.date, self.lines_of(void)), (self.today + timedelta(days=1), sorted([
-            ('yield_loss', D('0'), D('8.70')), ('purchases', D('8.70'), D('0'))])))
+            ('yield_loss', D('0'), D('10.00')), ('purchases', D('10.00'), D('0'))])))
+        self.assertEqual(summary['skipped'], 1)
 
 
 class RunTests(PostingCase):
@@ -201,7 +271,7 @@ class RunTests(PostingCase):
         self.sale('card', [('standard', D('5.00'), D('1.00'))], voided_on=self.today)
         self.pay('15.00')
         self.write_off(D('3.10'))
-        self.breakdown(D('20.00'), D('17.45'))
+        self.breakdown(D('20.00'), D('16.00'))
 
     def test_trial_balance_balances_for_a_seeded_day(self):
         self.seed_day()
@@ -244,10 +314,11 @@ class RunTests(PostingCase):
         yesterday = self.today - timedelta(days=1)
         self.sale('cash', [('zero', D('2.00'), D('0.00'))], day=yesterday)
         self.sale('cash', [('zero', D('9.00'), D('0.00'))])  # today: not yet
+        missed = self.today - timedelta(days=4)  # a night the beat was down
+        self.sale('card', [('zero', D('1.00'), D('0.00'))], day=missed)
         with mock.patch.object(postings, 'uk_date', return_value=self.today):
             run_nightly()
-        [journal] = self.posted('till')
-        self.assertEqual(journal.date, yesterday)
+        self.assertEqual(sorted(journal.date for journal in self.posted('till')), [missed, yesterday])
 
     def test_the_command(self):
         self.seed_day()
@@ -262,3 +333,27 @@ class RunTests(PostingCase):
         self.assertEqual(Journal.objects.filter(company=self.company).count(), 0)
         self.assertIn('wastage', summary['error'])
         self.assertTrue(timezone.now())  # the run itself did not raise
+
+
+class RealBreakdownTests(BreakdownTestCase):
+    """Through ``record_breakdown`` and ``void_breakdown`` (G21/G22): the whole input cost goes to the products'
+    batches, and the loss posted is the input's cost per kg × the kg that did not become product."""
+
+    def test_loss_at_the_input_cost_per_kg(self):
+        from inventory.breakdowns import void_breakdown
+
+        StockBatch.objects.filter(pk=self.input.pk).update(unit_cost=D('5.0000'))
+        self.input.refresh_from_db()
+        made, _created = self.record()  # 10 kg in: 7.5 kg product, 2.15 kg waste, 0.35 kg loss
+        self.assertEqual(made.input_cost, D('50.00'))
+        self.assertEqual(sum(line.allocated_cost or 0 for line in made.lines.all()), D('50.00'))
+        with mock.patch.object(postings, 'uk_date', return_value=self.today + timedelta(days=1)):
+            run_postings(self.company, self.today, self.today)
+            [loss] = Journal.objects.filter(company=self.company, source='breakdown')
+            self.assertEqual(sorted((line.account.system_key, line.debit, line.credit) for line in loss.lines.all()),
+                             [('purchases', D('0'), D('12.50')), ('yield_loss', D('12.50'), D('0'))])
+            void_breakdown(made, user=self.user, reason='Fake mistake')
+            run_postings(self.company, self.today, self.today)
+        [void] = Journal.objects.filter(company=self.company, source='breakdown_void')
+        self.assertEqual(sum(line.credit for line in void.lines.filter(account__system_key='yield_loss')),
+                         D('12.50'))

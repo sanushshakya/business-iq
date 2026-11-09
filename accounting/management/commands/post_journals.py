@@ -27,7 +27,11 @@ class Command(BaseCommand):
         if company is not None:
             companies = companies.filter(pk=company)
         for each in companies:
-            summary = run_postings(each, start, end)
+            try:
+                summary = run_postings(each, start, end)
+            except ValueError as error:
+                raise CommandError(str(error)) from None
+            error = f'; {summary["error"]}' if summary['error'] else ''
             self.stdout.write(f'Company {each.pk}: {summary["posted"]} posted, {summary["already"]} already, '
                               f'{summary["moved"]} moved to an open month, {summary["skipped"]} skipped, '
-                              f'{len(summary["conflicts"])} conflicts{f"; {summary['error']}" if summary["error"] else ""}')
+                              f'{len(summary["conflicts"])} conflicts{error}')

@@ -10,16 +10,17 @@ ZERO = Decimal('0.00')
 
 
 def trial_balance(company, on=None):
-    """Every account with something posted (to the end of ``on``): its debits and credits; and the two totals, which
-    are always equal."""
+    """Every account with a balance (to the end of ``on``): its net as a debit or a credit; the totals agree when the
+    books balance."""
     lines = JournalLine.objects.filter(journal__company=company)
     if on is not None:
         lines = lines.filter(journal__date__lte=on)
-    rows = [
-        {'account': row['account'], 'code': row['account__code'], 'name': row['account__name'],
-         'type': row['account__type'], 'debit': row['debit'] or ZERO, 'credit': row['credit'] or ZERO}
-        for row in lines.values('account', 'account__code', 'account__name', 'account__type')
-        .annotate(debit=Sum('debit'), credit=Sum('credit')).order_by('account__code')
-    ]
+    rows = []
+    for row in (lines.values('account', 'account__code', 'account__name', 'account__type')
+                .annotate(debit=Sum('debit'), credit=Sum('credit')).order_by('account__code')):
+        net = (row['debit'] or ZERO) - (row['credit'] or ZERO)
+        if net:
+            rows.append({'account': row['account'], 'code': row['account__code'], 'name': row['account__name'],
+                         'type': row['account__type'], 'debit': max(net, ZERO), 'credit': max(-net, ZERO)})
     return {'on': on, 'rows': rows, 'debit': sum((row['debit'] for row in rows), ZERO),
             'credit': sum((row['credit'] for row in rows), ZERO)}

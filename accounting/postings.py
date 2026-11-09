@@ -2,22 +2,25 @@
 Automatic postings (G53): what the business already records, posted to the journal (G52) once each.
 
 - Till takings per branch per UK day (sales by when they reached the server): Dr Cash / Card clearing, Cr sales by
-  VAT code and VAT on sales; voids per branch per day (by when voided): the opposite.
+  VAT code and VAT on sales; each void: the opposite.
 - Customer ledger entries (G47/G49): invoices and credit notes by their lines, payments and their reversals by
   method, adjustments against Suspense; so Trade debtors always equals the customer ledger.
 - Write-offs and butchery loss at cost (periodic stock): Dr Stock wastage / Butchery yield loss, Cr Purchases.
 
 Each has a ``source`` and ``source_ref``, so running a day again posts nothing new. A source dated in a locked month
-is posted on the first open day, saying its own date. Supplier bills wait for purchase orders (parked).
+is posted on the first open day, saying its own date. Supplier bills wait for purchase orders (parked). Voids post
+one per sale (``till_void``, the sale id), on the later of the sale's and the void's day, and are caught up like
+documents, so a void made offline and synced later is never lost.
 """
 
 import logging
 from collections import defaultdict, namedtuple
 from datetime import datetime, time, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from celery import shared_task
-from django.db.models import Q
+from django.db.models import CharField, Exists, OuterRef, Q
+from django.db.models.functions import Cast
 
 from inventory.models import Breakdown, WriteOff
 from sales.models import Sale, SaleItem
@@ -31,6 +34,8 @@ from .models import Account, Journal
 logger = logging.getLogger(__name__)
 
 ZERO = Decimal('0.00')
+PENNY = Decimal('0.01')
+NIGHTLY_DAYS = 7  # the nightly run looks again at the last week's till days, in case a night was missed
 Posting = namedtuple('Posting', 'source ref date narrative lines')  # lines: [(system key, debit, credit, text)]
 SALES_KEYS = {'zero': 'sales_zero', 'reduced': 'sales_reduced', 'standard': 'sales_standard',
               'exempt': 'sales_exempt'}
@@ -92,14 +97,20 @@ def till_day(branch, day):
     return Posting('till', f'{branch.pk}:{day}', day, f'Till takings {branch.name} {day:%d/%m/%Y}{note}', lines)
 
 
-def till_voids(branch, day):
-    start, end = _day_range(day)
-    sales = Sale.objects.filter(session__till__branch=branch, status=Sale.VOIDED, voided_at__gte=start,
-                                voided_at__lt=end)
-    lines, _unrecorded = _sales_lines(sales, -1)
+def void_day(sale):
+    """A void posts on the later of its sale's day and its void's day: a sale voided on the till while offline
+    reaches the server (and the day's takings) later than its ``voided_at``."""
+    return max(_uk_day(sale.created_at), _uk_day(sale.voided_at))
+
+
+def till_void(sale):
+    lines, _unrecorded = _sales_lines(Sale.objects.filter(pk=sale.pk), -1)
     if not lines:
         return None
-    return Posting('till_void', f'{branch.pk}:{day}', day, f'Till voids {branch.name} {day:%d/%m/%Y}', lines)
+    branch = sale.session.till.branch
+    return Posting('till_void', str(sale.pk), void_day(sale),
+                   f'Void of sale {sale.receipt_number} ({branch.name}), sold {_uk_day(sale.created_at):%d/%m/%Y}',
+                   lines)
 
 
 def _document_lines(document, debtors_sign, label):
@@ -134,7 +145,7 @@ def ledger_entry(entry):
         _side(lines, PAYMENT_KEYS[entry.payment.method], -amount)
         _side(lines, 'debtors', amount)
     else:  # an adjustment: the accountant reclassifies it from Suspense
-        label = f'Customer adjustment {entry.customer.account_code}: {entry.reason}'
+        label = f'Customer adjustment {entry.customer.account_code} (ledger entry {entry.pk})'
         lines = []
         _side(lines, 'debtors', amount)
         _side(lines, 'suspense', -amount)
@@ -150,8 +161,13 @@ def write_off(item):
 
 
 def _loss(item):
-    allocated = sum((line.allocated_cost or ZERO) for line in item.lines.all() if line.kind == 'product')
-    return item.input_cost - allocated
+    """The input's cost per kg × the kg that did not become product (waste and loss), to the penny. (G22 spreads the
+    whole input cost over the products' batches; this is the share of it the waste and loss stand for.)"""
+    product_kg = sum((line.weight_kg for line in item.lines.all() if line.kind == 'product'), Decimal('0'))
+    lost_kg = item.input_kg - product_kg
+    if not item.input_kg or lost_kg <= 0:
+        return ZERO
+    return (item.input_cost * lost_kg / item.input_kg).quantize(PENNY, ROUND_HALF_UP)
 
 
 def breakdown(item, void=False):
@@ -169,50 +185,47 @@ def breakdown(item, void=False):
                    f'Breakdown {item.reference}: waste and loss at cost', lines)
 
 
-def _posted(company, source):
-    return set(Journal.objects.filter(company=company, source=source).values_list('source_ref', flat=True))
+def _not_posted(company, source):
+    return ~Exists(Journal.objects.filter(company=company, source=source,
+                                          source_ref=Cast(OuterRef('pk'), output_field=CharField())))
 
 
 def _sources(company, start, end):
-    """Every posting for ``start``–``end``, plus earlier documents never posted; and how many were skipped."""
+    """``[(builder, row)]`` for ``start``–``end`` plus every earlier source never posted (found in SQL, so the
+    nightly run does not read all history); and how many in the range have no cost to post."""
     found, skipped = [], 0
+    first, until = _day_range(start)[0], _day_range(end)[1]
     day = start
     branches = list(company.branches.all())
     while day <= end:
-        for branch in branches:
-            found += [till_day(branch, day), till_voids(branch, day)]
+        found += [(till_day, (branch, day)) for branch in branches]
         day += timedelta(days=1)
-    _first, until = _day_range(start)[0], _day_range(end)[1]
 
-    posted = _posted(company, 'ledger')
-    for entry in (LedgerEntry.objects.filter(customer__company=company, entry_date__lte=end)
-                  .select_related('invoice', 'credit_note', 'payment', 'customer').order_by('entry_date', 'id')):
-        if entry.entry_date >= start or str(entry.pk) not in posted:
-            found.append(ledger_entry(entry))
+    voided = (Sale.objects.filter(session__till__branch__company=company, status=Sale.VOIDED, voided_at__lt=until,
+                                  created_at__lt=until)
+              .filter(Q(voided_at__gte=first) | Q(created_at__gte=first) | _not_posted(company, 'till_void'))
+              .select_related('session__till__branch').order_by('voided_at', 'pk'))
+    found += [(till_void, (sale,)) for sale in voided]
 
-    posted = _posted(company, 'write_off')
-    for item in WriteOff.objects.filter(company=company, status=WriteOff.WRITTEN_OFF, written_off_at__lt=until):
-        if _uk_day(item.written_off_at) >= start or str(item.pk) not in posted:
-            if item.cost is None:
-                skipped += 1
-            else:
-                found.append(write_off(item))
+    entries = (LedgerEntry.objects.filter(customer__company=company, entry_date__lte=end)
+               .filter(Q(entry_date__gte=start) | _not_posted(company, 'ledger'))
+               .select_related('invoice', 'credit_note', 'payment', 'customer').order_by('entry_date', 'id'))
+    found += [(ledger_entry, (entry,)) for entry in entries]
 
-    posted, posted_voids = _posted(company, 'breakdown'), _posted(company, 'breakdown_void')
-    candidates = (Breakdown.objects.filter(company=company, created_at__lt=until).prefetch_related('lines')
-                  .filter(Q(created_at__gte=_first) | Q(voided_at__gte=_first)
-                          | ~Q(pk__in=[int(ref) for ref in posted])
-                          | (Q(voided_at__isnull=False) & ~Q(pk__in=[int(ref) for ref in posted_voids]))))
-    for item in candidates:
-        if item.input_cost is None:
-            skipped += _uk_day(item.created_at) >= start
-            continue
-        if _uk_day(item.created_at) >= start or str(item.pk) not in posted:
-            found.append(breakdown(item))
-        voided = item.voided_at is not None and item.voided_at < until
-        if voided and (_uk_day(item.voided_at) >= start or str(item.pk) not in posted_voids):
-            found.append(breakdown(item, void=True))
-    return [posting for posting in found if posting is not None], skipped
+    write_offs = WriteOff.objects.filter(company=company, status=WriteOff.WRITTEN_OFF, written_off_at__lt=until)
+    skipped += write_offs.filter(written_off_at__gte=first, cost__isnull=True).count()
+    found += [(write_off, (item,)) for item in write_offs.filter(cost__isnull=False).filter(
+        Q(written_off_at__gte=first) | _not_posted(company, 'write_off')).order_by('written_off_at', 'pk')]
+
+    breakdowns = Breakdown.objects.filter(company=company, created_at__lt=until)
+    skipped += breakdowns.filter(created_at__gte=first, input_cost__isnull=True).count()
+    costed = (breakdowns.filter(input_cost__isnull=False).filter(Q(loss_kg__gt=0) | Q(lines__kind='waste'))
+              .distinct().prefetch_related('lines').order_by('created_at', 'pk'))
+    found += [(breakdown, (item,)) for item in costed.filter(
+        Q(created_at__gte=first) | _not_posted(company, 'breakdown'))]
+    found += [(breakdown, (item, True)) for item in costed.filter(voided_at__isnull=False, voided_at__lt=until).filter(
+        Q(voided_at__gte=first) | _not_posted(company, 'breakdown_void'))]
+    return found, skipped
 
 
 def _accounts(company):
@@ -230,8 +243,11 @@ def _first_open_day(company):
 
 
 def run_postings(company, start, end, user=None):
-    """Post everything for ``start``–``end`` (UK days) not yet posted. Returns ``{posted, already, moved, skipped,
-    conflicts, error}``; never raises for one bad source."""
+    """Post everything for ``start``–``end`` (UK days, yesterday at the latest) not yet posted, and every earlier
+    source never posted. Returns ``{posted, already, moved, skipped, conflicts, error}``; one bad source is a
+    conflict, the rest carry on."""
+    if end >= uk_date():
+        raise ValueError('A day is posted once it is over: yesterday at the latest.')
     summary = {'posted': 0, 'already': 0, 'moved': 0, 'skipped': 0, 'conflicts': [], 'error': ''}
     try:
         accounts = _accounts(company)
@@ -240,18 +256,24 @@ def run_postings(company, start, end, user=None):
         return summary
     found, summary['skipped'] = _sources(company, start, end)
     first_open = _first_open_day(company)
-    for posting in found:
-        day, narrative = posting.date, posting.narrative
-        if first_open is not None and day < first_open:
-            day, narrative = first_open, f'{narrative} (dated {posting.date:%d/%m/%Y}, a locked month)'
-        lines = [{'account': accounts[key], 'debit': debit, 'credit': credit, 'description': text}
-                 for key, debit, credit, text in posting.lines]
+    for build, args in found:
         try:
+            posting = build(*args)
+            if posting is None:
+                continue
+            day, narrative = posting.date, posting.narrative
+            if first_open is not None and day < first_open:
+                day, narrative = first_open, f'{narrative} (dated {posting.date:%d/%m/%Y}, a locked month)'
+            lines = [{'account': accounts[key], 'debit': debit, 'credit': credit, 'description': text}
+                     for key, debit, credit, text in posting.lines]
             journal = post_journal(company, date=day, narrative=narrative[:255], lines=lines, user=user,
                                    source=posting.source, source_ref=posting.ref)
-        except JournalError as error:
-            logger.warning('Posting %s %s refused: %s', posting.source, posting.ref, error.detail)
-            summary['conflicts'].append({'source': posting.source, 'ref': posting.ref, 'detail': error.detail})
+        except Exception as error:  # noqa: BLE001 - one bad source never stops the others
+            source = getattr(build, '__name__', 'source')
+            ref = getattr(args[0], 'pk', args[0])
+            detail = error.detail if isinstance(error, JournalError) else f'{type(error).__name__} building it.'
+            logger.warning('Posting %s %s refused: %s', source, ref, type(error).__name__)
+            summary['conflicts'].append({'source': source, 'ref': str(ref), 'detail': detail})
             continue
         if journal.repeated:
             summary['already'] += 1
@@ -263,14 +285,17 @@ def run_postings(company, start, end, user=None):
 
 @shared_task
 def run_nightly():
-    """After midnight (beat): yesterday for every company; one company's problem never stops the others."""
+    """After midnight (beat): the last week to yesterday for every company (days posted before are left as they are;
+    a missed night is caught up); one company's problem never stops the others."""
     yesterday = uk_date() - timedelta(days=1)
     for company in Company.objects.order_by('pk'):
         try:
-            summary = run_postings(company, yesterday, yesterday)
+            summary = run_postings(company, yesterday - timedelta(days=NIGHTLY_DAYS - 1), yesterday)
         except Exception:  # noqa: BLE001
             logger.exception('Postings failed for company %s', company.pk)
             continue
+        logger.info('Postings for company %s: %d posted, %d already', company.pk, summary['posted'],
+                    summary['already'])
         if summary['error'] or summary['conflicts']:
             logger.warning('Postings for company %s: %s; %d conflicts', company.pk, summary['error'] or 'ok',
                            len(summary['conflicts']))

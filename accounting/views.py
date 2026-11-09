@@ -176,8 +176,8 @@ class PostingRunView(APIView):
             raise ValidationError({'to': 'Yesterday at the latest: a day is posted once it is over.'})
         if start > end:
             raise ValidationError({'from': 'On or before `to`.'})
-        if end - start > timedelta(days=365):
-            raise ValidationError({'from': 'At most 366 days at a time.'})
+        if end - start > timedelta(days=92):
+            raise ValidationError({'from': 'At most 93 days at a time (the command posts longer ranges).'})
         return Response(PostingRunSerializer(run_postings(request.user.company, start, end, user=request.user)).data)
 
 

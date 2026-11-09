@@ -123,7 +123,7 @@ class PostingRunRequestSerializer(serializers.Serializer):
     # ``from`` is a Python keyword, so the two fields are named in ``get_fields``.
     def get_fields(self):
         return {'from': StrictDateField(help_text='First UK day.'),
-                'to': StrictDateField(help_text='Last UK day: yesterday at the latest; at most 366 days.')}
+                'to': StrictDateField(help_text='Last UK day: yesterday at the latest; at most 93 days.')}
 
 
 class PostingConflictSerializer(serializers.Serializer):

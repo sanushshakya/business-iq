@@ -16,10 +16,13 @@ from vat.services import uk_date
 
 from . import journal as posting
 from .postings import run_postings
-from .reports import trial_balance
-from .models import Account, Journal, JournalLine, Period
+from .reports import balance_sheet, profit_and_loss, trial_balance
+from .vat_return import VatReturnError, file_return, vat_boxes
+from .models import Account, Journal, JournalLine, Period, VatReturn
 from .serializers import (
     AccountSerializer,
+    BalanceSheetSerializer,
+    DateRangeSerializer,
     JournalCreateSerializer,
     JournalSerializer,
     LockSerializer,
@@ -27,10 +30,13 @@ from .serializers import (
     PeriodSerializer,
     PostingRunRequestSerializer,
     PostingRunSerializer,
+    ProfitAndLossSerializer,
     ReopenSerializer,
     ReverseSerializer,
     StrictDateField,
     TrialBalanceSerializer,
+    VatBoxesSerializer,
+    VatReturnSerializer,
 )
 
 
@@ -191,3 +197,71 @@ class TrialBalanceView(APIView):
     def get(self, request):
         on = _strict_date(request.query_params, 'on')
         return Response(TrialBalanceSerializer(trial_balance(request.user.company, on=on)).data)
+
+
+def _range(params):
+    """``from``/``to`` (default this month to today), ``from`` on or before ``to``."""
+    end = _strict_date(params, 'to') or uk_date()
+    start = _strict_date(params, 'from') or end.replace(day=1)
+    if start > end:
+        raise ValidationError({'from': 'On or before `to`.'})
+    return start, end
+
+
+RANGE_PARAMETERS = [OpenApiParameter('from', OpenApiTypes.DATE, description='Default: the 1st of `to`\'s month.'),
+                    OpenApiParameter('to', OpenApiTypes.DATE, description='Default: today (UK).')]
+
+
+class ProfitAndLossView(APIView):
+    """Profit and loss (G54): income and expenses posted in the range, by account, and the net profit."""
+
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    @extend_schema(parameters=RANGE_PARAMETERS, responses=ProfitAndLossSerializer)
+    def get(self, request):
+        start, end = _range(request.query_params)
+        return Response(ProfitAndLossSerializer(profit_and_loss(request.user.company, start, end)).data)
+
+
+class BalanceSheetView(APIView):
+    """The balance sheet (G54) at the end of `on`: assets, liabilities, equity with profit to date."""
+
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    @extend_schema(parameters=[OpenApiParameter('on', OpenApiTypes.DATE, description='Default: today (UK).')],
+                   responses=BalanceSheetSerializer)
+    def get(self, request):
+        on = _strict_date(request.query_params, 'on') or uk_date()
+        return Response(BalanceSheetSerializer(balance_sheet(request.user.company, on)).data)
+
+
+class VatReturnView(APIView):
+    """The nine-box VAT return (G54) for a range, from the journal, with the return filed for it if any."""
+
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    @extend_schema(parameters=RANGE_PARAMETERS, responses=VatBoxesSerializer)
+    def get(self, request):
+        start, end = _range(request.query_params)
+        company = request.user.company
+        filed = VatReturn.objects.filter(company=company, period_start=start, period_end=end).first()
+        return Response(VatBoxesSerializer({**vat_boxes(company, start, end), 'filed': filed}).data)
+
+
+class VatReturnViewSet(OwnCompanyMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    """Filed VAT returns (G54), newest first; never changed. Staff file one for whole months that have ended: its
+    boxes are stored as they are and its months are locked."""
+
+    queryset = VatReturn.objects.all()
+    serializer_class = VatReturnSerializer
+
+    @extend_schema(request=DateRangeSerializer, responses={201: VatReturnSerializer})
+    def create(self, request, *args, **kwargs):
+        body = DateRangeSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        try:
+            filed = file_return(request.user.company, body.validated_data['from'], body.validated_data['to'],
+                                request.user)
+        except VatReturnError as error:
+            raise ValidationError({'detail': error.detail}) from None
+        return Response(VatReturnSerializer(filed).data, status=201)

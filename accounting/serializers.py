@@ -5,7 +5,7 @@ from rest_framework import serializers
 
 from common.tenancy import TenantModelSerializer
 
-from .models import Account, Journal, JournalLine, Period
+from .models import Account, Journal, JournalLine, Period, VatReturn
 
 
 class StrictDateField(serializers.DateField):
@@ -33,7 +33,7 @@ class MonthField(serializers.CharField):
 class AccountSerializer(TenantModelSerializer):
     class Meta:
         model = Account
-        fields = ['id', 'code', 'name', 'type', 'system_key', 'is_active', 'created_at']
+        fields = ['id', 'code', 'name', 'type', 'system_key', 'is_active', 'vat_purchases', 'created_at']
         read_only_fields = ['id', 'system_key', 'created_at']
 
     def validate(self, attrs):
@@ -155,3 +155,63 @@ class TrialBalanceSerializer(serializers.Serializer):
     rows = TrialBalanceRowSerializer(many=True)
     debit = serializers.DecimalField(max_digits=16, decimal_places=2)
     credit = serializers.DecimalField(max_digits=16, decimal_places=2)
+
+
+class DateRangeSerializer(serializers.Serializer):
+    def get_fields(self):  # ``from`` is a Python keyword
+        return {'from': StrictDateField(help_text='First UK day (YYYY-MM-DD).'),
+                'to': StrictDateField(help_text='Last UK day (YYYY-MM-DD).')}
+
+
+class ReportRowSerializer(serializers.Serializer):
+    account = serializers.IntegerField(allow_null=True)
+    code = serializers.CharField(allow_null=True)
+    name = serializers.CharField()
+    amount = serializers.DecimalField(max_digits=16, decimal_places=2)
+
+
+class ProfitAndLossSerializer(serializers.Serializer):
+    start = serializers.DateField()
+    end = serializers.DateField()
+    income = ReportRowSerializer(many=True)
+    expenses = ReportRowSerializer(many=True)
+    total_income = serializers.DecimalField(max_digits=16, decimal_places=2)
+    total_expenses = serializers.DecimalField(max_digits=16, decimal_places=2)
+    net_profit = serializers.DecimalField(max_digits=16, decimal_places=2)
+
+
+class BalanceSheetSerializer(serializers.Serializer):
+    on = serializers.DateField()
+    assets = ReportRowSerializer(many=True)
+    liabilities = ReportRowSerializer(many=True)
+    equity = ReportRowSerializer(many=True, help_text='With "Profit to date" (no year-end close yet).')
+    total_assets = serializers.DecimalField(max_digits=16, decimal_places=2)
+    total_liabilities = serializers.DecimalField(max_digits=16, decimal_places=2)
+    total_equity = serializers.DecimalField(max_digits=16, decimal_places=2)
+    total_liabilities_and_equity = serializers.DecimalField(max_digits=16, decimal_places=2)
+
+
+class VatReturnSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VatReturn
+        fields = ['id', 'period_start', 'period_end', 'box1', 'box2', 'box3', 'box4', 'box5', 'net_direction', 'box6',
+                  'box7', 'box8', 'box9', 'filed_by', 'filed_at']
+        read_only_fields = fields
+
+
+class VatBoxesSerializer(serializers.Serializer):
+    start = serializers.DateField()
+    end = serializers.DateField()
+    box1 = serializers.DecimalField(max_digits=16, decimal_places=2, help_text='VAT due on sales.')
+    box2 = serializers.DecimalField(max_digits=16, decimal_places=2, help_text='VAT due on EU acquisitions (0).')
+    box3 = serializers.DecimalField(max_digits=16, decimal_places=2, help_text='Boxes 1 + 2.')
+    box4 = serializers.DecimalField(max_digits=16, decimal_places=2, help_text='VAT reclaimed on purchases.')
+    box5 = serializers.DecimalField(max_digits=16, decimal_places=2, help_text='Net VAT, see `net_direction`.')
+    net_direction = serializers.ChoiceField(choices=VatReturn.DIRECTIONS)
+    box6 = serializers.DecimalField(max_digits=16, decimal_places=0, help_text='Sales ex VAT, whole pounds.')
+    box7 = serializers.DecimalField(max_digits=16, decimal_places=0, help_text='Purchases ex VAT, whole pounds.')
+    box8 = serializers.DecimalField(max_digits=16, decimal_places=0)
+    box9 = serializers.DecimalField(max_digits=16, decimal_places=0)
+    suspense = serializers.DecimalField(max_digits=16, decimal_places=2,
+                                        help_text='Net movement on Suspense in the period: check it before filing.')
+    filed = VatReturnSerializer(allow_null=True, help_text='The return filed for exactly this period, if any.')

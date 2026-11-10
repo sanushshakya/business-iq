@@ -216,6 +216,12 @@ def reopen_period(company, month, user, reason):
     last = locked_through(company)
     if last is None or month > last:
         raise JournalError(f'{month:%B %Y} is not locked.')
+    from .models import VatReturn
+
+    filed = VatReturn.objects.filter(company=company, period_end__gte=month).order_by('period_start').first()
+    if filed is not None:  # its figures are kept as filed: a correction goes in the current period
+        raise JournalError(f'{month:%B %Y} is in the VAT return filed for {filed.period_start:%m/%Y}–'
+                           f'{filed.period_end:%m/%Y}; post the correction in an open month.')
     now = timezone.now()
     # A month locked with an earlier lock may have no row yet. The month before stays locked (with it, every month
     # before that, which needs no row of its own).

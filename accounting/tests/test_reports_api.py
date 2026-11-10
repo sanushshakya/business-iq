@@ -55,8 +55,13 @@ class ReportsApiTests(VatReturnCase):
         again = self.member.get(reverse('vat-return'), self.range).json()
         self.assertEqual(again['filed']['id'], filed.json()['id'])
         self.assertEqual(self.api.post(reverse('vatreturn-list'), self.range, format='json').status_code, 400)
+        detail = reverse('vatreturn-detail', args=[filed.json()['id']])
+        for method in ('put', 'patch', 'delete'):
+            self.assertEqual(getattr(self.api, method)(detail, {}, format='json').status_code, 405)
         listed = self.member.get(reverse('vatreturn-list')).json()['results']
         self.assertEqual([row['id'] for row in listed], [filed.json()['id']])
+        self.assertEqual(self.api.post(reverse('vatreturn-list'), {'from': '1999-01-01', 'to': '1999-03-31'},
+                                       format='json').status_code, 400)
         self.assertEqual(self.api.post(reverse('vatreturn-list'), {'from': self.today.replace(day=1).isoformat(),
                                                                    'to': self.today.isoformat()},
                                        format='json').status_code, 400)

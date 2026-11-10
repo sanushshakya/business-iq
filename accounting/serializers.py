@@ -212,4 +212,6 @@ class VatBoxesSerializer(serializers.Serializer):
     box7 = serializers.DecimalField(max_digits=16, decimal_places=0, help_text='Purchases ex VAT, whole pounds.')
     box8 = serializers.DecimalField(max_digits=16, decimal_places=0)
     box9 = serializers.DecimalField(max_digits=16, decimal_places=0)
+    suspense = serializers.DecimalField(max_digits=16, decimal_places=2,
+                                        help_text='Net movement on Suspense in the period: check it before filing.')
     filed = VatReturnSerializer(allow_null=True, help_text='The return filed for exactly this period, if any.')

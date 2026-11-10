@@ -1,6 +1,6 @@
 """G54: the nine-box VAT return from the journal, reconciled to the documents; filing stores it and locks its months."""
 
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
@@ -56,7 +56,7 @@ class BoxTests(VatReturnCase):
         self.assertEqual(boxes['box7'], D('150'))  # 150.55, pence dropped; waste and wages left out
         self.assertEqual((boxes['box8'], boxes['box9']), (D('0'), D('0')))
 
-    def test_a_credit_note_and_a_later_void_reduce_the_period_they_fall_in(self):
+    def test_a_later_void_reduces_the_period_it_falls_in(self):
         sale = self.sale('card', [('standard', D('10.00'), D('2.00'))], day=self.today - timedelta(days=40))
         self.post_range(self.today - timedelta(days=40))
         Sale.objects.filter(pk=sale.pk).update(status='voided', voided_at=at(self.today))
@@ -82,6 +82,32 @@ class BoxTests(VatReturnCase):
         self.assertEqual(vat_boxes(self.company, *self.month())['box7'], D('40'))
 
 
+    def test_a_credit_note_reduces_boxes_1_and_6(self):
+        from wholesale.credit_notes import create_credit_note, issue_credit_note
+        from wholesale.returns import record_return
+        from wholesale.runs import complete_run, deliver, start_run
+
+        order = self.first.order
+        run = self.plan(order)
+        start_run(run, self.staff)
+        deliver(run.stops.get(), self.driver, received_by='Fake Chef')
+        complete_run(run, self.staff)
+        returned = record_return(order, self.staff, [
+            {'line': self.line(order, self.rice).pk, 'reason': 'not_wanted', 'quantity': 1}])
+        note = issue_credit_note(create_credit_note(returned, self.staff), self.staff)
+        self.post_range()
+        boxes = vat_boxes(self.company, *self.month())
+        invoices = [self.first, self.second]
+        self.assertEqual(boxes['box1'], sum(i.vat_total for i in invoices) - note.vat_total)
+        self.assertEqual(boxes['box6'], D(int(sum(i.net_total for i in invoices) - note.net_total)))
+
+    def test_suspense_in_the_period_is_flagged(self):
+        self.assertEqual(vat_boxes(self.company, *self.month())['suspense'], D('0.00'))
+        self.sale('cash', [(None, D('3.00'), D('0'))])  # before VAT was recorded: to Suspense
+        self.post_range()
+        self.assertEqual(vat_boxes(self.company, *self.month())['suspense'], D('-3.00'))
+
+
 class FilingTests(VatReturnCase):
     def setUp(self):
         super().setUp()
@@ -99,11 +125,55 @@ class FilingTests(VatReturnCase):
             with self.assertRaises(ValidationError):
                 attempt()
 
+    def test_filing_posts_what_is_not_posted_yet_first(self):
+        last_day = self.end
+        self.sale('cash', [('standard', D('10.00'), D('2.00'))], day=last_day)  # the nightly run has not run
+        filed = file_return(self.company, self.start, self.end, self.staff)
+        self.assertEqual((filed.box1, filed.box6), (D('2.00'), D('10')))
+
+    def test_a_posting_problem_stops_filing(self):
+        Account.objects.filter(company=self.company, system_key='wastage').update(system_key=None)
+        with self.assertRaises(VatReturnError):
+            file_return(self.company, self.start, self.end, self.staff)
+        self.assertFalse(VatReturn.objects.exists())
+
+    def test_a_filed_month_is_not_reopened(self):
+        from accounting.journal import reopen_period
+
+        filed = file_return(self.company, self.start, self.end, self.staff)
+        with self.assertRaises(JournalError):
+            reopen_period(self.company, self.start, self.staff, 'Fake late bill')
+        filed.refresh_from_db()
+        self.assertEqual((filed.box4, filed.box7), (D('2.00'), D('10')))
+
+    def test_filing_settles_into_vat_due_and_the_next_period_is_clean(self):
+        file_return(self.company, self.start, self.end, self.staff)
+        [settlement] = Journal.objects.filter(company=self.company, source='vat_return')
+        self.assertEqual(settlement.date, self.end)
+        self.assertEqual(sorted((line.account.system_key, line.debit, line.credit) for line in settlement.lines.all()),
+                         [('vat_hmrc', D('2.00'), D('0')), ('vat_input', D('0'), D('2.00'))])  # 2.00 to reclaim
+        # HMRC repays it this month; a new bill this month: only the new bill is in this month's boxes.
+        post_journal(self.company, date=self.today, narrative='Fake HMRC repayment', user=self.staff, lines=[
+            {'account': self.key('bank'), 'debit': D('2.00')}, {'account': self.key('vat_hmrc'), 'credit': D('2.00')}])
+        self.bill(D('30.00'), D('6.00'))
+        boxes = vat_boxes(self.company, *self.month())
+        self.assertEqual((boxes['box4'], boxes['box7']), (D('6.00'), D('30')))
+
+    def test_reversing_a_waste_reclassification_stays_out_of_box_7(self):
+        from accounting.journal import reverse_journal
+
+        self.write_off(D('3.10'))
+        self.post_range()
+        [waste] = Journal.objects.filter(company=self.company, source='write_off')
+        reverse_journal(waste, self.staff, 'Fake: found it', date=self.today)
+        self.assertEqual(vat_boxes(self.company, *self.month())['box7'], D('0'))
+
     def test_only_whole_ended_months_that_do_not_overlap(self):
         for start, end in ((self.start + timedelta(days=1), self.end),  # not from a 1st
                            (self.start, self.end - timedelta(days=1)),  # not to a month end
                            (self.today.replace(day=1), self.today),  # not over yet
-                           (self.end, self.start)):
+                           (self.end, self.start),
+                           (date(1999, 1, 1), date(1999, 3, 31))):  # before the books can go
             with self.subTest(start=start, end=end), self.assertRaises(VatReturnError):
                 file_return(self.company, start, end, self.staff)
         file_return(self.company, self.start, self.end, self.staff)

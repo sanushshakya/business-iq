@@ -51,3 +51,12 @@ class ChartTests(TestCase):
         self.assertEqual(Account.objects.filter(company=company).count(), len(DEFAULT_CHART) + 1)
         migration.remove_default_chart(django_apps, None)
         self.assertEqual(list(Account.objects.filter(company=company).values_list('code', flat=True)), ['6000'])
+
+
+    def test_the_vat_migration_flags_only_the_default_purchase_accounts(self):
+        migration = importlib.import_module('accounting.migrations.0003_vat_return')
+        company = CompanyFactory()
+        Account.objects.filter(company=company).update(vat_purchases=False)
+        migration.flag_purchase_accounts(django_apps, None)
+        self.assertEqual(set(Account.objects.filter(company=company, vat_purchases=True).values_list('code', flat=True)),
+                         {'5000', '5200', '7100', '7200', '7510'})

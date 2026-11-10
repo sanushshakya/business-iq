@@ -34,6 +34,8 @@ DEFAULT_CHART = [
     ('9999', 'Suspense', ASSET, 'suspense'),
 ]
 SYSTEM_KEYS = {key for *_rest, key in DEFAULT_CHART if key}
+# Counted in VAT return box 7 (G54): purchases and overheads that carry VAT or are zero-rated/exempt, not wages.
+VAT_PURCHASE_CODES = {'5000', '5200', '7100', '7200', '7510'}
 
 
 def ensure_default_chart(company, account_model=None):
@@ -46,7 +48,7 @@ def ensure_default_chart(company, account_model=None):
         keys = set(account_model.objects.filter(company=company).exclude(system_key=None)
                    .values_list('system_key', flat=True))
         new = [account_model(company=company, code=code, name=name, type=kind,
-                             system_key=key if key not in keys else None)
+                             system_key=key if key not in keys else None, vat_purchases=code in VAT_PURCHASE_CODES)
                for code, name, kind, key in DEFAULT_CHART if code not in have]
         account_model.objects.bulk_create(new)
     return len(new)

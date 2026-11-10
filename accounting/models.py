@@ -8,7 +8,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models
-from django.db.models import Q
+from django.db.models import F, Q
 from django.db.models.signals import pre_delete
 from django.dispatch import receiver
 
@@ -27,6 +27,7 @@ class Account(models.Model):
     system_key = models.CharField(max_length=30, null=True, blank=True, editable=False,
                                   help_text='What automatic postings (G53) find it by; kept active.')
     is_active = models.BooleanField(default=True)
+    vat_purchases = models.BooleanField(default=False, help_text='Counted in VAT return box 7 (purchases ex VAT).')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -161,6 +162,53 @@ class PeriodEvent(models.Model):
         ordering = ['-at', '-id']
 
 
+class VatReturn(models.Model):
+    """A filed VAT return (G54): the nine boxes as they were when staff marked it filed. Never changed; its months are
+    locked. Boxes 1-5 to the penny, 6-9 whole pounds; box 5 is the absolute net with ``net_direction``."""
+
+    PAY, RECLAIM = 'pay', 'reclaim'
+    DIRECTIONS = [(PAY, 'To pay'), (RECLAIM, 'To reclaim')]
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.PROTECT, related_name='vat_returns')
+    period_start = models.DateField()
+    period_end = models.DateField()
+    box1 = models.DecimalField(max_digits=14, decimal_places=2)
+    box2 = models.DecimalField(max_digits=14, decimal_places=2)
+    box3 = models.DecimalField(max_digits=14, decimal_places=2)
+    box4 = models.DecimalField(max_digits=14, decimal_places=2)
+    box5 = models.DecimalField(max_digits=14, decimal_places=2)
+    box6 = models.DecimalField(max_digits=14, decimal_places=0)
+    box7 = models.DecimalField(max_digits=14, decimal_places=0)
+    box8 = models.DecimalField(max_digits=14, decimal_places=0)
+    box9 = models.DecimalField(max_digits=14, decimal_places=0)
+    net_direction = models.CharField(max_length=7, choices=DIRECTIONS)
+    filed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                 related_name='+')
+    filed_at = models.DateTimeField(auto_now_add=True)
+
+    objects = FrozenQuerySet.as_manager()
+
+    class Meta:
+        base_manager_name = 'objects'
+        ordering = ['-period_start']
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'period_start'], name='unique_vat_return_start'),
+            models.CheckConstraint(condition=Q(period_end__gte=F('period_start')), name='vat_return_period_order'),
+        ]
+
+    def __str__(self):
+        return f'VAT return {self.period_start} to {self.period_end}'
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError('A filed VAT return is kept as it was.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError('A filed VAT return is kept as it was.')
+
+
+@receiver(pre_delete, sender=VatReturn)
 @receiver(pre_delete, sender=Journal)
 @receiver(pre_delete, sender=JournalLine)
 def _journals_are_kept(sender, instance, **kwargs):

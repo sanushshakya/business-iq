@@ -91,6 +91,7 @@ TENANT_LOOKUPS = {
     'accounting.JournalLine': 'journal__company',
     'accounting.Period': 'company',
     'accounting.PeriodEvent': 'period__company',
+    'accounting.VatReturn': 'company',
     'wholesale.ReminderItem': 'email__customer__company',
     'wholesale.InvoiceLine': 'invoice__company',
     'wholesale.DeliveryRun': 'company',

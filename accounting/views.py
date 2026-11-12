@@ -3,6 +3,7 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
+from rest_framework.negotiation import BaseContentNegotiation
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -278,12 +279,24 @@ def _export_range(params):
     return start, end
 
 
+class CsvNegotiation(BaseContentNegotiation):
+    """The exports always answer CSV, whatever the client's Accept header (DRF would 406 ``text/csv``)."""
+
+    def select_parser(self, request, parsers):
+        return parsers[0]
+
+    def select_renderer(self, request, renderers, format_suffix=None):
+        return renderers[0], renderers[0].media_type
+
+
 class JournalExportView(APIView):
-    """Every journal line in the range as CSV (G55), for the accountant; a totals row at the end."""
+    """Every journal line in the range as CSV (G55), for the accountant; a totals row at the end. Narratives and line
+    descriptions are as posted (manual ones are what staff typed)."""
 
     permission_classes = [CompanyMemberReadsStaffWrites]
+    content_negotiation_class = CsvNegotiation
 
-    @extend_schema(parameters=RANGE_PARAMETERS, responses=CSV_RESPONSE)
+    @extend_schema(parameters=RANGE_PARAMETERS, responses=CSV_RESPONSE, operation_id='accounting_exports_journals')
     def get(self, request):
         return journals_csv(request.user.company, *_export_range(request.query_params))
 
@@ -293,7 +306,8 @@ class VatExportView(APIView):
     and 7 before the return drops the pence)."""
 
     permission_classes = [CompanyMemberReadsStaffWrites]
+    content_negotiation_class = CsvNegotiation
 
-    @extend_schema(parameters=RANGE_PARAMETERS, responses=CSV_RESPONSE)
+    @extend_schema(parameters=RANGE_PARAMETERS, responses=CSV_RESPONSE, operation_id='accounting_exports_vat')
     def get(self, request):
         return vat_csv(request.user.company, *_export_range(request.query_params))

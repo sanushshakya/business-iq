@@ -7,4 +7,5 @@ def cell(text):
     """``text`` with a leading ``'`` when a spreadsheet would read it as a formula. Amounts are formatted numbers and
     go in as they are."""
     text = str(text)
-    return f"'{text}" if text[:1] in FORMULA_STARTS else text
+    # Spaces first do not stop some spreadsheets reading a formula.
+    return f"'{text}" if text.lstrip(' ')[:1] in FORMULA_STARTS and text.strip(' ') else text

@@ -95,3 +95,24 @@ class ExportTests(VatReturnCase):
         picker.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh_tokens.issue_token_pair(operator)['access_token']}")
         for name in ('export-journals', 'export-vat'):
             self.assertEqual(picker.get(reverse(name), self.range).status_code, 403)
+
+
+class ExportEdgeTests(ExportTests):
+    def test_vat_csv_escapes_text_and_keeps_to_its_company(self):
+        post_journal(self.company, date=self.today, narrative=' =HYPERLINK("http://example.test")', user=self.staff,
+                     lines=[{'account': Account.objects.get(company=self.company, code='5200'), 'debit': D('4.00')},
+                            {'account': self.key('creditors'), 'credit': D('4.00')}])
+        rows = self.download('export-vat')
+        [carriage] = [row for row in rows if row['Account'] == '5200']
+        self.assertTrue(carriage['Narrative'].startswith("'"))
+        stranger = APIClient()
+        stranger.force_authenticate(UserFactory(company=CompanyFactory(), is_staff=True, is_superuser=True))
+        theirs = list(csv.DictReader(io.StringIO(stranger.get(reverse('export-vat'), self.range).content.decode())))
+        self.assertEqual([(row['Box'], row['Journal'], row['Amount']) for row in theirs],
+                         [(box, 'Total', '0.00') for box in ('1', '4', '6', '7')])
+        self.assertEqual(self.api.get(reverse('export-vat'), {'from': '2024-01-01', 'to': '2025-06-30'}).status_code,
+                         400)
+
+    def test_a_client_asking_for_csv_gets_it(self):
+        answer = self.api.get(reverse('export-journals'), self.range, HTTP_ACCEPT='text/csv')
+        self.assertEqual((answer.status_code, answer['Content-Type']), (200, 'text/csv; charset=utf-8'))

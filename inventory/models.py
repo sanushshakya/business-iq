@@ -167,6 +167,13 @@ class Supplier(models.Model):
     name = models.CharField(max_length=255)
     contact_info = models.TextField()
     address = models.TextField()
+    # Ordering terms (G57): purchase orders are drafted to last until the delivery after next.
+    lead_time_days = models.PositiveSmallIntegerField(default=7, help_text='Days from ordering to delivery.')
+    order_cycle_days = models.PositiveSmallIntegerField(default=7, validators=[MinValueValidator(1)],
+                                                        help_text='How often we order from them, in days.')
+    min_order_value = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'),
+                                          validators=[MinValueValidator(Decimal('0'))],
+                                          help_text='Smallest order they take, ex VAT (0: none).')
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=['company', 'name'], name='unique_supplier_name_per_company')]

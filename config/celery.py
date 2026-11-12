@@ -69,6 +69,11 @@ app.conf.beat_schedule = {
         'task': 'accounting.postings.run_nightly',
         'schedule': crontab(hour=1, minute=30),
     },
+    # G57: purchase orders drafted from stock projections (never sent), after the night's postings.
+    'draft-purchase-orders-nightly': {
+        'task': 'purchasing.drafting.run_nightly',
+        'schedule': crontab(hour=3, minute=0),
+    },
     'deliver-storefront-events-every-30-seconds': {
         'task': 'sync.tasks.deliver_outbound_events',
         'schedule': 30.0,

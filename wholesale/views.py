@@ -17,6 +17,7 @@ from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from common.csv_safe import cell
 from common.tenancy import TenantScopedMixin
 from inventory.models import StockReservation
 from inventory.views import CompanyMemberReadsStaffWrites, Conflict
@@ -412,18 +413,13 @@ CSV_HEADINGS = ['Account', 'Customer', 'Current', '1-30 days', '31-60 days', '61
                 'Total']
 
 
-def _cell(text):
-    # A spreadsheet runs a cell starting with one of these as a formula.
-    return f"'{text}" if text[:1] in ('=', '+', '-', '@', '\t', '\r') else text
-
-
 def _aged_debtors_csv(data):
     answer = HttpResponse(content_type='text/csv; charset=utf-8')
     answer['Content-Disposition'] = f'attachment; filename="aged-debtors-{data["as_at"].isoformat()}.csv"'
     writer = csv.writer(answer)
     writer.writerow(CSV_HEADINGS)
     for row in data['customers']:
-        writer.writerow([_cell(row['account_code']), _cell(row['name'])]
+        writer.writerow([cell(row['account_code']), cell(row['name'])]
                         + [f'{row[name]:.2f}' for name in aged_debtors.COLUMNS])
     writer.writerow(['Total', ''] + [f'{data["totals"][name]:.2f}' for name in aged_debtors.COLUMNS])
     return answer

@@ -17,6 +17,7 @@ from vat.services import uk_date
 from . import journal as posting
 from .postings import run_postings
 from .reports import balance_sheet, profit_and_loss, trial_balance
+from .exports import journals_csv, vat_csv
 from .vat_return import VatReturnError, file_return, vat_boxes
 from .models import Account, Journal, JournalLine, Period, VatReturn
 from .serializers import (
@@ -265,3 +266,34 @@ class VatReturnViewSet(OwnCompanyMixin, mixins.ListModelMixin, mixins.RetrieveMo
         except VatReturnError as error:
             raise ValidationError({'detail': error.detail}) from None
         return Response(VatReturnSerializer(filed).data, status=201)
+
+
+CSV_RESPONSE = {(200, 'text/csv'): OpenApiTypes.STR}
+
+
+def _export_range(params):
+    start, end = _range(params)
+    if (end - start).days > 365:
+        raise ValidationError({'from': 'At most 366 days at a time.'})
+    return start, end
+
+
+class JournalExportView(APIView):
+    """Every journal line in the range as CSV (G55), for the accountant; a totals row at the end."""
+
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    @extend_schema(parameters=RANGE_PARAMETERS, responses=CSV_RESPONSE)
+    def get(self, request):
+        return journals_csv(request.user.company, *_export_range(request.query_params))
+
+
+class VatExportView(APIView):
+    """The journal lines behind VAT boxes 1, 4, 6 and 7 in the range as CSV (G55), each box with its total (boxes 6
+    and 7 before the return drops the pence)."""
+
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    @extend_schema(parameters=RANGE_PARAMETERS, responses=CSV_RESPONSE)
+    def get(self, request):
+        return vat_csv(request.user.company, *_export_range(request.query_params))

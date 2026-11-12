@@ -9,7 +9,7 @@ from django.test import TestCase
 
 from common.tests.factories import CompanyFactory, ProductFactory, UserFactory
 from demand_calendar.models import Event
-from inventory.models import ProductCategory, Supplier
+from inventory.models import Product, ProductCategory, Supplier
 from purchasing.drafting import draft_orders
 from purchasing.models import PurchaseOrder, PurchaseOrderLine, SupplierProduct
 
@@ -88,8 +88,8 @@ class ScenarioTests(DraftCase):
         self.draft()
         order = PurchaseOrder.objects.get()
         line = self.line(rice)
-        self.assertLessEqual(line.units, 2 * line.target)  # 6 packs = 30 units at most
-        self.assertEqual((line.packs, order.total_cost, order.below_minimum), (6, D('60.00'), True))
+        self.assertLessEqual(line.on_hand + line.units, 2 * line.target)  # 10 held + 4 packs = 30 at most
+        self.assertEqual((line.packs, order.total_cost, order.below_minimum), (4, D('40.00'), True))
 
 
 class RuleTests(DraftCase):
@@ -132,26 +132,79 @@ class RuleTests(DraftCase):
         self.draft()
         self.assertEqual(list(PurchaseOrderLine.objects.values_list('product__name', flat=True)), ['Fake Lamb Chops'])
 
-    def test_a_rerun_replaces_an_untouched_draft(self):
+    def test_a_rerun_rewrites_an_untouched_draft_keeping_its_number(self):
         product = self.product(rate='10', stock=40)
         self.draft()
         self.rates[product.pk] = D('20')
         summary = self.draft()
         order = PurchaseOrder.objects.get()
-        self.assertEqual((summary['replaced'], order.number), (1, 2))
+        self.assertEqual((summary['replaced'], order.number), (1, 1))
         self.assertEqual(self.line(product).target, 205)
+        self.rates[product.pk] = D('0')
+        Product.objects.filter(pk=product.pk).update(stock_quantity=500)
+        self.draft()  # nothing needed now: cancelled, its number kept
+        self.assertEqual(PurchaseOrder.objects.get().status, 'cancelled')
+        self.rates[product.pk] = D('100')
+        self.draft()
+        self.assertEqual(PurchaseOrder.objects.get(status='draft').number, 2)
 
-    def test_edited_and_approved_orders_are_kept_and_count_as_on_order(self):
+    def test_an_edited_draft_stands_for_its_supplier(self):
+        dates = self.product(rate='10', stock=40)
+        rice = self.product('Fake Rice', rate='10', stock=0)
+        self.draft()
+        order = PurchaseOrder.objects.get()
+        PurchaseOrderLine.objects.filter(order=order, product=rice).delete()  # the buyer took rice out
+        PurchaseOrder.objects.filter(pk=order.pk).update(edited=True, expected_on=TODAY - timedelta(days=5))
+        summary = self.draft(TODAY + timedelta(days=4))
+        self.assertEqual((summary['kept'], PurchaseOrder.objects.count()), (1, 1))  # rice does not come back
+        self.assertEqual(list(order.lines.values_list('product', flat=True)), [dates.pk])
+
+    def test_approved_orders_count_until_due_and_cancelled_ones_do_not(self):
         product = self.product(rate='10', stock=40)
         self.draft()
         first = PurchaseOrder.objects.get()
-        PurchaseOrder.objects.filter(pk=first.pk).update(edited=True)
-        summary = self.draft()
-        self.assertEqual(summary['kept'], 1)
-        self.assertEqual(PurchaseOrder.objects.count(), 1)  # 72 on order covers the 65 short
-        PurchaseOrder.objects.filter(pk=first.pk).update(status='approved', expected_on=TODAY - timedelta(days=1))
-        self.draft()  # its delivery date has passed: no longer on order
+        PurchaseOrder.objects.filter(pk=first.pk).update(status='approved', expected_on=TODAY + timedelta(days=3))
+        self.draft()
+        self.assertFalse(PurchaseOrder.objects.filter(status='draft').exists())  # 72 on order covers it
+        PurchaseOrder.objects.filter(pk=first.pk).update(expected_on=TODAY - timedelta(days=1))
+        self.draft()  # due date passed: no longer on order
         self.assertEqual(self.line(product).on_order, 0)
+        PurchaseOrder.objects.filter(pk=first.pk).update(status='cancelled', expected_on=TODAY + timedelta(days=3))
+        self.draft()
+        self.assertEqual(self.line(product).on_order, 0)
+
+    def test_top_up_counts_what_is_held_and_on_order(self):
+        Supplier.objects.filter(pk=self.supplier.pk).update(min_order_value=D('500.00'))
+        product = self.product(rate='10', stock=95, pack=10, cost='10.00')  # target 105: 10 short, 1 pack
+        self.draft()
+        line = self.line(product)
+        self.assertLessEqual(line.on_hand + line.units, 2 * line.target)  # at most 210 held
+        self.assertEqual((line.packs, line.order.below_minimum), (11, True))
+
+    def test_cultural_events_raise_demand_too(self):
+        from django.utils import timezone
+
+        from demand.models import CulturalEvent, EventProductKeyword
+
+        dates = self.product(rate='10', stock=40)
+        start = timezone.make_aware(timezone.datetime.combine(TODAY + timedelta(days=4), timezone.datetime.min.time()))
+        eid = CulturalEvent.objects.create(name='Fake Eid al-Adha', description='-', start_date=start,
+                                           end_date=start + timedelta(days=2))
+        EventProductKeyword.objects.create(cultural_event=eid, product=dates, keyword='dates')
+        self.draft()
+        line = self.line(dates)
+        self.assertEqual(line.target, 70 + 45 + 5)  # 3 days at the default ×1.5
+        self.assertIn('Fake Eid al-Adha', line.events)
+
+    def test_drafting_never_moves_stock(self):
+        from inventory.models import StockMovement
+
+        product = self.product(rate='10', stock=40)
+        before = StockMovement.objects.count()
+        self.draft()
+        self.assertEqual(StockMovement.objects.count(), before)
+        product.refresh_from_db()
+        self.assertEqual(product.stock_quantity, 40)
 
     def test_constraints(self):
         product = self.product(rate='1', stock=0)

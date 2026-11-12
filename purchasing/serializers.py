@@ -14,6 +14,16 @@ class SupplierProductSerializer(TenantModelSerializer):
         fields = ['id', 'supplier', 'supplier_name', 'product', 'product_name', 'pack_size', 'pack_cost', 'preferred']
         read_only_fields = ['id']
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        # Superusers are not scoped by the related fields: both sides must be the user's own company's.
+        company_id = self.context['request'].user.company_id
+        for field in ('supplier', 'product'):
+            row = attrs.get(field) or getattr(self.instance, field, None)
+            if row is not None and row.company_id != company_id:
+                raise serializers.ValidationError({field: 'Not one of yours.'})
+        return attrs
+
 
 class PurchaseOrderLineSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)

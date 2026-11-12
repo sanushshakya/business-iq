@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 from django.db import IntegrityError, transaction
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
@@ -13,7 +14,7 @@ from common.tenancy import TenantScopedMixin
 from inventory.views import CompanyMemberReadsStaffWrites
 from vat.services import uk_date
 
-from .drafting import draft_orders
+from .drafting import ZERO, draft_orders
 from .models import PurchaseOrder, PurchaseOrderLine, SupplierProduct
 from .serializers import (
     DraftSummarySerializer,
@@ -83,7 +84,9 @@ class PurchaseOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retr
     def _locked(self, statuses):
         order = self.get_object()
         with transaction.atomic():
-            order = PurchaseOrder.objects.select_for_update().get(pk=order.pk)
+            order = PurchaseOrder.objects.select_for_update().filter(pk=order.pk).first()
+            if order is None:  # a run took it meanwhile
+                raise Http404
             if order.status not in statuses:
                 raise ValidationError({'detail': f'This order is {order.get_status_display().lower()}.'})
         return order
@@ -107,11 +110,13 @@ class PurchaseOrderViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.Retr
                 line.delete()
             else:
                 line.packs = body.validated_data['packs']
-                line.line_cost = (line.pack_cost or 0) * line.packs
+                line.line_cost = (line.pack_cost or ZERO) * line.packs
                 line.save(update_fields=['packs', 'line_cost'])
             order.edited = True
-            order.total_cost = sum(item.line_cost for item in order.lines.all())
-            order.save(update_fields=['edited', 'total_cost'])
+            order.total_cost = sum((item.line_cost for item in order.lines.all()), ZERO)
+            minimum = order.supplier.min_order_value
+            order.below_minimum = bool(minimum) and order.total_cost < minimum
+            order.save(update_fields=['edited', 'total_cost', 'below_minimum'])
         return self._answer(order)
 
     @extend_schema(request=None, responses=PurchaseOrderSerializer)

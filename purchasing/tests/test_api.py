@@ -97,6 +97,33 @@ class PurchasingApiTests(DraftCase):
             self.assertEqual(picker.get(url).status_code, 403)
         self.assertTrue(SupplierProduct.objects.exists())
 
+    def test_a_superuser_links_only_their_own_supplier_and_product(self):
+        admin = APIClient()
+        admin.force_authenticate(UserFactory(company=self.company, is_staff=True, is_superuser=True))
+        elsewhere = CompanyFactory()
+        theirs = ProductFactory(company=elsewhere)
+        their_supplier = Supplier.objects.create(company=elsewhere, name='Fake Theirs', contact_info='-', address='-')
+        mine = ProductFactory(company=self.company)
+        url = reverse('supplierproduct-list')
+        for body in ({'supplier': self.supplier.pk, 'product': theirs.pk, 'pack_size': 1},
+                     {'supplier': their_supplier.pk, 'product': mine.pk, 'pack_size': 1}):
+            self.assertEqual(admin.post(url, body, format='json').status_code, 400)
+
+    def test_members_do_not_change_supplier_terms(self):
+        url = reverse('supplier-detail', args=[self.supplier.pk])
+        self.member.patch(url, {'min_order_value': '999.00', 'lead_time_days': 30}, format='json')
+        self.supplier.refresh_from_db()
+        self.assertEqual((self.supplier.min_order_value, self.supplier.lead_time_days), (D('0.00'), 3))
+
+    def test_approving_sets_when_it_is_due(self):
+        from vat.services import uk_date
+        from datetime import timedelta
+
+        self.drafted()
+        order = PurchaseOrder.objects.get()
+        approved = self.api.post(reverse('purchaseorder-approve', args=[order.pk]), {}, format='json').json()
+        self.assertEqual(approved['expected_on'], (uk_date() + timedelta(days=3)).isoformat())
+
     def test_beat_runs_the_drafting_task(self):
         import purchasing.tasks  # noqa: F401 - what the worker's autodiscovery imports
 

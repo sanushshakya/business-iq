@@ -97,9 +97,19 @@ class OrderSerializer(TenantModelSerializer):
 
 
 class SupplierSerializer(TenantModelSerializer):
+    ORDERING_TERMS = ['lead_time_days', 'order_cycle_days', 'min_order_value']
+
     class Meta:
         model = Supplier
         fields = '__all__'
+
+    def get_fields(self):
+        fields = super().get_fields()
+        user = getattr(self.context.get('request'), 'user', None)
+        if user is not None and not (user.is_staff or user.is_superuser):  # they drive purchase orders (G57)
+            for name in self.ORDERING_TERMS:
+                fields[name].read_only = True
+        return fields
 
 
 class SupplierNameSerializer(TenantModelSerializer):

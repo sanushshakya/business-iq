@@ -15,5 +15,7 @@ urlpatterns = [
     path('reports/profit-and-loss/', views.ProfitAndLossView.as_view(), name='profit-and-loss'),
     path('reports/balance-sheet/', views.BalanceSheetView.as_view(), name='balance-sheet'),
     path('vat-return/', views.VatReturnView.as_view(), name='vat-return'),
+    path('exports/journals.csv', views.JournalExportView.as_view(), name='export-journals'),
+    path('exports/vat.csv', views.VatExportView.as_view(), name='export-vat'),
     *router.urls,
 ]

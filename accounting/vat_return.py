@@ -39,19 +39,36 @@ def _pounds(amount):
     return amount.quantize(POUND, ROUND_DOWN)
 
 
-def vat_boxes(company, start, end):
+def box_lines(company, start, end):
+    """``{box: journal lines}`` behind boxes 1, 4, 6 and 7 (and Suspense, for checking), by journal date. The return
+    and the accountant's VAT export (G55) both read these, so they always agree."""
     lines = (JournalLine.objects.filter(journal__company=company, journal__date__gte=start, journal__date__lte=end)
              .exclude(journal__source=SETTLEMENT)
              .exclude(journal__lines__account__system_key='vat_hmrc'))  # paying or settling HMRC is not a supply
-    box1 = -_net(lines.filter(account__system_key='vat_output'))
+    return {
+        1: lines.filter(account__system_key='vat_output'),
+        4: lines.filter(account__system_key='vat_input'),
+        6: lines.filter(account__system_key__in=SALES_KEYS),
+        7: (lines.filter(account__vat_purchases=True).exclude(journal__source__in=RECLASSIFICATIONS)
+            .exclude(journal__reverses__source__in=RECLASSIFICATIONS)),
+        'suspense': lines.filter(account__system_key='suspense'),
+    }
+
+
+# Which way each box reads its lines: credits for sales and VAT on them, debits for purchases and VAT on them.
+BOX_SIGNS = {1: -1, 4: 1, 6: -1, 7: 1}
+
+
+def vat_boxes(company, start, end):
+    lines = box_lines(company, start, end)
+    box1 = -_net(lines[1])
     box2 = ZERO
     box3 = box1 + box2
-    box4 = _net(lines.filter(account__system_key='vat_input'))
+    box4 = _net(lines[4])
     net = box3 - box4
-    box6 = _pounds(-_net(lines.filter(account__system_key__in=SALES_KEYS)))
-    box7 = _pounds(_net(lines.filter(account__vat_purchases=True).exclude(journal__source__in=RECLASSIFICATIONS)
-                        .exclude(journal__reverses__source__in=RECLASSIFICATIONS)))
-    suspense = _net(lines.filter(account__system_key='suspense'))
+    box6 = _pounds(-_net(lines[6]))
+    box7 = _pounds(_net(lines[7]))
+    suspense = _net(lines['suspense'])
     return {'start': start, 'end': end, 'box1': box1, 'box2': box2, 'box3': box3, 'box4': box4, 'box5': abs(net),
             'net_direction': VatReturn.PAY if net >= 0 else VatReturn.RECLAIM, 'box6': box6, 'box7': box7,
             'box8': Decimal('0'), 'box9': Decimal('0'), 'suspense': suspense}

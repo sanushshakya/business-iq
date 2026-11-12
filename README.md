@@ -152,6 +152,9 @@ token lifetimes, login/refresh throttles, field-encryption keys, and the externa
 | Till | `/sales/sessions/` (open, `close`; summary with VAT by rate), `/sales/sales/` (ring up, `void`; each line stores net, VAT, gross and the rate used; weighed products send `weight_kg` and are priced kg × `price_per_kg`; a scanned scale or GS1 label is sent as `{barcode}` only and read on the server, charged at the label price and flagged (`label_price_flagged`) beyond the company's `label_price_tolerance_percent`; a typed `weight_kg` (no label) is marked `manual_weight` and limited to the company's `manual_weight_max_kg`, default 25; `vat_summary` for the receipt), `/sales/catalogue/?since=` (G26: what a till caches; branches carry the optional `code` (G27) tills put in their offline receipt numbers; `/sales/offline-sales/` (G28: POST the sales a till kept offline; recorded once each, never refused, differences become exceptions); `/sales/exceptions/` (G29, staff: review those differences, `.../resolve/`); to keep finding and pricing products offline — products changed or removed since the last cursor, plus VAT rates, barcode rules, tills, branches and till settings; everything when `since` is missing) |
 | VAT | `/vat/rates/` (read-only UK rates by code and start date; superusers change them in the admin) |
 | Settings | `/common/api/settings/` (per-company key/value; staff write) |
+| Trade (B2B) | `/wholesale/customers/` (ledger, open items, credit, statements, `aged-debtors/`), `price-lists/`, `orders/`, `invoices/`, `credit-notes/`, `payments/`, `runs/`, `customer-emails/` — see CLAUDE.md (G38–G51) |
+| Accounting | `/accounting/accounts/`, `journals/`, `periods/`, `postings/run/`, `trial-balance/`, `reports/profit-and-loss/`, `reports/balance-sheet/`, `vat-return/`, `vat-returns/`, `exports/journals.csv`, `exports/vat.csv` (G52–G55) |
+| Purchasing | `/purchasing/supplier-products/`, `/purchasing/orders/` (`draft/`, `lines/{id}/`, `approve/`, `cancel/`); supplier ordering terms on `/inventory/suppliers/` (G57; drafts only, never sent) |
 | Shopify / sync | `/sync/shopify-connections/`, `/sync/tasks/` |
 
 Full, always-current reference with request and response shapes: `/api/docs/`.
@@ -190,6 +193,11 @@ linked products m18 would refuse, and ends with `Ready: yes` or the reasons it i
 | `pricing.propose_decay_markdowns` | daily 02:00 | Proposes markdowns for stock nearing expiry, as pending price changes |
 | `pricing.sync_approved_prices` | every 15 min | Pushes approved prices to Shopify |
 | `authentication.prune_refresh_tokens` | daily 03:15 | Deletes long-dead refresh tokens |
+| `wholesale.statements.run_monthly_statements` | 1st–6th 07:00 | Last month's statement PDF to each trade customer that takes them (once; the 2nd–6th catch up a missed 1st) |
+| `wholesale.reminders.run_reminders` | daily 08:00 | Payment reminders 3 days before and 7 and 14 days after due, one email per customer, never twice |
+| `wholesale.customer_emails.sweep_customer_emails` | every 15 min | Re-queues statement/reminder emails still queued; gives up after 3 days |
+| `accounting.postings.run_nightly` | daily 01:30 | Posts the last 7 days' till takings, customer documents, waste and butchery loss to the journal (once each) |
+| `purchasing.drafting.run_nightly` | daily 03:00 | Drafts one purchase order per supplier from stock projections and demand events (never sent) |
 
 Emails (invitations, password resets) are sent with Django's mail settings (`EMAIL_*`); by default they are printed to the console.
 Uploaded invoices are kept under `MEDIA_ROOT` and are only downloadable through the authenticated endpoint.

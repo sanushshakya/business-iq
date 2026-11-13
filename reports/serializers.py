@@ -24,7 +24,7 @@ class DashboardQuerySerializer(serializers.Serializer):
         return day
 
 
-class _Place(serializers.Serializer):
+class DashboardPlaceSerializer(serializers.Serializer):
     branch = serializers.IntegerField(allow_null=True)
     branch_name = serializers.CharField()
     location = serializers.IntegerField(allow_null=True)
@@ -32,7 +32,7 @@ class _Place(serializers.Serializer):
     location_name = serializers.CharField(allow_null=True)
 
 
-class SalesRowSerializer(_Place):
+class SalesRowSerializer(DashboardPlaceSerializer):
     channel = serializers.ChoiceField(choices=['till', 'trade', 'online'])
     net = _money(help_text='Ex VAT.')
     costed_net = _money(help_text='Sales whose stock had a known cost.')
@@ -44,7 +44,7 @@ class SalesRowSerializer(_Place):
     kg = _kg()
 
 
-class WasteRowSerializer(_Place):
+class WasteRowSerializer(DashboardPlaceSerializer):
     count = serializers.IntegerField()
     units = serializers.IntegerField()
     kg = _kg()
@@ -52,7 +52,7 @@ class WasteRowSerializer(_Place):
     uncosted = serializers.IntegerField(help_text='Write-offs with no known cost.')
 
 
-class StockRowSerializer(_Place):
+class StockRowSerializer(DashboardPlaceSerializer):
     value = _money(help_text='Costed stock at the end of the period.')
     uncosted_units = serializers.IntegerField()
     uncosted_kg = _kg()
@@ -69,7 +69,7 @@ class TotalsSerializer(serializers.Serializer):
     stock_value = _money()
 
 
-class PeriodSerializer(serializers.Serializer):
+class DashboardPeriodSerializer(serializers.Serializer):
     start = serializers.DateField()
     end = serializers.DateField()
     sales = SalesRowSerializer(many=True)
@@ -84,5 +84,5 @@ class DashboardSerializer(serializers.Serializer):
     previous_start = serializers.DateField()
     previous_end = serializers.DateField()
     days = serializers.IntegerField()
-    current = PeriodSerializer()
-    previous = PeriodSerializer()
+    current = DashboardPeriodSerializer()
+    previous = DashboardPeriodSerializer()

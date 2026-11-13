@@ -78,10 +78,12 @@ def replay_value(company, until):
         held[movement.batch_id] = (units + sign * movement.quantity, kg + sign * (movement.weight_kg or 0))
     values = {}
     for batch in StockBatch.objects.filter(pk__in=held).select_related('product', 'location'):
-        if batch.location.type in ('supplier', 'customer', 'waste', 'adjustment') or batch.unit_cost is None:
+        if batch.location.type in ('supplier', 'customer', 'waste', 'adjustment'):
             continue
         units, kg = held[batch.pk]
         amount = kg if batch.product.is_weighed else units
-        values[batch.location.code] = values.get(batch.location.code, D('0')) + (amount * batch.unit_cost).quantize(
-            D('0.01'))
+        if not units and not kg:
+            continue
+        value = D('0') if batch.unit_cost is None else (amount * batch.unit_cost).quantize(D('0.01'))
+        values[batch.location.code] = values.get(batch.location.code, D('0')) + value  # uncosted stock: 0, listed
     return values

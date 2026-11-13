@@ -32,7 +32,7 @@ class DashboardPlaceSerializer(serializers.Serializer):
     location_name = serializers.CharField(allow_null=True)
 
 
-class SalesRowSerializer(DashboardPlaceSerializer):
+class DashboardSalesRowSerializer(DashboardPlaceSerializer):
     channel = serializers.ChoiceField(choices=['till', 'trade', 'online'])
     net = _money(help_text='Ex VAT.')
     costed_net = _money(help_text='Sales whose stock had a known cost.')
@@ -44,7 +44,7 @@ class SalesRowSerializer(DashboardPlaceSerializer):
     kg = _kg()
 
 
-class WasteRowSerializer(DashboardPlaceSerializer):
+class DashboardWasteRowSerializer(DashboardPlaceSerializer):
     count = serializers.IntegerField()
     units = serializers.IntegerField()
     kg = _kg()
@@ -52,13 +52,13 @@ class WasteRowSerializer(DashboardPlaceSerializer):
     uncosted = serializers.IntegerField(help_text='Write-offs with no known cost.')
 
 
-class StockRowSerializer(DashboardPlaceSerializer):
+class DashboardStockRowSerializer(DashboardPlaceSerializer):
     value = _money(help_text='Costed stock at the end of the period.')
     uncosted_units = serializers.IntegerField()
     uncosted_kg = _kg()
 
 
-class TotalsSerializer(serializers.Serializer):
+class DashboardTotalsSerializer(serializers.Serializer):
     net = _money()
     costed_net = _money()
     cost = _money()
@@ -72,10 +72,10 @@ class TotalsSerializer(serializers.Serializer):
 class DashboardPeriodSerializer(serializers.Serializer):
     start = serializers.DateField()
     end = serializers.DateField()
-    sales = SalesRowSerializer(many=True)
-    waste = WasteRowSerializer(many=True)
-    stock = StockRowSerializer(many=True)
-    totals = TotalsSerializer()
+    sales = DashboardSalesRowSerializer(many=True)
+    waste = DashboardWasteRowSerializer(many=True)
+    stock = DashboardStockRowSerializer(many=True)
+    totals = DashboardTotalsSerializer()
 
 
 class DashboardSerializer(serializers.Serializer):

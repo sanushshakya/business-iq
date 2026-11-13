@@ -67,3 +67,32 @@ class OfflinePromotionTests(test_offline_sync.OfflineSyncTestCase):
         [result] = self.send(self.offline(self.basket(['1.86', '0.75', '0.89']), minutes_ago=60 * 26))
         self.assertEqual(self.kinds(result['sale']), [])
         self.assertTrue(SalePromotion.objects.exists())
+
+    def test_each_line_and_promotion_judged_on_its_own(self):
+        crisps_deal = Promotion.objects.create(company=self.company, name='Fake 3 for £2.50', kind='multi_buy',
+                                               buy_quantity=3, deal_price=D('2.50'),
+                                               starts_on=uk_date() - timedelta(days=1))
+        crisps_deal.products.add(self.crisps)
+        bogof = Promotion.objects.create(company=self.company, name='Fake BOGOF', kind='bogof', buy_quantity=1,
+                                         get_quantity=1, starts_on=uk_date() - timedelta(days=1))
+        bogof.products.add(self.rice)  # the till's catalogue did not have this one yet
+        [result] = self.send(self.offline([{'product': self.crisps.pk, 'quantity': 3, 'charged': '2.50'},
+                                           self.rice_line(2)]))
+        self.assertEqual(self.kinds(result['sale']), ['price'])  # the rice line only
+        crisps = SaleItem.objects.get(product=self.crisps)
+        self.assertEqual((crisps.discount, crisps.unit_price), (D('0.50'), D('1.00')))
+        self.assertEqual(SaleItem.objects.get(product=self.rice).discount, D('0'))
+        self.assertEqual(list(SalePromotion.objects.values_list('name', 'saving')), [('Fake 3 for £2.50', D('0.50'))])
+
+    def test_a_label_that_no_longer_reads_is_still_a_label(self):
+        from inventory.models import Product, ProductCategory
+
+        drinks = ProductCategory.objects.create(name=f'Fake drinks {self.company.pk}')
+        Product.objects.filter(pk=self.cola.pk).update(category=drinks)
+        percent = Promotion.objects.create(company=self.company, name='Fake 10% off', kind='category_percent',
+                                           percent=D('10.00'), starts_on=uk_date() - timedelta(days=1))
+        percent.categories.add(drinks)
+        # The till never discounts a scanned label; the server must not either, even when it can't read it now.
+        [result] = self.send(self.offline([{'product': self.cola.pk, 'barcode': '2100000000001', 'charged': '1.20'}]))
+        self.assertEqual(self.kinds(result['sale']), ['label'])
+        self.assertFalse(SalePromotion.objects.exists())

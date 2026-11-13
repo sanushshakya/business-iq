@@ -301,11 +301,11 @@ class _Line:
     discount: Decimal = Decimal('0.00')  # promotions (G58): taken off ``total`` already
 
 
-def engine_line(key, product, quantity, weight, total, label):
-    """A sale line as the promotion engine takes it (gross before any discount)."""
+def engine_line(key, product, quantity, weight, total, labelled):
+    """A sale line as the promotion engine takes it (gross before any discount; ``labelled``: a scanned label)."""
     return EngineLine(key=key, product=product.pk, category=product.category_id,
                       quantity=1 if weight is not None else quantity, gross=total, weighed=weight is not None,
-                      label=label is not None)
+                      label=labelled)
 
 
 def apply_promotions(plan, company_id, branch_id, day):
@@ -313,7 +313,7 @@ def apply_promotions(plan, company_id, branch_id, day):
     promotions = active_promotions(company_id, branch_id, day)
     if not promotions:
         return plan, []
-    result = apply([engine_line(index, line.product, line.quantity, line.weight, line.total, line.label)
+    result = apply([engine_line(index, line.product, line.quantity, line.weight, line.total, line.label is not None)
                     for index, line in enumerate(plan)], promotions)
     plan = [replace(line, total=line.total - result.discounts[index], discount=result.discounts[index])
             if index in result.discounts else line for index, line in enumerate(plan)]

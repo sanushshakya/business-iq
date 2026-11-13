@@ -8,7 +8,7 @@ import pytest
 
 FIXTURES = Path(__file__).parents[1] / 'promotion_fixtures.json'
 FE_COPY = Path(__file__).resolve().parents[3] / 'fe' / 'src' / 'utils' / 'promotion_fixtures.json'
-FIXTURES_SHA256 = '6d7bdc634267230fd9446c919bdb280dadd7ed62d7751a2830e0a773bf0ca171'
+FIXTURES_SHA256 = 'e08e018d93ef1b3bf65ef497ed197bfbb7f3f21aaf40185a94a6f835844db40e'
 
 
 def test_fixture_checksum():

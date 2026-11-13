@@ -11,10 +11,12 @@ Rules (workspace spec ``docs/superpowers/specs/2026-11-13-g58-till-promotions-de
   Scanned-label lines are never discounted (the label's price wins), weighed lines only by ``category_percent``.
 - Each unit is used by at most one promotion. Promotions are tried by priority, highest first; within a priority the
   one that saves most right now goes first (then the lower id), and each applies as many times as it can.
-  Units are matched most expensive first (then basket order), and a deal applies only when it saves money.
+  Units are matched most expensive first (equal prices by product id, then basket order, so the answer does not
+  depend on the order things were scanned), and a deal applies only when it saves money.
 - ``stacks`` (``category_percent`` only) promotions apply after all the others, on what is left of each line;
   a line gets at most one (highest priority, then percent, then lower id).
-- A deal's saving is spread over its units by price in whole pence (largest remainder, ties to the earlier unit);
+- A deal's saving is spread over its units by price in whole pence (largest remainder; ties by product id, then the
+  earlier unit);
   a percent is taken per line, half-up to the penny. Discounts are gross (VAT-inclusive), so the caller lowers each
   line before splitting its VAT.
 """
@@ -60,6 +62,7 @@ class Applied:
     kind: str
     times: int
     saving: Decimal
+    lines: tuple = ()  # keys of the lines it took something off
 
 
 @dataclass
@@ -98,7 +101,7 @@ def _units(lines):
 
 
 def _by_price(units):
-    return sorted(units, key=lambda unit: (-unit.pence, unit.order))
+    return sorted(units, key=lambda unit: (-unit.pence, unit.product, unit.order))
 
 
 def _spread(saving, units):
@@ -106,7 +109,7 @@ def _spread(saving, units):
     total = sum(unit.pence for unit in units)
     shares = [(unit, saving * unit.pence // total, saving * unit.pence % total) for unit in units]
     spare = saving - sum(share for _, share, _ in shares)
-    ranked = sorted(range(len(shares)), key=lambda i: (-shares[i][2], shares[i][0].order))
+    ranked = sorted(range(len(shares)), key=lambda i: (-shares[i][2], shares[i][0].product, shares[i][0].order))
     extra = set(ranked[:spare])
     return [(unit, share + (1 if i in extra else 0)) for i, (unit, share, _) in enumerate(shares)]
 
@@ -132,20 +135,18 @@ def _plan_sets(promotion, units):
 
 
 def _plan_meal_deals(promotion, units):
-    taken, sets = set(), []
-    while True:
-        chosen = []
-        for group in promotion.groups:
-            candidates = [u for u in _by_price(units) if not u.used and not u.weighed and u.order not in taken
-                          and u.product in group]
-            if not candidates:
-                return sets
-            chosen.append(candidates[0])
+    """One item from each group, most expensive first, while a deal saves money. A product is in one group only, so
+    each group's candidates are sorted once and taken in turn."""
+    queues = [_by_price([u for u in units if not u.used and not u.weighed and u.product in group])
+              for group in promotion.groups]
+    sets = []
+    for depth in range(min((len(queue) for queue in queues), default=0)):
+        chosen = [queue[depth] for queue in queues]
         saving = sum(u.pence for u in chosen) - _pence(promotion.deal_price)
         if saving <= 0:
-            return sets
-        taken.update(u.order for u in chosen)
+            break  # later deals are cheaper still
         sets.append((chosen, saving))
+    return sets
 
 
 def _percent_of(pence, percent):
@@ -197,8 +198,10 @@ def apply(lines, promotions):
                         off[unit.line] += share
                 for unit in chosen:
                     unit.used = True
+            touched = sorted({unit.line for chosen, _ in plans for unit in chosen})
             result.applied.append(Applied(promotion.id, promotion.name, promotion.kind, len(plans),
-                                          Decimal(sum(s for _, s in plans)) / 100))
+                                          Decimal(sum(s for _, s in plans)) / 100,
+                                          tuple(lines[i].key for i in touched)))
 
     stacking = sorted((p for p in promotions if p.kind == CATEGORY_PERCENT and p.stacks),
                       key=lambda p: (-p.priority, -p.percent, p.id))
@@ -212,15 +215,17 @@ def apply(lines, promotions):
         saving = _percent_of(_pence(line.gross) - off[index], promotion.percent)
         if saving > 0:
             off[index] += saving
-            times, total = stacked.get(promotion, (0, 0))
-            stacked[promotion] = (times + 1, total + saving)
+            times, total, keys = stacked.get(promotion, (0, 0, ()))
+            stacked[promotion] = (times + 1, total + saving, keys + (line.key,))
     for promotion in stacking:
         if promotion in stacked:
-            times, total = stacked[promotion]
-            result.applied.append(Applied(promotion.id, promotion.name, promotion.kind, times, Decimal(total) / 100))
+            times, total, keys = stacked[promotion]
+            result.applied.append(Applied(promotion.id, promotion.name, promotion.kind, times, Decimal(total) / 100,
+                                          keys))
 
     for index, line in enumerate(lines):
         if off[index]:
             result.discounts[line.key] = (Decimal(off[index]) / 100).quantize(CENTS)
-    result.applied = [Applied(a.promotion, a.name, a.kind, a.times, a.saving.quantize(CENTS)) for a in result.applied]
+    result.applied = [Applied(a.promotion, a.name, a.kind, a.times, a.saving.quantize(CENTS), a.lines)
+                      for a in result.applied]
     return result

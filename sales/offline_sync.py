@@ -218,20 +218,22 @@ def record_offline_sale(user, data):
                                       'include it.'}))
 
     # Promotions (G58): what the server would take off each line on the sale's day at its branch, today's
-    # definitions. A line charged that way keeps its discount; any other line is a price exception as before.
+    # definitions. Each line charged that way keeps its discount; any other line is a price exception as before.
+    # A line sent with a barcode is a label, as on the till, even if the label no longer reads.
     listed = [None if product.is_weighed != (weight is not None) else _expected(product, quantity, weight, label)
               for product, quantity, weight, label, *_ in lines]
     promotions = active_promotions(company.pk, branch.pk, day)
     result = apply_promotions(
-        [engine_line(index, product, quantity, weight, listed[index], label)
-         for index, (product, quantity, weight, label, *_) in enumerate(lines) if listed[index] is not None],
+        [engine_line(index, product, quantity, weight, listed[index], bool(item.get('barcode')))
+         for index, (product, quantity, weight, label, _problem, item, _rate) in enumerate(lines)
+         if listed[index] is not None],
         promotions) if promotions else None
     off = result.discounts if result else {}
-    matched = all(listed[index] - amount == lines[index][5]['charged'] for index, amount in off.items())
+    matched = {index for index, amount in off.items() if listed[index] - amount == lines[index][5]['charged']}
 
     for index, (product, quantity, weight, label, label_problem, item, rate) in enumerate(lines):
         charged = item['charged']
-        discount = off.get(index, Decimal('0.00')) if matched else Decimal('0.00')
+        discount = off[index] if index in matched else Decimal('0.00')
         changed = product.is_weighed != (weight is not None)  # sold by each/weight then, the other way now
         typed = weight is not None and not item.get('barcode')
         net, vat = split_inclusive(charged, rate)
@@ -278,8 +280,8 @@ def record_offline_sale(user, data):
 
     for line, kind, fields in exceptions:
         SaleException.objects.create(sale=sale, item=line, kind=kind, **fields)
-    if result and matched:
-        record_promotions(sale, result.applied)
+    if result:  # a promotion is recorded when every line it touched was charged its way
+        record_promotions(sale, [a for a in result.applied if all(key in matched for key in a.lines)])
 
     if voided:
         void = data['void']

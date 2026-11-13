@@ -1360,6 +1360,150 @@
     "discounts": {},
     "applied": []
    }
+  },
+  {
+   "name": "ties_by_product_not_basket_order",
+   "note": "2 for 3.00 on A and B (both 2.00), 10% off A's category below it: equal prices go by product, so A and B make the set (1.00 off, 50p each) whatever the order; the spare B is not in the category",
+   "lines": [
+    {
+     "key": "b",
+     "product": 2,
+     "category": 11,
+     "quantity": 2,
+     "gross": "4.00",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "a",
+     "product": 1,
+     "category": 10,
+     "quantity": 1,
+     "gross": "2.00",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 1,
+     "name": "2 for £3",
+     "kind": "multi_buy",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": 2,
+     "get_quantity": null,
+     "deal_price": "3.00",
+     "percent": null,
+     "products": [
+      1,
+      2
+     ],
+     "categories": [],
+     "groups": []
+    },
+    {
+     "id": 4,
+     "name": "10% off",
+     "kind": "category_percent",
+     "priority": -1,
+     "stacks": false,
+     "buy_quantity": null,
+     "get_quantity": null,
+     "deal_price": null,
+     "percent": "10.00",
+     "products": [],
+     "categories": [
+      10
+     ],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "0.50",
+     "b": "0.50"
+    },
+    "applied": [
+     {
+      "promotion": 1,
+      "times": 1,
+      "saving": "1.00"
+     }
+    ]
+   }
+  },
+  {
+   "name": "ties_by_product_reversed",
+   "note": "the same basket in the other order: the same answer",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": 10,
+     "quantity": 1,
+     "gross": "2.00",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "b",
+     "product": 2,
+     "category": 11,
+     "quantity": 2,
+     "gross": "4.00",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 1,
+     "name": "2 for £3",
+     "kind": "multi_buy",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": 2,
+     "get_quantity": null,
+     "deal_price": "3.00",
+     "percent": null,
+     "products": [
+      1,
+      2
+     ],
+     "categories": [],
+     "groups": []
+    },
+    {
+     "id": 4,
+     "name": "10% off",
+     "kind": "category_percent",
+     "priority": -1,
+     "stacks": false,
+     "buy_quantity": null,
+     "get_quantity": null,
+     "deal_price": null,
+     "percent": "10.00",
+     "products": [],
+     "categories": [
+      10
+     ],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "0.50",
+     "b": "0.50"
+    },
+    "applied": [
+     {
+      "promotion": 1,
+      "times": 1,
+      "saving": "1.00"
+     }
+    ]
+   }
   }
  ]
 }

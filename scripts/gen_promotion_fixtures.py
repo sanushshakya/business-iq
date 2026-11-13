@@ -102,6 +102,18 @@ cases = [
          [MB(products=[1]), promo(4, 'category_percent', 'Half price', percent='50.00', categories=[10])],
          {'a': '3.00'}, [(4, 1, '3.00')]),
     case('no_promotions', 'nothing applies', [line('a', 1, '1.00')], [], {}, []),
+    case('ties_by_product_not_basket_order',
+         '2 for 3.00 on A and B (both 2.00), 10% off A\'s category below it: equal prices go by product, so A and B '
+         'make the set (1.00 off, 50p each) whatever the order; the spare B is not in the category',
+         [line('b', 2, '4.00', 2, category=11), line('a', 1, '2.00', category=10)],
+         [promo(1, 'multi_buy', '2 for £3', buy=2, price='3.00', products=[1, 2]),
+          promo(4, 'category_percent', '10% off', priority=-1, percent='10.00', categories=[10])],
+         {'a': '0.50', 'b': '0.50'}, [(1, 1, '1.00')]),
+    case('ties_by_product_reversed', 'the same basket in the other order: the same answer',
+         [line('a', 1, '2.00', category=10), line('b', 2, '4.00', 2, category=11)],
+         [promo(1, 'multi_buy', '2 for £3', buy=2, price='3.00', products=[1, 2]),
+          promo(4, 'category_percent', '10% off', priority=-1, percent='10.00', categories=[10])],
+         {'a': '0.50', 'b': '0.50'}, [(1, 1, '1.00')]),
 ]
 
 json.dump({'cases': cases}, open(sys.argv[1], 'w'), indent=1, ensure_ascii=False)

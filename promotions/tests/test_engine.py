@@ -47,3 +47,16 @@ def test_a_discount_never_exceeds_its_line():
     assert result.discounts == {'a': Decimal('0.02')}
     free = EngineLine('z', 1, None, 2, Decimal('0.00'))
     assert apply([free], [deal]).discounts == {}  # nothing to save on free items
+
+
+def test_big_quantities_stay_fast():
+    import time
+
+    lines = [EngineLine(key, product, None, 10000, Decimal('10000.00')) for key, product in (('a', 1), ('b', 2), ('c', 3))]
+    deal = EnginePromotion(2, 'Meal deal', 'meal_deal', 0, False, None, None, Decimal('2.50'), None, frozenset(),
+                           frozenset(), (frozenset({1}), frozenset({2}), frozenset({3})))
+    started = time.perf_counter()
+    result = apply(lines, [deal])
+    assert time.perf_counter() - started < 1.5
+    assert result.applied[0].times == 10000
+    assert result.discounts == {'a': Decimal('1700.00'), 'b': Decimal('1700.00'), 'c': Decimal('1600.00')}  # 17p, 17p, 16p a deal

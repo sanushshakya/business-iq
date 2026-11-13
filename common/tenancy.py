@@ -95,6 +95,8 @@ TENANT_LOOKUPS = {
     'purchasing.SupplierProduct': 'supplier__company',
     'purchasing.PurchaseOrder': 'company',
     'purchasing.PurchaseOrderLine': 'order__company',
+    'promotions.Promotion': 'company',
+    'promotions.PromotionGroup': 'promotion__company',
     'wholesale.ReminderItem': 'email__customer__company',
     'wholesale.InvoiceLine': 'invoice__company',
     'wholesale.DeliveryRun': 'company',

@@ -80,6 +80,7 @@ INSTALLED_APPS = [
     "vat",
     "accounting",
     "purchasing",
+    "promotions",
     "wholesale",
 ]
 

@@ -154,6 +154,7 @@ SPECTACULAR_SETTINGS = {
         "ReturnReasonEnum": "wholesale.models.ReturnLine.REASONS",
         "DocumentStatusEnum": "wholesale.models.Invoice.STATUSES",  # invoices and credit notes
         "LedgerEntryKindEnum": "wholesale.models.LedgerEntry.KINDS",
+        "PromotionKindEnum": "promotions.models.Promotion.KINDS",
         "WriteOffReasonEnum": "inventory.models.WriteOff.REASONS",
     },
 }

@@ -85,7 +85,7 @@ class TillSessionViewSet(
 class SaleViewSet(TenantScopedMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
     """Sales rung up at tills. Creating one takes stock; voiding one puts it back."""
 
-    queryset = Sale.objects.select_related('session__till__branch', 'cashier').prefetch_related('items')
+    queryset = Sale.objects.select_related('session__till__branch', 'cashier').prefetch_related('items', 'promotions')
     serializer_class = SaleSerializer
 
     def get_queryset(self):

@@ -17,8 +17,10 @@ from django.utils.dateparse import parse_datetime
 
 from common.services.settings_service import get_company_setting
 from inventory.models import BarcodeRule, Product, ProductRemoval
+from promotions.services import catalogue_promotions
 from tenants.models import Branch, Till
 from vat.models import VatRate
+from vat.services import uk_date
 
 from .services import manual_weight_limit
 
@@ -74,4 +76,5 @@ def catalogue(user, since=None):
         'tills': Till.objects.filter(branch__company=company, is_active=True).order_by('branch_id', 'number'),
         'branches': Branch.objects.filter(company=company).order_by('name'),
         'settings': till_settings(company.pk),
+        'promotions': catalogue_promotions(company.pk, uk_date()),
     }

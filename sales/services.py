@@ -10,7 +10,7 @@ affected rows locked, so two tills cannot sell the same last unit.
 """
 
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import transaction
@@ -23,10 +23,12 @@ from inventory.ledger import (
 )
 from inventory.models import Location, Product, StockBatch
 from common.services.settings_service import get_company_setting
+from promotions.engine import EngineLine, apply
+from promotions.services import active_promotions
 from sync.outbox import active_connection, emit
 from vat.services import NoVatRate, rate_for, split_inclusive, uk_date
 
-from .models import Sale, SaleAllocation, SaleItem, TillSession
+from .models import Sale, SaleAllocation, SaleItem, SalePromotion, TillSession
 
 CENTS = Decimal('0.01')
 # A scanned label's price further than this from today's price is charged but flagged (G18).
@@ -230,6 +232,7 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
                                            None if label.weight_from_price else by_weight, tolerance))
     if problems:
         raise serializers.ValidationError({'items': problems})
+    plan, applied = apply_promotions(plan, company_id, session.till.branch_id, vat_day)
     total = sum((line.total for line in plan), Decimal('0.00'))
 
     if payment_method == Sale.CASH:
@@ -254,7 +257,7 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
         item = SaleItem.objects.create(
             sale=sale, product=product, product_name=product.name, quantity=quantity, unit_price=unit_price,
             weight_kg=weight, price_per_kg=None if weight is None else product.price_per_kg, line_total=line.total,
-            vat_code=product.vat_code, vat_rate=line.rate, net_amount=net, vat_amount=vat,
+            discount=line.discount, vat_code=product.vat_code, vat_rate=line.rate, net_amount=net, vat_amount=vat,
             barcode=line.label.raw[:64] if line.label else '',
             label_price=line.label.label_price if line.label else None,
             expected_price=line.expected, label_price_flagged=line.flagged, manual_weight=line.manual,
@@ -274,6 +277,7 @@ def record_sale(*, session, cashier, payment_method, amount_tendered, lines, cli
                 raise serializers.ValidationError({'items': [f'{product.name}: stock changed, try again.']}) from None
         for batch, taken, kg in allocations:
             SaleAllocation.objects.create(item=item, batch=batch, quantity=taken, weight_kg=kg)
+    record_promotions(sale, applied)
     if loyalty_barcode:
         connection = active_connection(session.till.branch.company_id)
         if connection:
@@ -294,6 +298,33 @@ class _Line:
     expected: Decimal | None = None
     flagged: bool = False
     manual: bool = False  # the weight was typed by the cashier
+    discount: Decimal = Decimal('0.00')  # promotions (G58): taken off ``total`` already
+
+
+def engine_line(key, product, quantity, weight, total, label):
+    """A sale line as the promotion engine takes it (gross before any discount)."""
+    return EngineLine(key=key, product=product.pk, category=product.category_id,
+                      quantity=1 if weight is not None else quantity, gross=total, weighed=weight is not None,
+                      label=label is not None)
+
+
+def apply_promotions(plan, company_id, branch_id, day):
+    """``(plan, applied)``: each line lowered by its share of the promotions in force (G58), before VAT is split."""
+    promotions = active_promotions(company_id, branch_id, day)
+    if not promotions:
+        return plan, []
+    result = apply([engine_line(index, line.product, line.quantity, line.weight, line.total, line.label)
+                    for index, line in enumerate(plan)], promotions)
+    plan = [replace(line, total=line.total - result.discounts[index], discount=result.discounts[index])
+            if index in result.discounts else line for index, line in enumerate(plan)]
+    return plan, result.applied
+
+
+def record_promotions(sale, applied):
+    SalePromotion.objects.bulk_create(
+        SalePromotion(sale=sale, promotion_id=a.promotion, name=a.name, kind=a.kind, times=a.times, saving=a.saving)
+        for a in applied
+    )
 
 
 def _labelled_line(product, quantity, weight, label, rate, expected, tolerance, fallback=None):

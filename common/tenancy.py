@@ -37,6 +37,7 @@ TENANT_LOOKUPS = {
     'sales.SaleItem': 'sale__session__till__branch__company',
     'sales.SaleAllocation': 'item__sale__session__till__branch__company',
     'sales.SaleException': 'sale__session__till__branch__company',
+    'sales.SalePromotion': 'sale__session__till__branch__company',
     'pricing.Subscription': 'user__company',
     'pricing.SupplierInvoice': 'company',
     'pricing.InvoiceLineItem': 'invoice__company',

@@ -1,5 +1,7 @@
 # sales/models.py
 
+from decimal import Decimal
+
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
@@ -120,6 +122,8 @@ class SaleItem(models.Model):
     weight_kg = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
     price_per_kg = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
     line_total = models.DecimalField(max_digits=12, decimal_places=2)
+    # Promotions (G58): what came off this line, gross; ``line_total`` is after it and VAT is split from that.
+    discount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     vat_code = models.CharField(max_length=10, choices=VAT_CODES, blank=True)
     vat_rate = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     net_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
@@ -138,6 +142,24 @@ class SaleItem(models.Model):
 
     def __str__(self):
         return f'{self.quantity} x {self.product_name}'
+
+
+class SalePromotion(models.Model):
+    """A promotion a sale got (G58), as charged: its name and saving are copied, so the receipt never changes."""
+
+    sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name='promotions')
+    promotion = models.ForeignKey('promotions.Promotion', null=True, blank=True, on_delete=models.SET_NULL,
+                                  related_name='+')
+    name = models.CharField(max_length=80)
+    kind = models.CharField(max_length=20)
+    times = models.PositiveIntegerField()
+    saving = models.DecimalField(max_digits=12, decimal_places=2)
+
+    class Meta:
+        ordering = ['id']
+
+    def __str__(self):
+        return f'{self.name}: -{self.saving}'
 
 
 class SaleAllocation(models.Model):

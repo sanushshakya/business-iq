@@ -288,7 +288,8 @@ def transfer_batch(batch, quantity, to, *, transfer=None):
     """
     held, _ = StockBatch.objects.get_or_create(
         product_id=batch.product_id, batch_number=batch.batch_number, location=to,
-        defaults={'quantity': 0, 'expiration_date': batch.expiration_date, 'supplier_id': batch.supplier_id},
+        defaults={'quantity': 0, 'expiration_date': batch.expiration_date, 'supplier_id': batch.supplier_id,
+                  'unit_cost': batch.unit_cost},  # the lot's landed cost travels with it (G59 stock value, margin)
     )
     held = StockBatch.objects.select_for_update(of=('self',)).select_related('location').get(pk=held.pk)
     if held.expiration_date != batch.expiration_date:

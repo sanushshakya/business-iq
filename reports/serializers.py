@@ -1,0 +1,90 @@
+from datetime import timedelta
+
+from rest_framework import serializers
+
+from vat.services import uk_date
+
+EARLIEST = 2000
+
+
+def _money(**kwargs):
+    return serializers.DecimalField(max_digits=14, decimal_places=2, **kwargs)
+
+
+def _kg():
+    return serializers.DecimalField(max_digits=14, decimal_places=3)
+
+
+class DashboardQuerySerializer(serializers.Serializer):
+    week = serializers.DateField(required=False, input_formats=['%Y-%m-%d'], help_text='Any day in the week.')
+
+    def validate_week(self, day):
+        if day.year < EARLIEST:
+            raise serializers.ValidationError('Pick a week from 2000 on.')
+        if day - timedelta(days=day.weekday()) > uk_date():
+            raise serializers.ValidationError('That week has not started yet.')
+        return day
+
+
+class DashboardPlaceSerializer(serializers.Serializer):
+    branch = serializers.IntegerField(allow_null=True)
+    branch_name = serializers.CharField()
+    location = serializers.IntegerField(allow_null=True)
+    location_code = serializers.CharField(allow_null=True)
+    location_name = serializers.CharField(allow_null=True)
+
+
+class DashboardSalesRowSerializer(DashboardPlaceSerializer):
+    channel = serializers.ChoiceField(choices=['till', 'trade', 'online'])
+    net = _money(help_text='Ex VAT.')
+    costed_net = _money(help_text='Sales whose stock had a known cost.')
+    cost = _money()
+    margin = _money()
+    margin_percent = _money(allow_null=True, help_text='Over costed sales; null when none were costed.')
+    uncosted_net = _money()
+    units = serializers.IntegerField()
+    kg = _kg()
+
+
+class DashboardWasteRowSerializer(DashboardPlaceSerializer):
+    units = serializers.IntegerField(help_text='Sent to WASTE, less what came back (write-offs, returns, butchery).')
+    kg = _kg()
+    cost = _money()
+    uncosted_units = serializers.IntegerField(help_text='Units from lots with no known cost.')
+    uncosted_kg = _kg()
+
+
+class DashboardStockRowSerializer(DashboardPlaceSerializer):
+    value = _money(help_text='Costed stock at the end of the period.')
+    uncosted_units = serializers.IntegerField()
+    uncosted_kg = _kg()
+
+
+class DashboardTotalsSerializer(serializers.Serializer):
+    net = _money()
+    costed_net = _money()
+    cost = _money()
+    uncosted_net = _money()
+    margin = _money()
+    margin_percent = _money(allow_null=True)
+    waste_cost = _money()
+    stock_value = _money()
+
+
+class DashboardPeriodSerializer(serializers.Serializer):
+    start = serializers.DateField()
+    end = serializers.DateField()
+    sales = DashboardSalesRowSerializer(many=True)
+    waste = DashboardWasteRowSerializer(many=True)
+    stock = DashboardStockRowSerializer(many=True)
+    totals = DashboardTotalsSerializer()
+
+
+class DashboardSerializer(serializers.Serializer):
+    week_start = serializers.DateField()
+    end = serializers.DateField()
+    previous_start = serializers.DateField()
+    previous_end = serializers.DateField()
+    days = serializers.IntegerField()
+    current = DashboardPeriodSerializer()
+    previous = DashboardPeriodSerializer()

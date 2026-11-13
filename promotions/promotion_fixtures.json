@@ -1,0 +1,1509 @@
+{
+ "cases": [
+  {
+   "name": "multi_buy_exact",
+   "note": "3 x 1.99 = 5.97 for 5.00: 97p off",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": null,
+     "quantity": 3,
+     "gross": "5.97",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 1,
+     "name": "3 for £5",
+     "kind": "multi_buy",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": 3,
+     "get_quantity": null,
+     "deal_price": "5.00",
+     "percent": null,
+     "products": [
+      1
+     ],
+     "categories": [],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "0.97"
+    },
+    "applied": [
+     {
+      "promotion": 1,
+      "times": 1,
+      "saving": "0.97"
+     }
+    ]
+   }
+  },
+  {
+   "name": "multi_buy_97p_over_three_lines",
+   "note": "97p by price: 32.33p each; the spare penny to the first line",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": null,
+     "quantity": 1,
+     "gross": "1.99",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "b",
+     "product": 2,
+     "category": null,
+     "quantity": 1,
+     "gross": "1.99",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "c",
+     "product": 3,
+     "category": null,
+     "quantity": 1,
+     "gross": "1.99",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 1,
+     "name": "3 for £5",
+     "kind": "multi_buy",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": 3,
+     "get_quantity": null,
+     "deal_price": "5.00",
+     "percent": null,
+     "products": [
+      1,
+      2,
+      3
+     ],
+     "categories": [],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "0.33",
+     "b": "0.32",
+     "c": "0.32"
+    },
+    "applied": [
+     {
+      "promotion": 1,
+      "times": 1,
+      "saving": "0.97"
+     }
+    ]
+   }
+  },
+  {
+   "name": "multi_buy_partial",
+   "note": "4 x 2.00: one set of 3 (1.00 off), one left at full price",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": null,
+     "quantity": 4,
+     "gross": "8.00",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 1,
+     "name": "3 for £5",
+     "kind": "multi_buy",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": 3,
+     "get_quantity": null,
+     "deal_price": "5.00",
+     "percent": null,
+     "products": [
+      1
+     ],
+     "categories": [],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "1.00"
+    },
+    "applied": [
+     {
+      "promotion": 1,
+      "times": 1,
+      "saving": "1.00"
+     }
+    ]
+   }
+  },
+  {
+   "name": "multi_buy_mixed_most_expensive_first",
+   "note": "units 2.50,2.50,1.50 x4: set 1 = 6.50 -> 1.50 off (57.69p,57.69p,34.62p -> 58,58,34); set 2 = 4.50 saves nothing",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": null,
+     "quantity": 2,
+     "gross": "5.00",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "b",
+     "product": 2,
+     "category": null,
+     "quantity": 4,
+     "gross": "6.00",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 1,
+     "name": "3 for £5",
+     "kind": "multi_buy",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": 3,
+     "get_quantity": null,
+     "deal_price": "5.00",
+     "percent": null,
+     "products": [
+      1,
+      2
+     ],
+     "categories": [],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "1.16",
+     "b": "0.34"
+    },
+    "applied": [
+     {
+      "promotion": 1,
+      "times": 1,
+      "saving": "1.50"
+     }
+    ]
+   }
+  },
+  {
+   "name": "multi_buy_no_saving",
+   "note": "3 x 1.50 = 4.50 is below the deal price: never a surcharge",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": null,
+     "quantity": 3,
+     "gross": "4.50",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 1,
+     "name": "3 for £5",
+     "kind": "multi_buy",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": 3,
+     "get_quantity": null,
+     "deal_price": "5.00",
+     "percent": null,
+     "products": [
+      1
+     ],
+     "categories": [],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {},
+    "applied": []
+   }
+  },
+  {
+   "name": "multi_buy_two_sets",
+   "note": "6 x 2.00 = two sets, 1.00 off each",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": null,
+     "quantity": 6,
+     "gross": "12.00",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 1,
+     "name": "3 for £5",
+     "kind": "multi_buy",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": 3,
+     "get_quantity": null,
+     "deal_price": "5.00",
+     "percent": null,
+     "products": [
+      1
+     ],
+     "categories": [],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "2.00"
+    },
+    "applied": [
+     {
+      "promotion": 1,
+      "times": 2,
+      "saving": "2.00"
+     }
+    ]
+   }
+  },
+  {
+   "name": "multi_buy_ignores_weighed_and_labels",
+   "note": "weighed lines and scanned labels never count towards a deal",
+   "lines": [
+    {
+     "key": "w",
+     "product": 1,
+     "category": null,
+     "quantity": 1,
+     "gross": "6.00",
+     "weighed": true,
+     "label": false
+    },
+    {
+     "key": "l",
+     "product": 1,
+     "category": null,
+     "quantity": 1,
+     "gross": "2.00",
+     "weighed": false,
+     "label": true
+    },
+    {
+     "key": "a",
+     "product": 1,
+     "category": null,
+     "quantity": 2,
+     "gross": "4.00",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 1,
+     "name": "3 for £5",
+     "kind": "multi_buy",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": 3,
+     "get_quantity": null,
+     "deal_price": "5.00",
+     "percent": null,
+     "products": [
+      1
+     ],
+     "categories": [],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {},
+    "applied": []
+   }
+  },
+  {
+   "name": "bogof_cheapest_free",
+   "note": "3.00 + 2.00, buy 1 get 1: 2.00 off spread by price (1.20, 0.80)",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": null,
+     "quantity": 1,
+     "gross": "3.00",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "b",
+     "product": 2,
+     "category": null,
+     "quantity": 1,
+     "gross": "2.00",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 3,
+     "name": "BOGOF",
+     "kind": "bogof",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": 1,
+     "get_quantity": 1,
+     "deal_price": null,
+     "percent": null,
+     "products": [
+      1,
+      2
+     ],
+     "categories": [],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "1.20",
+     "b": "0.80"
+    },
+    "applied": [
+     {
+      "promotion": 3,
+      "times": 1,
+      "saving": "2.00"
+     }
+    ]
+   }
+  },
+  {
+   "name": "bogof_odd_count",
+   "note": "3 x 1.00: one pair, the third paid",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": null,
+     "quantity": 3,
+     "gross": "3.00",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 3,
+     "name": "BOGOF",
+     "kind": "bogof",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": 1,
+     "get_quantity": 1,
+     "deal_price": null,
+     "percent": null,
+     "products": [
+      1
+     ],
+     "categories": [],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "1.00"
+    },
+    "applied": [
+     {
+      "promotion": 3,
+      "times": 1,
+      "saving": "1.00"
+     }
+    ]
+   }
+  },
+  {
+   "name": "bogof_three_for_two",
+   "note": "6 x 1.20, buy 2 get 1: two groups, 1.20 off each",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": null,
+     "quantity": 6,
+     "gross": "7.20",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 3,
+     "name": "3 for 2",
+     "kind": "bogof",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": 2,
+     "get_quantity": 1,
+     "deal_price": null,
+     "percent": null,
+     "products": [
+      1
+     ],
+     "categories": [],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "2.40"
+    },
+    "applied": [
+     {
+      "promotion": 3,
+      "times": 2,
+      "saving": "2.40"
+     }
+    ]
+   }
+  },
+  {
+   "name": "meal_deal_one",
+   "note": "main 2.50 + snack 1.00 + drink 1.20 = 4.70 for 3.50: 1.20 off (63.83, 25.53, 30.64 -> 64, 25, 31)",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": null,
+     "quantity": 1,
+     "gross": "2.50",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "b",
+     "product": 3,
+     "category": null,
+     "quantity": 1,
+     "gross": "1.00",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "c",
+     "product": 4,
+     "category": null,
+     "quantity": 1,
+     "gross": "1.20",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 2,
+     "name": "Meal deal",
+     "kind": "meal_deal",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": null,
+     "get_quantity": null,
+     "deal_price": "3.50",
+     "percent": null,
+     "products": [],
+     "categories": [],
+     "groups": [
+      [
+       1,
+       2
+      ],
+      [
+       3
+      ],
+      [
+       4
+      ]
+     ]
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "0.64",
+     "b": "0.25",
+     "c": "0.31"
+    },
+    "applied": [
+     {
+      "promotion": 2,
+      "times": 1,
+      "saving": "1.20"
+     }
+    ]
+   }
+  },
+  {
+   "name": "meal_deal_missing_group",
+   "note": "two mains and two drinks but one snack: one deal",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": null,
+     "quantity": 2,
+     "gross": "5.00",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "b",
+     "product": 3,
+     "category": null,
+     "quantity": 1,
+     "gross": "1.00",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "c",
+     "product": 4,
+     "category": null,
+     "quantity": 2,
+     "gross": "2.40",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 2,
+     "name": "Meal deal",
+     "kind": "meal_deal",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": null,
+     "get_quantity": null,
+     "deal_price": "3.50",
+     "percent": null,
+     "products": [],
+     "categories": [],
+     "groups": [
+      [
+       1,
+       2
+      ],
+      [
+       3
+      ],
+      [
+       4
+      ]
+     ]
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "0.64",
+     "b": "0.25",
+     "c": "0.31"
+    },
+    "applied": [
+     {
+      "promotion": 2,
+      "times": 1,
+      "saving": "1.20"
+     }
+    ]
+   }
+  },
+  {
+   "name": "meal_deal_two",
+   "note": "two of each: two deals",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": null,
+     "quantity": 2,
+     "gross": "5.00",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "b",
+     "product": 3,
+     "category": null,
+     "quantity": 2,
+     "gross": "2.00",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "c",
+     "product": 4,
+     "category": null,
+     "quantity": 2,
+     "gross": "2.40",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 2,
+     "name": "Meal deal",
+     "kind": "meal_deal",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": null,
+     "get_quantity": null,
+     "deal_price": "3.50",
+     "percent": null,
+     "products": [],
+     "categories": [],
+     "groups": [
+      [
+       1,
+       2
+      ],
+      [
+       3
+      ],
+      [
+       4
+      ]
+     ]
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "1.28",
+     "b": "0.50",
+     "c": "0.62"
+    },
+    "applied": [
+     {
+      "promotion": 2,
+      "times": 2,
+      "saving": "2.40"
+     }
+    ]
+   }
+  },
+  {
+   "name": "meal_deal_most_expensive_main",
+   "note": "mains 2.50 and 3.00: the 3.00 one goes in the deal (1.70 off: 98.08, 32.69, 39.23 -> 98, 33, 39)",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": null,
+     "quantity": 1,
+     "gross": "2.50",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "d",
+     "product": 2,
+     "category": null,
+     "quantity": 1,
+     "gross": "3.00",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "b",
+     "product": 3,
+     "category": null,
+     "quantity": 1,
+     "gross": "1.00",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "c",
+     "product": 4,
+     "category": null,
+     "quantity": 1,
+     "gross": "1.20",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 2,
+     "name": "Meal deal",
+     "kind": "meal_deal",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": null,
+     "get_quantity": null,
+     "deal_price": "3.50",
+     "percent": null,
+     "products": [],
+     "categories": [],
+     "groups": [
+      [
+       1,
+       2
+      ],
+      [
+       3
+      ],
+      [
+       4
+      ]
+     ]
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "d": "0.98",
+     "b": "0.33",
+     "c": "0.39"
+    },
+    "applied": [
+     {
+      "promotion": 2,
+      "times": 1,
+      "saving": "1.70"
+     }
+    ]
+   }
+  },
+  {
+   "name": "same_priority_bigger_saving_first",
+   "note": "drink x3 in 3 for 3.00 (saves 0.60) and in the meal deal (saves 1.20): the meal deal goes first, 2 drinks are left",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": null,
+     "quantity": 1,
+     "gross": "2.50",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "b",
+     "product": 3,
+     "category": null,
+     "quantity": 1,
+     "gross": "1.00",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "c",
+     "product": 4,
+     "category": null,
+     "quantity": 3,
+     "gross": "3.60",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 1,
+     "name": "3 for £3",
+     "kind": "multi_buy",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": 3,
+     "get_quantity": null,
+     "deal_price": "3.00",
+     "percent": null,
+     "products": [
+      4
+     ],
+     "categories": [],
+     "groups": []
+    },
+    {
+     "id": 2,
+     "name": "Meal deal",
+     "kind": "meal_deal",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": null,
+     "get_quantity": null,
+     "deal_price": "3.50",
+     "percent": null,
+     "products": [],
+     "categories": [],
+     "groups": [
+      [
+       1,
+       2
+      ],
+      [
+       3
+      ],
+      [
+       4
+      ]
+     ]
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "0.64",
+     "b": "0.25",
+     "c": "0.31"
+    },
+    "applied": [
+     {
+      "promotion": 2,
+      "times": 1,
+      "saving": "1.20"
+     }
+    ]
+   }
+  },
+  {
+   "name": "priority_beats_saving",
+   "note": "the same basket with the multi-buy at priority 10: it takes the drinks first",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": null,
+     "quantity": 1,
+     "gross": "2.50",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "b",
+     "product": 3,
+     "category": null,
+     "quantity": 1,
+     "gross": "1.00",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "c",
+     "product": 4,
+     "category": null,
+     "quantity": 3,
+     "gross": "3.60",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 1,
+     "name": "3 for £3",
+     "kind": "multi_buy",
+     "priority": 10,
+     "stacks": false,
+     "buy_quantity": 3,
+     "get_quantity": null,
+     "deal_price": "3.00",
+     "percent": null,
+     "products": [
+      4
+     ],
+     "categories": [],
+     "groups": []
+    },
+    {
+     "id": 2,
+     "name": "Meal deal",
+     "kind": "meal_deal",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": null,
+     "get_quantity": null,
+     "deal_price": "3.50",
+     "percent": null,
+     "products": [],
+     "categories": [],
+     "groups": [
+      [
+       1,
+       2
+      ],
+      [
+       3
+      ],
+      [
+       4
+      ]
+     ]
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "c": "0.60"
+    },
+    "applied": [
+     {
+      "promotion": 1,
+      "times": 1,
+      "saving": "0.60"
+     }
+    ]
+   }
+  },
+  {
+   "name": "category_percent_each",
+   "note": "10% off 5.97 = 59.7p -> 60p",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": 10,
+     "quantity": 3,
+     "gross": "5.97",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 4,
+     "name": "10% off",
+     "kind": "category_percent",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": null,
+     "get_quantity": null,
+     "deal_price": null,
+     "percent": "10.00",
+     "products": [],
+     "categories": [
+      10
+     ],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "0.60"
+    },
+    "applied": [
+     {
+      "promotion": 4,
+      "times": 1,
+      "saving": "0.60"
+     }
+    ]
+   }
+  },
+  {
+   "name": "category_percent_weighed_half_penny",
+   "note": "10% off a weighed 3.25 = 32.5p -> 33p; a label is never discounted",
+   "lines": [
+    {
+     "key": "w",
+     "product": 5,
+     "category": 10,
+     "quantity": 1,
+     "gross": "3.25",
+     "weighed": true,
+     "label": false
+    },
+    {
+     "key": "l",
+     "product": 6,
+     "category": 10,
+     "quantity": 1,
+     "gross": "2.00",
+     "weighed": false,
+     "label": true
+    },
+    {
+     "key": "x",
+     "product": 7,
+     "category": 11,
+     "quantity": 1,
+     "gross": "1.00",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 4,
+     "name": "10% off",
+     "kind": "category_percent",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": null,
+     "get_quantity": null,
+     "deal_price": null,
+     "percent": "10.00",
+     "products": [],
+     "categories": [
+      10
+     ],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "w": "0.33"
+    },
+    "applied": [
+     {
+      "promotion": 4,
+      "times": 1,
+      "saving": "0.33"
+     }
+    ]
+   }
+  },
+  {
+   "name": "percent_skips_units_a_deal_used",
+   "note": "4 x 2.00: the multi-buy saves 1.00 (beats 0.80), 10% then on the 4th unit only",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": 10,
+     "quantity": 4,
+     "gross": "8.00",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 1,
+     "name": "3 for £5",
+     "kind": "multi_buy",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": 3,
+     "get_quantity": null,
+     "deal_price": "5.00",
+     "percent": null,
+     "products": [
+      1
+     ],
+     "categories": [],
+     "groups": []
+    },
+    {
+     "id": 4,
+     "name": "10% off",
+     "kind": "category_percent",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": null,
+     "get_quantity": null,
+     "deal_price": null,
+     "percent": "10.00",
+     "products": [],
+     "categories": [
+      10
+     ],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "1.20"
+    },
+    "applied": [
+     {
+      "promotion": 1,
+      "times": 1,
+      "saving": "1.00"
+     },
+     {
+      "promotion": 4,
+      "times": 1,
+      "saving": "0.20"
+     }
+    ]
+   }
+  },
+  {
+   "name": "stacking_percent_on_a_deal",
+   "note": "as above but the 10% stacks: 10% of what is left (7.00) = 0.70",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": 10,
+     "quantity": 4,
+     "gross": "8.00",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 1,
+     "name": "3 for £5",
+     "kind": "multi_buy",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": 3,
+     "get_quantity": null,
+     "deal_price": "5.00",
+     "percent": null,
+     "products": [
+      1
+     ],
+     "categories": [],
+     "groups": []
+    },
+    {
+     "id": 4,
+     "name": "10% off",
+     "kind": "category_percent",
+     "priority": 0,
+     "stacks": true,
+     "buy_quantity": null,
+     "get_quantity": null,
+     "deal_price": null,
+     "percent": "10.00",
+     "products": [],
+     "categories": [
+      10
+     ],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "1.70"
+    },
+    "applied": [
+     {
+      "promotion": 1,
+      "times": 1,
+      "saving": "1.00"
+     },
+     {
+      "promotion": 4,
+      "times": 1,
+      "saving": "0.70"
+     }
+    ]
+   }
+  },
+  {
+   "name": "one_stacking_percent_per_line",
+   "note": "two stacking promotions at one priority: the bigger percent only",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": 10,
+     "quantity": 1,
+     "gross": "10.00",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 4,
+     "name": "5% off",
+     "kind": "category_percent",
+     "priority": 0,
+     "stacks": true,
+     "buy_quantity": null,
+     "get_quantity": null,
+     "deal_price": null,
+     "percent": "5.00",
+     "products": [],
+     "categories": [
+      10
+     ],
+     "groups": []
+    },
+    {
+     "id": 5,
+     "name": "20% off",
+     "kind": "category_percent",
+     "priority": 0,
+     "stacks": true,
+     "buy_quantity": null,
+     "get_quantity": null,
+     "deal_price": null,
+     "percent": "20.00",
+     "products": [],
+     "categories": [
+      10
+     ],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "2.00"
+    },
+    "applied": [
+     {
+      "promotion": 5,
+      "times": 1,
+      "saving": "2.00"
+     }
+    ]
+   }
+  },
+  {
+   "name": "percent_beats_deal_when_bigger",
+   "note": "3 x 2.00: 50% off (3.00) beats 3 for 5 (1.00); nothing left for the deal",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": 10,
+     "quantity": 3,
+     "gross": "6.00",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 1,
+     "name": "3 for £5",
+     "kind": "multi_buy",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": 3,
+     "get_quantity": null,
+     "deal_price": "5.00",
+     "percent": null,
+     "products": [
+      1
+     ],
+     "categories": [],
+     "groups": []
+    },
+    {
+     "id": 4,
+     "name": "Half price",
+     "kind": "category_percent",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": null,
+     "get_quantity": null,
+     "deal_price": null,
+     "percent": "50.00",
+     "products": [],
+     "categories": [
+      10
+     ],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "3.00"
+    },
+    "applied": [
+     {
+      "promotion": 4,
+      "times": 1,
+      "saving": "3.00"
+     }
+    ]
+   }
+  },
+  {
+   "name": "no_promotions",
+   "note": "nothing applies",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": null,
+     "quantity": 1,
+     "gross": "1.00",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [],
+   "expected": {
+    "discounts": {},
+    "applied": []
+   }
+  },
+  {
+   "name": "ties_by_product_not_basket_order",
+   "note": "2 for 3.00 on A and B (both 2.00), 10% off A's category below it: equal prices go by product, so A and B make the set (1.00 off, 50p each) whatever the order; the spare B is not in the category",
+   "lines": [
+    {
+     "key": "b",
+     "product": 2,
+     "category": 11,
+     "quantity": 2,
+     "gross": "4.00",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "a",
+     "product": 1,
+     "category": 10,
+     "quantity": 1,
+     "gross": "2.00",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 1,
+     "name": "2 for £3",
+     "kind": "multi_buy",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": 2,
+     "get_quantity": null,
+     "deal_price": "3.00",
+     "percent": null,
+     "products": [
+      1,
+      2
+     ],
+     "categories": [],
+     "groups": []
+    },
+    {
+     "id": 4,
+     "name": "10% off",
+     "kind": "category_percent",
+     "priority": -1,
+     "stacks": false,
+     "buy_quantity": null,
+     "get_quantity": null,
+     "deal_price": null,
+     "percent": "10.00",
+     "products": [],
+     "categories": [
+      10
+     ],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "0.50",
+     "b": "0.50"
+    },
+    "applied": [
+     {
+      "promotion": 1,
+      "times": 1,
+      "saving": "1.00"
+     }
+    ]
+   }
+  },
+  {
+   "name": "ties_by_product_reversed",
+   "note": "the same basket in the other order: the same answer",
+   "lines": [
+    {
+     "key": "a",
+     "product": 1,
+     "category": 10,
+     "quantity": 1,
+     "gross": "2.00",
+     "weighed": false,
+     "label": false
+    },
+    {
+     "key": "b",
+     "product": 2,
+     "category": 11,
+     "quantity": 2,
+     "gross": "4.00",
+     "weighed": false,
+     "label": false
+    }
+   ],
+   "promotions": [
+    {
+     "id": 1,
+     "name": "2 for £3",
+     "kind": "multi_buy",
+     "priority": 0,
+     "stacks": false,
+     "buy_quantity": 2,
+     "get_quantity": null,
+     "deal_price": "3.00",
+     "percent": null,
+     "products": [
+      1,
+      2
+     ],
+     "categories": [],
+     "groups": []
+    },
+    {
+     "id": 4,
+     "name": "10% off",
+     "kind": "category_percent",
+     "priority": -1,
+     "stacks": false,
+     "buy_quantity": null,
+     "get_quantity": null,
+     "deal_price": null,
+     "percent": "10.00",
+     "products": [],
+     "categories": [
+      10
+     ],
+     "groups": []
+    }
+   ],
+   "expected": {
+    "discounts": {
+     "a": "0.50",
+     "b": "0.50"
+    },
+    "applied": [
+     {
+      "promotion": 1,
+      "times": 1,
+      "saving": "1.00"
+     }
+    ]
+   }
+  }
+ ]
+}

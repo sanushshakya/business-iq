@@ -9,13 +9,14 @@ from rest_framework import serializers
 from common.tenancy import scope_queryset
 from inventory.serializers import BarcodeRuleSerializer
 from inventory.models import Product
+from promotions.models import Promotion
 from tenants.models import Till
 from tenants.serializers import BranchSerializer, TillSerializer
 from vat.serializers import VatRateSerializer
 from vat.services import uk_date
 
 from .labels import read_label
-from .models import Sale, SaleException, SaleItem, TillSession
+from .models import Sale, SaleException, SaleItem, SalePromotion, TillSession
 from .services import session_summary, vat_by_rate
 
 MONEY = {'max_digits': 12, 'decimal_places': 2, 'min_value': Decimal('0.00')}
@@ -100,9 +101,16 @@ class SaleItemSerializer(serializers.ModelSerializer):
         model = SaleItem
         fields = [
             'id', 'product', 'product_name', 'quantity', 'unit_price', 'weight_kg', 'price_per_kg', 'line_total',
-            'vat_code', 'vat_rate', 'net_amount', 'vat_amount', 'barcode', 'label_price', 'expected_price',
-            'label_price_flagged', 'manual_weight',
+            'discount', 'vat_code', 'vat_rate', 'net_amount', 'vat_amount', 'barcode', 'label_price',
+            'expected_price', 'label_price_flagged', 'manual_weight',
         ]
+        read_only_fields = fields
+
+
+class SalePromotionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SalePromotion
+        fields = ['promotion', 'name', 'kind', 'times', 'saving']
         read_only_fields = fields
 
 
@@ -116,6 +124,8 @@ class SaleSerializer(serializers.ModelSerializer):
     items = SaleItemSerializer(many=True, read_only=True)
     vat_summary = serializers.SerializerMethodField(help_text='VAT by rate, for the receipt.')
     vat_recorded = serializers.SerializerMethodField(help_text='False for sales made before VAT was recorded.')
+    promotions = SalePromotionSerializer(many=True, read_only=True)
+    total_saving = serializers.SerializerMethodField(help_text='What promotions took off, for the receipt.')
 
     class Meta:
         model = Sale
@@ -123,13 +133,17 @@ class SaleSerializer(serializers.ModelSerializer):
             'id', 'receipt_number', 'session', 'till', 'till_number', 'branch_name', 'cashier_email', 'cashier_name',
             'payment_method', 'total', 'amount_tendered', 'change_due', 'status', 'created_at',
             'voided_at', 'void_reason', 'client_ref', 'card_auth_code', 'card_last4', 'items', 'vat_summary',
-            'vat_recorded',
+            'vat_recorded', 'promotions', 'total_saving',
         ]
         read_only_fields = fields
 
     @extend_schema_field(VatRateTotalSerializer(many=True))
     def get_vat_summary(self, sale):
         return VatRateTotalSerializer(vat_by_rate(sale.items.all()), many=True).data
+
+    @extend_schema_field(serializers.DecimalField(max_digits=12, decimal_places=2))
+    def get_total_saving(self, sale):
+        return str(sum((p.saving for p in sale.promotions.all()), Decimal('0.00')))
 
     def get_vat_recorded(self, sale) -> bool:
         return all(item.vat_rate is not None for item in sale.items.all())
@@ -264,6 +278,22 @@ class CatalogueSettingsSerializer(serializers.Serializer):
     offline_stop_hours = serializers.IntegerField()
 
 
+class CataloguePromotionSerializer(serializers.ModelSerializer):
+    """A promotion as the till applies it offline (G58): ``groups`` are the meal deal's product ids per group."""
+
+    groups = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Promotion
+        fields = ['id', 'name', 'kind', 'priority', 'stacks', 'starts_on', 'ends_on', 'buy_quantity', 'get_quantity',
+                  'deal_price', 'percent', 'products', 'categories', 'branches', 'groups']
+        read_only_fields = fields
+
+    @extend_schema_field(serializers.ListField(child=serializers.ListField(child=serializers.IntegerField())))
+    def get_groups(self, promotion):
+        return [[product.pk for product in group.products.all()] for group in promotion.groups.all()]
+
+
 class CatalogueSerializer(serializers.Serializer):
     """
     The till catalogue (G26). ``full`` means ``products`` is everything (drop what is not in it); otherwise it holds
@@ -282,6 +312,7 @@ class CatalogueSerializer(serializers.Serializer):
     tills = TillSerializer(many=True)
     branches = BranchSerializer(many=True)
     settings = CatalogueSettingsSerializer()
+    promotions = CataloguePromotionSerializer(many=True)
 
 
 class OfflineSaleLineSerializer(serializers.Serializer):

@@ -1,21 +1,24 @@
 """G59: sales and margin by channel (till, trade, online), waste, and the seeded week checked against the ledger."""
 
 import uuid
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from unittest import mock
 
+from django.db import connection as connection_db
 from django.db.models import Sum
+from django.test.utils import CaptureQueriesContext
 
 from common.tests.factories import CompanyFactory
 from inventory.models import Location, Product, StockMovement
 from inventory.write_offs import raise_write_off
-from reports.dashboard import dashboard, sales, waste
+from reports.dashboard import _Rows, dashboard, sales, waste
 from reports.tests.helpers import MONDAY, LedgerCase, at, clock, replay_value
 from sales.models import Sale
 from sales.services import open_session, record_sale, void_sale
 from sync.models import InboundEvent, StorefrontConnection
 from tenants.models import Company, Till
+from vat.services import UK
 from wholesale import invoices
 from wholesale.models import (
     CreditNote, CreditNoteLine, CustomerReturn, SalesOrder, SalesOrderLine, SalesOrderPick, TradeCustomer,
@@ -59,6 +62,17 @@ class SeededWeek(LedgerCase):
             raise_write_off(company=self.company, user=self.staff, batch=self.mince_n, reason='trim',
                             weight_kg=D('0.250'))
 
+    def net_to(self, kind, branch, start, end_day):
+        """Independent check: units and kg the ledger sent to ``kind`` from ``branch`` in the UK days, less what
+        came back."""
+        moves = StockMovement.objects.filter(batch__product__company=self.company, batch__location__branch=branch,
+                                             date_time__gte=at(start, 0), date_time__lt=at(end_day + timedelta(days=1), 0))
+        out = moves.filter(movement_type='outbound', destination_location__type=kind)
+        back = moves.filter(movement_type='inbound', source_location__type=kind)
+        units = (out.aggregate(n=Sum('quantity'))['n'] or 0) - (back.aggregate(n=Sum('quantity'))['n'] or 0)
+        kg = (out.aggregate(n=Sum('weight_kg'))['n'] or 0) - (back.aggregate(n=Sum('weight_kg'))['n'] or 0)
+        return units, D(kg)
+
     def sell(self, session, lines, when):
         with clock(when):
             sale, _ = record_sale(session=session, cashier=self.staff, payment_method=Sale.CARD,
@@ -82,29 +96,48 @@ class TillSalesTests(SeededWeek):
 
     def test_waste_by_location(self):
         [north] = waste(self.company, MONDAY, SUNDAY)
-        self.assertEqual((north['location_code'], north['count'], north['units'], north['kg'], north['cost'],
-                          north['uncosted']), (self.north_shop.code, 2, 1, D('0.250'), D('3.00'), 0))
+        self.assertEqual((north['location_code'], north['units'], north['kg'], north['cost'], north['uncosted_units'],
+                          north['uncosted_kg']), (self.north_shop.code, 1, D('0.250'), D('3.00'), 0, D('0.000')))
         self.assertEqual(waste(self.company, MONDAY - timedelta(days=7), MONDAY - timedelta(days=1)), [])
+
+    def test_waste_is_everything_sent_to_waste(self):
+        # Not only write-offs: damaged trade returns and butchery waste go to WASTE through the ledger too.
+        self.out(self.rice_n, 2, Location.WASTE, when=at(MONDAY + timedelta(days=4)))
+        self.out(self.rice_s, 1, Location.WASTE, when=at(MONDAY + timedelta(days=4)))  # no cost known
+        rows = {r['location_code']: r for r in waste(self.company, MONDAY, SUNDAY)}
+        self.assertEqual((rows[self.north_shop.code]['units'], rows[self.north_shop.code]['cost']), (3, D('6.00')))
+        self.assertEqual((rows[self.south_shop.code]['cost'], rows[self.south_shop.code]['uncosted_units']),
+                         (D('0.00'), 1))
+
+    def test_a_void_in_a_later_week_comes_off_in_that_week(self):
+        late = self.sell(self.north_session, [(self.rice, 1)], at(MONDAY - timedelta(days=1), 20))  # last Sunday
+        with clock(at(MONDAY + timedelta(days=1), 15)):
+            void_sale(sale=late, user=self.staff, reason='Fake late void')
+        last = row(sales(self.company, MONDAY - timedelta(days=7), MONDAY - timedelta(days=1)), channel='till')
+        this = row(sales(self.company, MONDAY, SUNDAY), channel='till', branch=self.north.pk)
+        self.assertEqual((last['net'], last['units']), (D('4.00'), 2))  # last week stays as it was
+        self.assertEqual((this['net'], this['cost'], this['units']), (D('8.50'), D('6.00'), 2))
+        for start, end_day in ((MONDAY - timedelta(days=7), MONDAY - timedelta(days=1)), (MONDAY, SUNDAY)):
+            till = row(sales(self.company, start, end_day), channel='till', branch=self.north.pk)
+            self.assertEqual((till['units'], till['kg']), self.net_to(Location.CUSTOMER, self.north, start, end_day))
+
+    def test_a_product_that_changed_kind_still_reports(self):
+        Product.objects.filter(pk=self.rice.pk).update(sold_by='weight', price_per_kg=D('2.0000'))
+        north = row(sales(self.company, MONDAY, SUNDAY), channel='till', branch=self.north.pk)
+        self.assertEqual(north['cost'], D('7.50'))  # sold as units then, costed as units
+        report = dashboard(self.company, MONDAY, today=SUNDAY)
+        stock = {r['location_code']: r['value'] for r in report['current']['stock']}
+        self.assertEqual(stock, replay_value(self.company, at(SUNDAY + timedelta(days=1), 0)))
 
     def test_the_seeded_week_matches_the_ledger(self):
         start, end = at(MONDAY, 0), at(SUNDAY + timedelta(days=1), 0)
-        this_week = StockMovement.objects.filter(batch__product__company=self.company, date_time__gte=start,
-                                                 date_time__lt=end)
-
-        def net_to(kind, branch):
-            moves = this_week.filter(batch__location__branch=branch)
-            out = moves.filter(movement_type='outbound', destination_location__type=kind)
-            back = moves.filter(movement_type='inbound', source_location__type=kind)
-            units = (out.aggregate(n=Sum('quantity'))['n'] or 0) - (back.aggregate(n=Sum('quantity'))['n'] or 0)
-            kg = (out.aggregate(n=Sum('weight_kg'))['n'] or 0) - (back.aggregate(n=Sum('weight_kg'))['n'] or 0)
-            return units, D(kg)
-
         report = dashboard(self.company, MONDAY, today=SUNDAY)
         for branch in (self.north, self.south):
             till = row(report['current']['sales'], channel='till', branch=branch.pk)
-            self.assertEqual((till['units'], till['kg']), net_to(Location.CUSTOMER, branch), branch.name)
+            self.assertEqual((till['units'], till['kg']), self.net_to(Location.CUSTOMER, branch, MONDAY, SUNDAY),
+                             branch.name)
         [wasted] = report['current']['waste']
-        self.assertEqual((wasted['units'], wasted['kg']), net_to(Location.WASTE, self.north))
+        self.assertEqual((wasted['units'], wasted['kg']), self.net_to(Location.WASTE, self.north, MONDAY, SUNDAY))
         for period, until in (('current', end), ('previous', start)):
             stock = {r['location_code']: r['value'] for r in report[period]['stock']}
             self.assertEqual(stock, replay_value(self.company, until), period)
@@ -177,12 +210,20 @@ class TradeAndOnlineTests(LedgerCase):
                  {'product_id': 'm18-cola', 'quantity': 1, 'unit_price': '1.20'},
                  {'product_id': 'm18-unknown', 'quantity': 1, 'unit_price': '9.99'}]
         event(connection, 'applied', items, at(MONDAY + timedelta(days=1)))
-        event(connection, 'unmatched', items, at(MONDAY + timedelta(days=1)))  # nothing taken: not a sale here
+        # 'unmatched' only means one item was unknown: the order was paid and its known items were taken.
+        event(connection, 'unmatched', items, at(MONDAY + timedelta(days=1)))
         event(other, 'applied', items, at(MONDAY + timedelta(days=1)))
         online = row(sales(self.company, MONDAY, SUNDAY), channel='online')
-        # 4.80 zero-rated + 1.20 with 20% VAT inside (0.20) = 5.80 net; nothing costed.
+        # Each order: 4.80 zero-rated + 1.20 with 20% VAT inside (0.20) = 5.80 net; nothing costed.
         self.assertEqual((online['net'], online['costed_net'], online['uncosted_net'], online['units'],
-                          online['margin_percent']), (D('5.80'), D('0.00'), D('5.80'), 3, None))
+                          online['margin_percent']), (D('11.60'), D('0.00'), D('11.60'), 6, None))
+        with CaptureQueriesContext(connection_db) as few:
+            sales(self.company, MONDAY, SUNDAY)
+        for _ in range(10):
+            event(connection, 'applied', items, at(MONDAY + timedelta(days=2)))
+        with CaptureQueriesContext(connection_db) as many:
+            sales(self.company, MONDAY, SUNDAY)
+        self.assertEqual(len(many), len(few))  # not a query per order line
 
     def test_a_week_still_running_compares_the_same_days(self):
         report = dashboard(self.company, MONDAY + timedelta(days=4), today=MONDAY + timedelta(days=2))
@@ -191,3 +232,31 @@ class TradeAndOnlineTests(LedgerCase):
                          (MONDAY, MONDAY + timedelta(days=2), MONDAY - timedelta(days=7),
                           MONDAY - timedelta(days=5), 3))
 
+
+
+class MarginTests(LedgerCase):
+    def test_no_margin_percent_when_costed_sales_are_not_above_zero(self):
+        rows = _Rows()
+        place = {'branch': None, 'branch_name': 'Fake', 'location': 9, 'location_code': 'WH', 'location_name': None}
+        rows.add(('trade', None, 9), place, net=D('-10.00'), cost=D('-12.00'))  # credits bigger than invoices
+        [only] = rows.result()
+        self.assertEqual((only['margin'], only['margin_percent']), (D('2.00'), None))
+
+
+class ClockChangeTests(LedgerCase):
+    def test_uk_midnight_after_the_clocks_go_back(self):
+        monday = date(2026, 10, 26)  # the clocks went back on Sunday 25 October
+        rice = self.product('Fake Rice')
+        self.receive(rice, self.north_shop, 10, cost='1.0000', when=at(monday - timedelta(days=3)))
+        Product.objects.filter(pk=rice.pk).update(stock_quantity=10)
+        till = Till.objects.create(branch=self.north, number=7, device_id='fake-n7')
+        with clock(at(monday - timedelta(days=3))):
+            session = open_session(till=till, user=self.staff, opening_float=D('0'))
+        for moment in (datetime.combine(monday - timedelta(days=1), time(23, 30), UK),  # Sunday, last week
+                       datetime.combine(monday, time(0, 30), UK)):  # GMT again: 00:30 UTC
+            with clock(moment):
+                record_sale(session=session, cashier=self.staff, payment_method=Sale.CARD, amount_tendered=None,
+                            lines=[(rice, 1)], card_auth_code='AUTH01')
+        this = row(sales(self.company, monday, monday + timedelta(days=6)), channel='till')
+        last = row(sales(self.company, monday - timedelta(days=7), monday - timedelta(days=1)), channel='till')
+        self.assertEqual((this['units'], last['units']), (1, 1))

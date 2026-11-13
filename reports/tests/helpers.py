@@ -81,7 +81,7 @@ def replay_value(company, until):
         if batch.location.type in ('supplier', 'customer', 'waste', 'adjustment'):
             continue
         units, kg = held[batch.pk]
-        amount = kg if batch.product.is_weighed else units
+        amount = kg if kg else units  # from the lot's own figures (a product can change kind)
         if not units and not kg:
             continue
         value = D('0') if batch.unit_cost is None else (amount * batch.unit_cost).quantize(D('0.01'))

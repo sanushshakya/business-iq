@@ -17,6 +17,7 @@ SUNDAY = MONDAY + timedelta(days=6)
 
 
 @mock.patch('reports.views.uk_date', lambda: SUNDAY)
+@mock.patch('reports.serializers.uk_date', lambda: SUNDAY)
 class DashboardApiTests(test_sales_waste.SeededWeek):
     url = reverse('reports-dashboard')
 
@@ -43,6 +44,8 @@ class DashboardApiTests(test_sales_waste.SeededWeek):
         self.assertEqual(staff.get(self.url).json()['week_start'], MONDAY.isoformat())
         self.assertEqual(staff.get(self.url, {'week': '2026-02-31'}).status_code, 400)
         self.assertEqual(staff.get(self.url, {'week': '1999-12-31'}).status_code, 400)
+        self.assertEqual(staff.get(self.url, {'week': (SUNDAY + timedelta(days=1)).isoformat()}).status_code, 400)
+        self.assertEqual(staff.get(self.url, {'week': SUNDAY.isoformat()}).status_code, 200)
 
     def test_members_and_operators_are_refused(self):
         self.assertEqual(self.client_for(UserFactory(company=self.company)).get(self.url).status_code, 403)

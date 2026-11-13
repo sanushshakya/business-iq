@@ -29,7 +29,7 @@ class StockValueTests(LedgerCase):
             with transaction.atomic():
                 lot = StockBatch.objects.select_for_update().get(pk=self.rice_w.pk)
                 moved = transfer_batch(lot, 30, self.south_shop)
-        StockBatch.objects.filter(pk=moved.pk).update(unit_cost=D('1.4000'))
+        assert moved.unit_cost == D('1.4000')  # the transfer carried the lot's cost
         # This week: more sales, and a lot received after the instant we value at.
         self.out(self.rice_n, 5, Location.CUSTOMER, when=at(MONDAY + timedelta(days=1)))
         self.later = self.receive(self.rice, self.north_shop, 50, cost='1.6000', when=at(MONDAY + timedelta(days=3)))

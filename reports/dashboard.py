@@ -14,13 +14,15 @@ from collections import defaultdict
 from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
-from django.db.models import Sum
+from django.db.models import Q, Sum
+from django.db.models.functions import Greatest
 
-from inventory.models import Location, Product, StockBatch, StockMovement, WriteOff
+from inventory.models import Location, Product, StockBatch, StockMovement
 from inventory.reports import uk_range, week_start
 from sales.models import Sale, SaleAllocation, SaleItem
 from sync.models import InboundEvent
-from vat.services import UK, NoVatRate, rate_for, split_inclusive
+from vat.models import VatRate
+from vat.services import UK, split_inclusive
 from wholesale.models import CreditNote, CreditNoteLine, Invoice, InvoiceLine, SalesOrderPick
 
 CENTS = Decimal('0.01')
@@ -54,13 +56,15 @@ def _place(location):
 def stock_value(company, at):
     """Per location holding stock at the instant ``at``: ``value`` (costed stock) and what had no cost
     (``uncosted_units`` / ``uncosted_kg``), by location code."""
-    batches = (StockBatch.objects.filter(product__company=company, receive_date__lt=at)
-               .exclude(location__type__in=NOT_STOCK)
-               .select_related('product', 'location__branch'))
     later = defaultdict(lambda: [0, ZERO_KG])  # what moved in minus out after ``at``, per batch
-    rows = (StockMovement.objects.filter(batch__product__company=company, date_time__gte=at)
-            .values('batch_id', 'movement_type')
-            .annotate(units=Sum('quantity'), kg=Sum('weight_kg')))
+    rows = list(StockMovement.objects.filter(batch__product__company=company, date_time__gte=at)
+                .values('batch_id', 'movement_type')
+                .annotate(units=Sum('quantity'), kg=Sum('weight_kg')))
+    # Only lots holding something now or moved since: an emptied lot from years ago held nothing then either.
+    batches = (StockBatch.objects.filter(product__company=company, receive_date__lt=at)
+               .filter(Q(quantity__gt=0) | Q(weight_kg__gt=0) | Q(pk__in={row['batch_id'] for row in rows}))
+               .exclude(location__type__in=NOT_STOCK)
+               .select_related('location__branch'))
     for row in rows:
         sign = 1 if row['movement_type'] == 'inbound' else -1
         later[row['batch_id']][0] += sign * (row['units'] or 0)
@@ -73,7 +77,7 @@ def stock_value(company, at):
             continue
         place = places.setdefault(batch.location_id, {**_place(batch.location), 'value': ZERO, 'uncosted_units': 0,
                                                       'uncosted_kg': ZERO_KG})
-        weighed = batch.product.is_weighed
+        weighed = bool(kg)  # from the lot itself: a product may have changed between each and weight since
         if batch.unit_cost is None:
             if weighed:
                 place['uncosted_kg'] += kg
@@ -91,6 +95,11 @@ ONLINE_NAME = 'Online shop'
 
 def _cost(amount, unit_cost):
     return None if unit_cost is None else money(amount * unit_cost)
+
+
+def _margin_percent(margin, costed_net):
+    """Margin over costed sales; none when there were none (or credits outweighed them: the sign means nothing)."""
+    return money(margin * 100 / costed_net) if costed_net > 0 else None
 
 
 class _Rows:
@@ -116,7 +125,7 @@ class _Rows:
         rows = []
         for row in self.rows.values():
             row['margin'] = row['costed_net'] - row['cost']
-            row['margin_percent'] = (money(row['margin'] * 100 / row['costed_net']) if row['costed_net'] else None)
+            row['margin_percent'] = _margin_percent(row['margin'], row['costed_net'])
             rows.append(row)
         return sorted(rows, key=lambda r: (CHANNEL_ORDER[r['channel']], r['branch_name'], r['location_code'] or ''))
 
@@ -126,28 +135,36 @@ def _named_place(name, branch=None):
 
 
 def _till(company, start, end_day, rows):
+    """Till sales by the UK day they reached the server (``created_at``, as their stock movements and the journal);
+    a sale voided later comes off in the week of its void (never before its sale), so past weeks never change."""
     since, until = uk_range(start, end_day)
-    items = (SaleItem.objects.filter(sale__session__till__branch__company=company, sale__status=Sale.COMPLETED,
-                                     sale__created_at__gte=since, sale__created_at__lt=until)
-             .select_related('product', 'sale__session__till__branch'))
+    scope = SaleItem.objects.filter(sale__session__till__branch__company=company).select_related(
+        'sale__session__till__branch')
+    sold = scope.filter(sale__created_at__gte=since, sale__created_at__lt=until)
+    voided = (scope.filter(sale__status=Sale.VOIDED)
+              .annotate(effective=Greatest('sale__voided_at', 'sale__created_at'))
+              .filter(effective__gte=since, effective__lt=until))
     costs = defaultdict(lambda: ZERO)
     uncosted = set()
-    allocations = (SaleAllocation.objects.filter(item__in=items.values('pk'))
-                   .values('item_id', 'quantity', 'weight_kg', 'batch__unit_cost', 'batch__product__sold_by'))
+    allocations = (SaleAllocation.objects.filter(Q(item__in=sold.values('pk')) | Q(item__in=voided.values('pk')))
+                   .values('item_id', 'quantity', 'weight_kg', 'batch__unit_cost'))
     for allocation in allocations:
-        weighed = allocation['batch__product__sold_by'] == 'weight'
-        cost = _cost(allocation['weight_kg'] if weighed else allocation['quantity'], allocation['batch__unit_cost'])
+        # Weighed or not from the allocation itself: the product may have changed kind since.
+        kg = allocation['weight_kg']
+        cost = _cost(kg if kg is not None else allocation['quantity'], allocation['batch__unit_cost'])
         if cost is None:
             uncosted.add(allocation['item_id'])
         else:
             costs[allocation['item_id']] += cost
-    for item in items:
-        branch = item.sale.session.till.branch
-        weighed = item.weight_kg is not None
-        net = item.net_amount if item.net_amount is not None else item.line_total  # before VAT was recorded (G07)
-        known = item.pk in costs and item.pk not in uncosted
-        rows.add((TILL, branch.pk, None), _named_place(branch.name, branch.pk), net=net, cost=costs[item.pk] if known else None,
-                 units=0 if weighed else item.quantity, kg=item.weight_kg if weighed else ZERO_KG)
+    for items, sign in ((sold, 1), (voided, -1)):
+        for item in items:
+            branch = item.sale.session.till.branch
+            weighed = item.weight_kg is not None
+            net = item.net_amount if item.net_amount is not None else item.line_total  # before G07: no VAT split
+            known = item.pk in costs and item.pk not in uncosted
+            rows.add((TILL, branch.pk, None), _named_place(branch.name, branch.pk), net=sign * net,
+                     cost=sign * costs[item.pk] if known else None, units=0 if weighed else sign * item.quantity,
+                     kg=sign * item.weight_kg if weighed else ZERO_KG)
 
 
 def _picked_cost(company, order_line_ids):
@@ -194,9 +211,9 @@ def _trade(company, start, end_day, rows):
 
 def _online(company, start, end_day, rows):
     since, until = uk_range(start, end_day)
+    # Every paid order counts: 'unmatched' or 'partial' only say some item could not be matched or taken.
     events = InboundEvent.objects.filter(connection__company=company, event_type='order.paid',
-                                         status__in=('applied', 'partial'), received_at__gte=since,
-                                         received_at__lt=until)
+                                         received_at__gte=since, received_at__lt=until)
     lines = []
     for event in events:
         data = event.payload.get('data') if isinstance(event.payload, dict) else None
@@ -207,6 +224,9 @@ def _online(company, start, end_day, rows):
     products = {p.external_id: p for p in Product.objects.filter(
         company=company, external_id__in={item['product_id'] for item, _ in lines})}
     place = _named_place(ONLINE_NAME)
+    rates = defaultdict(list)  # one query, not one per line: (valid_from, rate) per code, oldest first
+    for code, valid_from, rate in VatRate.objects.order_by('valid_from').values_list('code', 'valid_from', 'rate'):
+        rates[code].append((valid_from, rate))
     for item, day in lines:
         product = products.get(item['product_id'])
         quantity = item.get('quantity')
@@ -216,12 +236,19 @@ def _online(company, start, end_day, rows):
             continue
         if product is None or type(quantity) is not int or quantity < 1:
             continue
-        try:
-            net = gross - split_inclusive(gross, rate_for(product.vat_code, day))[1]
-        except NoVatRate:
-            net = gross
+        rate = _rate(rates, product.vat_code, day)
+        net = gross if rate is None else gross - split_inclusive(gross, rate)[1]
         # The shop's orders are taken FEFO without a link to the event: no batch, so no cost (yet).
         rows.add((ONLINE, None, None), place, net=net, cost=None, units=quantity)
+
+
+def _rate(rates, code, day):
+    """The rate in force for ``code`` on ``day`` (as ``vat.services.rate_for``), from rows already loaded."""
+    found = None
+    for valid_from, rate in rates.get(code, ()):
+        if valid_from <= day:
+            found = rate
+    return found
 
 
 def sales(company, start, end_day):
@@ -234,22 +261,36 @@ def sales(company, start, end_day):
 
 
 def waste(company, start, end_day):
-    """Write-offs written off in the UK days ``start``–``end_day``, by location."""
+    """Everything the ledger sent to WASTE in the UK days (write-offs, damaged trade returns, butchery waste), less
+    what came back from it, by the lot's location, at the lot's cost (kg for weighed)."""
     since, until = uk_range(start, end_day)
+    moves = (StockMovement.objects.filter(batch__product__company=company, date_time__gte=since, date_time__lt=until)
+             .filter(Q(movement_type='outbound', destination_location__type=Location.WASTE)
+                     | Q(movement_type='inbound', source_location__type=Location.WASTE))
+             .values('movement_type', 'quantity', 'weight_kg', 'batch__unit_cost', 'batch__location_id'))
     places = {}
-    for write_off in (WriteOff.objects.filter(company=company, status=WriteOff.WRITTEN_OFF,
-                                              written_off_at__gte=since, written_off_at__lt=until)
-                      .select_related('location__branch', 'batch__product')):
-        place = places.setdefault(write_off.location_id, {**_place(write_off.location), 'count': 0, 'units': 0,
-                                                          'kg': ZERO_KG, 'cost': ZERO, 'uncosted': 0})
-        place['count'] += 1
-        place['units'] += write_off.quantity
-        place['kg'] += write_off.weight_kg or ZERO_KG
-        if write_off.cost is None:
-            place['uncosted'] += 1
+    for move in moves:
+        sign = 1 if move['movement_type'] == 'outbound' else -1
+        location_id = move['batch__location_id']
+        if location_id not in places:
+            places[location_id] = {'units': 0, 'kg': ZERO_KG, 'cost': ZERO, 'uncosted_units': 0,
+                                   'uncosted_kg': ZERO_KG}
+        place = places[location_id]
+        kg = move['weight_kg'] or ZERO_KG
+        units = sign * move['quantity']
+        place['units'] += units
+        place['kg'] += sign * kg
+        cost = _cost(kg if move['weight_kg'] else move['quantity'], move['batch__unit_cost'])
+        if cost is None:
+            if move['weight_kg']:
+                place['uncosted_kg'] += sign * kg
+            else:
+                place['uncosted_units'] += units
         else:
-            place['cost'] += write_off.cost
-    return sorted(places.values(), key=lambda row: (row['branch_name'], row['location_code']))
+            place['cost'] += sign * cost
+    found = Location.objects.filter(pk__in=places).select_related('branch')
+    rows = [{**_place(location), **places[location.pk]} for location in found]
+    return sorted(rows, key=lambda row: (row['branch_name'], row['location_code']))
 
 
 def _totals(rows, fields):
@@ -261,7 +302,7 @@ def _period(company, start, end_day):
     sold, wasted, stock = sales(company, start, end_day), waste(company, start, end_day), stock_value(company, until)
     totals = _totals(sold, ('net', 'costed_net', 'cost', 'uncosted_net'))
     totals['margin'] = totals['costed_net'] - totals['cost']
-    totals['margin_percent'] = money(totals['margin'] * 100 / totals['costed_net']) if totals['costed_net'] else None
+    totals['margin_percent'] = _margin_percent(totals['margin'], totals['costed_net'])
     totals['waste_cost'] = _totals(wasted, ('cost',))['cost']
     totals['stock_value'] = _totals(stock, ('value',))['value']
     return {'start': start, 'end': end_day, 'sales': sold, 'waste': wasted, 'stock': stock, 'totals': totals}

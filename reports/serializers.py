@@ -19,8 +19,10 @@ class DashboardQuerySerializer(serializers.Serializer):
     week = serializers.DateField(required=False, input_formats=['%Y-%m-%d'], help_text='Any day in the week.')
 
     def validate_week(self, day):
-        if day.year < EARLIEST or day > uk_date() + timedelta(days=366):  # (no replace(): 29 February)
-            raise serializers.ValidationError('Pick a week from 2000 to a year from now.')
+        if day.year < EARLIEST:
+            raise serializers.ValidationError('Pick a week from 2000 on.')
+        if day - timedelta(days=day.weekday()) > uk_date():
+            raise serializers.ValidationError('That week has not started yet.')
         return day
 
 
@@ -45,11 +47,11 @@ class DashboardSalesRowSerializer(DashboardPlaceSerializer):
 
 
 class DashboardWasteRowSerializer(DashboardPlaceSerializer):
-    count = serializers.IntegerField()
-    units = serializers.IntegerField()
+    units = serializers.IntegerField(help_text='Sent to WASTE, less what came back (write-offs, returns, butchery).')
     kg = _kg()
     cost = _money()
-    uncosted = serializers.IntegerField(help_text='Write-offs with no known cost.')
+    uncosted_units = serializers.IntegerField(help_text='Units from lots with no known cost.')
+    uncosted_kg = _kg()
 
 
 class DashboardStockRowSerializer(DashboardPlaceSerializer):

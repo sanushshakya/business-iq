@@ -3,6 +3,7 @@
 """G11: the ledger primitives transfers use (moving units into the same lot at another location)."""
 
 from datetime import timedelta
+from decimal import Decimal
 
 from django.db import transaction
 from django.test import TestCase
@@ -45,6 +46,16 @@ class TransferLedgerTests(TestCase):
         self.assertEqual((in_.batch, in_.movement_type, in_.source_location, in_.destination_location),
                          (held, 'inbound', self.wh, self.transit))
         self.assertEqual(Product.objects.get(pk=self.product.pk).stock_quantity, 10)
+
+    def test_a_new_lot_keeps_the_landed_cost(self):
+        # G59: stock value and margin read the batch cost, so a transferred lot must carry it (relocate does too).
+        source = self.batch(10, 30, 'LOT-C')
+        StockBatch.objects.filter(pk=source.pk).update(unit_cost=Decimal('1.4000'))
+        source.refresh_from_db()
+        with transaction.atomic():
+            held = transfer_batch(source, 4, self.transit)
+            shop = transfer_batch(StockBatch.objects.select_for_update().get(pk=held.pk), 4, self.shop)
+        self.assertEqual((held.unit_cost, shop.unit_cost), (Decimal('1.4000'), Decimal('1.4000')))
 
     def test_transfer_batch_adds_to_an_existing_lot(self):
         source = self.batch(10, 30, 'LOT-1')

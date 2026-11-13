@@ -30,6 +30,8 @@ from rest_framework import serializers
 from common.services.settings_service import get_company_setting
 from inventory.ledger import free_batches, sellable_locations, take_fefo, take_short, take_weighed, virtual_location
 from inventory.models import Location, Product
+from promotions.engine import apply as apply_promotions
+from promotions.services import active_promotions
 from sync.outbox import active_connection, emit
 from vat.services import UK, NoVatRate, rate_for, split_inclusive
 
@@ -37,7 +39,8 @@ from .labels import read_label
 from .models import Sale, SaleAllocation, SaleException, SaleItem, TillSession
 from .serializers import LAST4
 from .services import (
-    DEFAULT_LABEL_TOLERANCE, LABEL_TOLERANCE_KEY, _loyalty_reference, manual_weight_limit, reverse_sale,
+    DEFAULT_LABEL_TOLERANCE, LABEL_TOLERANCE_KEY, _loyalty_reference, engine_line, manual_weight_limit,
+    record_promotions, reverse_sale,
 )
 
 logger = logging.getLogger(__name__)
@@ -214,8 +217,21 @@ def record_offline_sale(user, data):
                            {'detail': 'The session was closed before this sale was sent; its cash-up does not '
                                       'include it.'}))
 
-    for product, quantity, weight, label, label_problem, item, rate in lines:
+    # Promotions (G58): what the server would take off each line on the sale's day at its branch, today's
+    # definitions. A line charged that way keeps its discount; any other line is a price exception as before.
+    listed = [None if product.is_weighed != (weight is not None) else _expected(product, quantity, weight, label)
+              for product, quantity, weight, label, *_ in lines]
+    promotions = active_promotions(company.pk, branch.pk, day)
+    result = apply_promotions(
+        [engine_line(index, product, quantity, weight, listed[index], label)
+         for index, (product, quantity, weight, label, *_) in enumerate(lines) if listed[index] is not None],
+        promotions) if promotions else None
+    off = result.discounts if result else {}
+    matched = all(listed[index] - amount == lines[index][5]['charged'] for index, amount in off.items())
+
+    for index, (product, quantity, weight, label, label_problem, item, rate) in enumerate(lines):
         charged = item['charged']
+        discount = off.get(index, Decimal('0.00')) if matched else Decimal('0.00')
         changed = product.is_weighed != (weight is not None)  # sold by each/weight then, the other way now
         typed = weight is not None and not item.get('barcode')
         net, vat = split_inclusive(charged, rate)
@@ -224,8 +240,8 @@ def record_offline_sale(user, data):
         line = SaleItem.objects.create(
             sale=sale, product=product, product_name=product.name, quantity=quantity,
             unit_price=(per_kg.quantize(CENTS, ROUND_HALF_UP) if per_kg is not None
-                        else (charged / quantity).quantize(CENTS, ROUND_HALF_UP)),
-            weight_kg=weight, price_per_kg=per_kg, line_total=charged, vat_code=product.vat_code, vat_rate=rate,
+                        else ((charged + discount) / quantity).quantize(CENTS, ROUND_HALF_UP)),
+            weight_kg=weight, price_per_kg=per_kg, line_total=charged, discount=discount, vat_code=product.vat_code, vat_rate=rate,
             net_amount=net, vat_amount=vat, barcode=item.get('barcode', '')[:64],
             label_price=label.label_price if label else None, expected_price=expected_price,
             label_price_flagged=flagged, manual_weight=typed,
@@ -237,7 +253,7 @@ def record_offline_sale(user, data):
                            else f'{product.name} is sold by each now; it was sold by weight.')}))
         if label_problem:
             exceptions.append((line, SaleException.LABEL, {'product': product, 'detail': label_problem[:255]}))
-        expected = None if changed else _expected(product, quantity, weight, label)
+        expected = None if listed[index] is None else listed[index] - off.get(index, Decimal('0.00'))
         if expected is not None and expected != charged:
             exceptions.append((line, SaleException.PRICE, {'product': product, 'expected': expected,
                                                            'charged': charged}))
@@ -262,6 +278,8 @@ def record_offline_sale(user, data):
 
     for line, kind, fields in exceptions:
         SaleException.objects.create(sale=sale, item=line, kind=kind, **fields)
+    if result and matched:
+        record_promotions(sale, result.applied)
 
     if voided:
         void = data['void']

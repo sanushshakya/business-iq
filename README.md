@@ -155,6 +155,7 @@ token lifetimes, login/refresh throttles, field-encryption keys, and the externa
 | Trade (B2B) | `/wholesale/customers/` (ledger, open items, credit, statements, `aged-debtors/`), `price-lists/`, `orders/`, `invoices/`, `credit-notes/`, `payments/`, `runs/`, `customer-emails/` — see CLAUDE.md (G38–G51) |
 | Accounting | `/accounting/accounts/`, `journals/`, `periods/`, `postings/run/`, `trial-balance/`, `reports/profit-and-loss/`, `reports/balance-sheet/`, `vat-return/`, `vat-returns/`, `exports/journals.csv`, `exports/vat.csv` (G52–G55) |
 | Purchasing | `/purchasing/supplier-products/`, `/purchasing/orders/` (`draft/`, `lines/{id}/`, `approve/`, `cancel/`); supplier ordering terms on `/inventory/suppliers/` (G57; drafts only, never sent) |
+| Reports | `/reports/dashboard/?week=` — sales and margin by channel and branch, waste and stock value by location, a week against the same days of the week before (G59; staff only, read only) |
 | Shopify / sync | `/sync/shopify-connections/`, `/sync/tasks/` |
 
 Full, always-current reference with request and response shapes: `/api/docs/`.

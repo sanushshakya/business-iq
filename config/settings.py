@@ -52,6 +52,18 @@ if _secret_key_problem:
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='127.0.0.1', cast=lambda v: [h for h in re.split(r'[,\s]+', v) if h])
 
 
+# Behind CloudFront and the load balancer (G60); all off by default so local runs are unchanged.
+# BEHIND_HTTPS_PROXY trusts X-Forwarded-Proto (set it only where the proxy always sets that header: the ALB does)
+# and keeps the session and CSRF cookies to HTTPS.
+BEHIND_HTTPS_PROXY = config('BEHIND_HTTPS_PROXY', default=False, cast=bool)
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https') if BEHIND_HTTPS_PROXY else None
+SESSION_COOKIE_SECURE = BEHIND_HTTPS_PROXY
+CSRF_COOKIE_SECURE = BEHIND_HTTPS_PROXY
+SECURE_HSTS_SECONDS = config('SECURE_HSTS_SECONDS', default='0', cast=lambda v: int(v or 0))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+# Full origins, e.g. "https://iq.example.co.uk" (the admin's forms need it behind the proxy).
+CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='', cast=lambda v: [o for o in re.split(r'[,\s]+', v) if o])
+
 # Custom user model (email login, linked to a Company)
 AUTH_USER_MODEL = 'tenants.CustomUser'
 
@@ -86,6 +98,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "common.health.HealthCheckMiddleware",  # /healthz/ before host checks (G60)
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -254,6 +267,9 @@ else:
             "CONN_MAX_AGE": config('DB_CONN_MAX_AGE', default=60, cast=int),
         }
     }
+    # RDS: "require" (encrypted) or "verify-full" with the RDS CA bundle. Blank = the driver's default.
+    if config('DB_SSLMODE', default=''):
+        DATABASES["default"]["OPTIONS"] = {"sslmode": config('DB_SSLMODE')}
 
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/

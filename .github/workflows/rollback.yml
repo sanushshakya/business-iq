@@ -1,0 +1,51 @@
+name: Rollback
+
+# Puts every ECS service (web, worker, beat) back on an earlier image (G60), from the Actions tab:
+#   target "previous"     the image before the one running now (a deploy that failed is skipped)
+#   target <commit SHA>   that commit's image, which must still be in ECR
+# It never runs migrations: deploys only ship migrations the previous release can run against, so the older code
+# works on today's database. Same steps and checks as Deploy (scripts/deploy/ecs.sh); runbook: the workspace's
+# docs/runbooks/deploy.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: '"previous", or the commit SHA to go back to'
+        required: true
+        default: previous
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  rollback:
+    name: Roll ECS back
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Roll back
+        env:
+          CLUSTER: ${{ vars.AWS_ECS_CLUSTER || secrets.AWS_ECS_CLUSTER }}
+          SERVICES: ${{ vars.AWS_ECS_SERVICES || secrets.AWS_ECS_SERVICE }}
+          IMAGE_REPO: ${{ vars.AWS_ECR_REPOSITORY_URL || secrets.AWS_ECR_REPOSITORY_URL }}
+          # Passed through the environment, never pasted into the script (the script checks it is a SHA).
+          TARGET: ${{ inputs.target }}
+          SUMMARY_FILE: ${{ github.step_summary }}
+        run: bash scripts/deploy/ecs.sh rollback

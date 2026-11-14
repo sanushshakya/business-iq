@@ -2,6 +2,7 @@
 
 """Settings for running behind CloudFront and a load balancer (G60): all from the environment, all off by default."""
 
+from django.core.exceptions import ImproperlyConfigured
 from django.test import SimpleTestCase, override_settings
 
 from common.tests.test_settings import STRONG_KEY, load_settings
@@ -66,3 +67,32 @@ class HealthCheckTests(SimpleTestCase):
     def test_only_get_and_head(self):
         self.assertEqual(self.client.head('/healthz/', HTTP_HOST='x').status_code, 200)
         self.assertEqual(self.client.post('/healthz/', HTTP_HOST='x').status_code, 405)
+
+
+FERNET_KEY = 'x' * 43 + '='  # a well-formed key, not a secret
+
+
+class ClientAddressTests(SimpleTestCase):
+    def test_no_proxy_count_by_default(self):
+        self.assertIsNone(prod(NUM_PROXIES='')['REST_FRAMEWORK'].get('NUM_PROXIES'))
+
+    def test_proxy_count_for_throttling(self):
+        # CloudFront then the load balancer: the client is the second address from the right of X-Forwarded-For.
+        self.assertEqual(prod(NUM_PROXIES='2')['REST_FRAMEWORK']['NUM_PROXIES'], 2)
+
+
+class FieldEncryptionKeyTests(SimpleTestCase):
+    def test_well_formed_keys_are_accepted(self):
+        self.assertEqual(prod(FIELD_ENCRYPTION_KEYS=f'{FERNET_KEY},{FERNET_KEY}')['FIELD_ENCRYPTION_KEYS'],
+                         [FERNET_KEY, FERNET_KEY])
+
+    def test_a_malformed_key_is_refused_without_showing_it(self):
+        with self.assertRaises(ImproperlyConfigured) as caught:
+            prod(FIELD_ENCRYPTION_KEYS='not-a-fernet-key-placeholder')
+        self.assertIn('FIELD_ENCRYPTION_KEYS entry 1 is not a Fernet key', str(caught.exception))
+        self.assertNotIn('placeholder', str(caught.exception))
+
+    def test_keys_can_be_required(self):
+        with self.assertRaisesMessage(ImproperlyConfigured, 'FIELD_ENCRYPTION_KEYS is required'):
+            prod(FIELD_ENCRYPTION_KEYS='', FIELD_ENCRYPTION_KEYS_REQUIRED='True')
+        self.assertEqual(prod(FIELD_ENCRYPTION_KEYS='', FIELD_ENCRYPTION_KEYS_REQUIRED='')['FIELD_ENCRYPTION_KEYS'], [])

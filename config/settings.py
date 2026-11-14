@@ -14,6 +14,7 @@ import hashlib
 import re
 import warnings
 from pathlib import Path
+from cryptography.fernet import Fernet
 from decouple import config
 from django.core.exceptions import ImproperlyConfigured
 
@@ -152,6 +153,10 @@ REST_FRAMEWORK = {
     "EXCEPTION_HANDLER": "common.exceptions.custom_exception_handler",
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
+# How many proxies sit in front of the app (CloudFront and the load balancer: 2). Throttles then key on the client's
+# address in X-Forwarded-For instead of the whole header, which a client could vary to dodge the login limit.
+if config('NUM_PROXIES', default=''):
+    REST_FRAMEWORK["NUM_PROXIES"] = config('NUM_PROXIES', cast=int)
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "Business IQ API",
@@ -212,6 +217,18 @@ RATE_CHANGE_THRESHOLD = config('RATE_CHANGE_THRESHOLD', default=5.0, cast=float)
 # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 # Defaults to a key derived from SECRET_KEY.
 FIELD_ENCRYPTION_KEYS = config('FIELD_ENCRYPTION_KEYS', default='', cast=lambda v: [k.strip() for k in v.split(',') if k.strip()])
+# A malformed key would only fail at the first encryption, so refuse it at start-up (without echoing it). Production
+# sets FIELD_ENCRYPTION_KEYS_REQUIRED: the fallback derived from SECRET_KEY would tie the data to that key.
+for _n, _key in enumerate(FIELD_ENCRYPTION_KEYS, start=1):
+    try:
+        Fernet(_key.encode())
+    except (ValueError, TypeError):
+        raise ImproperlyConfigured(
+            f'FIELD_ENCRYPTION_KEYS entry {_n} is not a Fernet key. Generate one with: python -c "from '
+            'cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
+        ) from None
+if config('FIELD_ENCRYPTION_KEYS_REQUIRED', default=False, cast=bool) and not FIELD_ENCRYPTION_KEYS:
+    raise ImproperlyConfigured('FIELD_ENCRYPTION_KEYS is required (FIELD_ENCRYPTION_KEYS_REQUIRED is on).')
 
 # Cache (tariff and calendar lookups). Local memory by default; Redis when USE_REDIS_CACHE is set.
 if config('USE_REDIS_CACHE', default=False, cast=bool):

@@ -160,6 +160,50 @@ class EcsScriptTests(unittest.TestCase):
         self.assertIn('NOT back on the previous version: beat', result.stderr)
         self.assertEqual(self.running('web'), arn('iq-staging-web', 2))
 
+    def test_a_registration_that_fails_part_way_changes_nothing(self):
+        self.state['register_fail'] = ['iq-staging-worker']
+        result = self.run_script('deploy', IMAGE_TAG=NEW)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('::error title=Register failed::', result.stderr)
+        self.assertEqual(self.updates(), [])
+        self.assertNotIn('run-task', [c[1] for c in self.state['calls']])
+        # web's new revision is not left ACTIVE
+        self.assertEqual(self.state['taskdefs'][arn('iq-staging-web', 3)]['status'], 'INACTIVE')
+
+    def test_an_update_refused_part_way_puts_every_service_back(self):
+        self.state['update_fail'] = ['worker']
+        result = self.run_script('deploy', IMAGE_TAG=NEW)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Every service is back on its previous task definition', result.stderr)
+        for name in SERVICES:
+            self.assertEqual(self.running(name), arn(f'iq-staging-{name}', 2))
+
+    def test_a_service_left_on_the_new_revision_keeps_it_active(self):
+        self.state['stuck'] = ['beat']
+        self.run_script('deploy', IMAGE_TAG=NEW)
+        # beat never settled, so some of its tasks may still run revision 3
+        self.assertEqual(self.state['taskdefs'][arn('iq-staging-beat', 3)].get('status', 'ACTIVE'), 'ACTIVE')
+        self.assertEqual(self.state['taskdefs'][arn('iq-staging-web', 3)]['status'], 'INACTIVE')
+
+    def test_a_migration_that_overruns_is_stopped_and_named(self):
+        self.state['migration_running'] = True
+        result = self.run_script('deploy', IMAGE_TAG=NEW, MIGRATION_TIMEOUT='0', POLL_SECONDS='0')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('::error title=Migrations timed out::', result.stderr)
+        self.assertEqual(self.state['stopped_task'], 'arn:aws:ecs:eu-west-2:000000000000:task/iq/migrate1')
+        self.assertEqual(self.updates(), [])
+
+    def test_an_ecr_error_is_not_reported_as_a_missing_image(self):
+        self.state['ecr_error'] = True
+        result = self.run_script('deploy', IMAGE_TAG=NEW)
+        self.assertIn('::error title=ECR check failed::', result.stderr)
+        self.assertNotIn('Image not found', result.stderr)
+
+    def test_summary_falls_back_to_github_step_summary(self):
+        result = self.run_script('deploy', IMAGE_TAG=NEW, SUMMARY_FILE='', GITHUB_STEP_SUMMARY=str(self.summary))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f'Deployed `{NEW}`', self.summary.read_text())
+
     def test_migrations_can_be_skipped(self):
         result = self.run_script('deploy', IMAGE_TAG=NEW, RUN_MIGRATIONS='false')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -193,6 +237,12 @@ class EcsScriptTests(unittest.TestCase):
     def test_rollback_to_something_that_is_not_a_commit_is_refused(self):
         result = self.run_script('rollback', TARGET='latest; rm -rf /')
         self.assertIn('::error title=Bad target::', result.stderr)
+        self.assertEqual(self.updates(), [])
+
+    def test_rollback_to_a_short_sha_is_refused(self):
+        result = self.run_script('rollback', TARGET=OLDER[:7])
+        self.assertIn('::error title=Bad target::', result.stderr)
+        self.assertIn('full 40-character', result.stderr)
         self.assertEqual(self.updates(), [])
 
     def test_rollback_with_no_earlier_image(self):

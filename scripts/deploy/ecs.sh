@@ -7,7 +7,9 @@
 #
 # Environment: CLUSTER, SERVICES ("web worker beat", commas or spaces; the first one runs the migrations),
 # IMAGE_REPO (ECR repository URL), IMAGE_TAG (deploy), TARGET (rollback), APP_CONTAINER (optional: the container
-# that runs `migrate`; default the first container using the image), SUMMARY_FILE (optional, markdown appended).
+# that runs `migrate`; default the first container using the image), SUMMARY_FILE (optional, markdown appended;
+# defaults to GITHUB_STEP_SUMMARY), MIGRATION_TIMEOUT (seconds, default 1800; the task is stopped after it),
+# POLL_SECONDS (default 10).
 #
 # Every aws call asks for JSON and is read with jq (no --query), so the stand-in only has to return whole answers.
 # Written for bash 3.2 (macOS) as well as Linux: no associative arrays, guarded empty arrays.
@@ -16,7 +18,8 @@ set -euo pipefail
 
 say() { echo "$*" >&2; }
 fail() { echo "::error title=${1}::${2}" >&2; exit 1; }
-summary() { if [ -n "${SUMMARY_FILE:-}" ]; then echo "$*" >> "$SUMMARY_FILE"; fi; }
+SUMMARY_FILE=${SUMMARY_FILE:-${GITHUB_STEP_SUMMARY:-}}
+summary() { if [ -n "$SUMMARY_FILE" ]; then echo "$*" >> "$SUMMARY_FILE"; fi; }
 
 need() { [ -n "${!1:-}" ] || fail "Not configured" "$1 is not set."; }
 
@@ -43,14 +46,21 @@ image_tag_of() {
       '[.taskDefinition.containerDefinitions[].image | select(startswith($repo + ":"))][0] // "" | ltrimstr($repo + ":")'
 }
 
+# 0 = the image is in ECR, 1 = it is not; any other error (access, throttling) fails the run.
 image_exists() {
-  aws ecr describe-images --repository-name "${IMAGE_REPO#*/}" --image-ids "imageTag=$1" --output json > /dev/null 2>&1
+  local out
+  if out=$(aws ecr describe-images --repository-name "${IMAGE_REPO#*/}" --image-ids "imageTag=$1" --output json 2>&1); then
+    return 0
+  fi
+  if grep -q ImageNotFoundException <<< "$out"; then return 1; fi
+  fail "ECR check failed" "Could not check $IMAGE_REPO:$1 in ECR: $(tail -n 1 <<< "$out")"
 }
 
 # Register a copy of the service's task definition with every container of our repository on $1.
 register_revision() {
   local current_arn=$1 image=$2 tmp
   tmp=$(mktemp)
+  # Runs as $(register_revision ...) || exit 1, where set -e is off: every step is checked by hand.
   aws ecs describe-task-definition --task-definition "$current_arn" --output json \
     | jq --arg repo "$IMAGE_REPO" --arg image "$image" '
         .taskDefinition
@@ -58,13 +68,19 @@ register_revision() {
               .registeredAt, .registeredBy, .deregisteredAt)
         | .containerDefinitions |= map(
             if (.image == $repo) or (.image | startswith($repo + ":")) then .image = $image else . end)
-      ' > "$tmp"
+      ' > "$tmp" || { rm -f "$tmp"; fail "Register failed" "Could not read $current_arn."; }
   if ! jq -e --arg image "$image" 'any(.containerDefinitions[]; .image == $image)' "$tmp" > /dev/null; then
     rm -f "$tmp"
     fail "Nothing to update" "No container in $current_arn uses $IMAGE_REPO."
   fi
-  aws ecs register-task-definition --cli-input-json "file://$tmp" --output json | jq -r '.taskDefinition.taskDefinitionArn'
+  local arn
+  arn=$(aws ecs register-task-definition --cli-input-json "file://$tmp" --output json | jq -r '.taskDefinition.taskDefinitionArn') \
+    || arn=""
   rm -f "$tmp"
+  if [ -z "$arn" ] || [ "$arn" = "null" ]; then
+    fail "Register failed" "Could not register a new revision of $current_arn. Nothing was deployed."
+  fi
+  echo "$arn"
 }
 
 run_migrations() {
@@ -95,8 +111,17 @@ run_migrations() {
   fi
   task_arn=$(jq -r '.tasks[0].taskArn' <<< "$run_json")
   say "Waiting for migration task $task_arn ..."
-  aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$task_arn"
-  task=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$task_arn" --output json)
+  local deadline=$((SECONDS + ${MIGRATION_TIMEOUT:-1800}))
+  while :; do
+    task=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$task_arn" --output json)
+    [ "$(jq -r '.tasks[0].lastStatus' <<< "$task")" = "STOPPED" ] && break
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      aws ecs stop-task --cluster "$CLUSTER" --task "$task_arn" --reason "deploy: migration timed out" --output json \
+        > /dev/null || say "Could not stop $task_arn."
+      fail "Migrations timed out" "Still running after ${MIGRATION_TIMEOUT:-1800} s; stop asked for $task_arn. Nothing was deployed, but the database may be part-migrated: read the task's logs before deploying again."
+    fi
+    sleep "${POLL_SECONDS:-10}"
+  done
   exit_code=$(jq -r --arg name "$container" '.tasks[0].containers[] | select(.name == $name) | .exitCode // "none"' <<< "$task")
   if [ "$exit_code" != "0" ]; then
     fail "Migrations failed" "Exit code $exit_code ($(jq -r '.tasks[0].stoppedReason // "no reason given"' <<< "$task")). Nothing was deployed; see the task's logs ($task_arn)."
@@ -105,12 +130,14 @@ run_migrations() {
   summary "- Migrations applied (task \`$task_arn\`)"
 }
 
+# Returns non-zero (never exits) when the update can't be made, so the caller can put every service back.
 update_service() {
   local service=$1 task_def=$2 config
   # Keep the service's own percentages (beat: never two at once) and switch the circuit breaker on.
-  config=$(service_json "$service" | jq -c '.deploymentConfiguration + {deploymentCircuitBreaker: {enable: true, rollback: true}}')
+  config=$( (service_json "$service") | jq -c '.deploymentConfiguration + {deploymentCircuitBreaker: {enable: true, rollback: true}}') \
+    || return 1
   aws ecs update-service --cluster "$CLUSTER" --service "$service" --task-definition "$task_def" \
-    --deployment-configuration "$config" --output json > /dev/null
+    --deployment-configuration "$config" --output json > /dev/null || return 1
 }
 
 # The task definition a service's PRIMARY deployment runs, and whether that rollout completed.
@@ -141,30 +168,44 @@ roll_out() {
 
   if [ "$migrate" = "true" ]; then run_migrations "${SERVICE_LIST[0]}" "${NEW[0]}" "$image"; fi
 
-  for i in "${!SERVICE_LIST[@]}"; do update_service "${SERVICE_LIST[$i]}" "${NEW[$i]}"; done
-  wait_stable
-
   local failed=() running state
   for i in "${!SERVICE_LIST[@]}"; do
-    read -r running state <<< "$(primary_of "${SERVICE_LIST[$i]}")"
-    if [ "$running" != "${NEW[$i]}" ] || [ "$state" != "COMPLETED" ]; then
-      failed+=("${SERVICE_LIST[$i]} (running $running, $state)")
+    if ! update_service "${SERVICE_LIST[$i]}" "${NEW[$i]}"; then
+      failed+=("${SERVICE_LIST[$i]} (update refused)")
+      break   # stop here; everything already moved goes back below
     fi
   done
+  if [ "${#failed[@]}" -eq 0 ]; then
+    wait_stable
+    for i in "${!SERVICE_LIST[@]}"; do
+      read -r running state <<< "$(primary_of "${SERVICE_LIST[$i]}" || true)"
+      if [ "$running" != "${NEW[$i]}" ] || [ "$state" != "COMPLETED" ]; then
+        failed+=("${SERVICE_LIST[$i]} (running ${running:-?}, ${state:-?})")
+      fi
+    done
+  fi
 
   if [ "${#failed[@]}" -gt 0 ]; then
     # One version for the whole app: put every service back on what it ran before.
     say "Rollout failed for: ${failed[*]}. Putting every service back on its previous task definition."
     for i in "${!SERVICE_LIST[@]}"; do
-      read -r running state <<< "$(primary_of "${SERVICE_LIST[$i]}")"
-      if [ "$running" != "${CURRENT[$i]}" ]; then update_service "${SERVICE_LIST[$i]}" "${CURRENT[$i]}"; fi
+      read -r running state <<< "$(primary_of "${SERVICE_LIST[$i]}" || true)"
+      if [ "$running" != "${CURRENT[$i]}" ]; then
+        update_service "${SERVICE_LIST[$i]}" "${CURRENT[$i]}" || say "Could not put ${SERVICE_LIST[$i]} back."
+      fi
     done
     wait_stable
-    local back=()
+    local back=() keep=()
     for i in "${!SERVICE_LIST[@]}"; do
-      read -r running state <<< "$(primary_of "${SERVICE_LIST[$i]}")"
-      if [ "$running" != "${CURRENT[$i]}" ] || [ "$state" != "COMPLETED" ]; then back+=("${SERVICE_LIST[$i]}"); fi
+      read -r running state <<< "$(primary_of "${SERVICE_LIST[$i]}" || true)"
+      if [ "$running" != "${CURRENT[$i]}" ] || [ "$state" != "COMPLETED" ]; then
+        back+=("${SERVICE_LIST[$i]}")
+      else
+        keep+=("${NEW[$i]}")
+      fi
     done
+    # A service still on (or moving to) its new revision keeps it ACTIVE; only the others are discarded.
+    NEW=(${keep[@]+"${keep[@]}"})
     summary "### Deployment of \`$tag\` failed"
     summary "- Did not become healthy: ${failed[*]}"
     if [ "${#back[@]}" -gt 0 ]; then
@@ -222,7 +263,7 @@ main() {
       need TARGET
       local tag
       if [ "$TARGET" = "previous" ]; then tag=$(previous_tag) || exit 1; else tag=$TARGET; fi
-      [[ "$tag" =~ ^[0-9a-f]{7,40}$ ]] || fail "Bad target" "'$tag' is not a commit SHA."
+      [[ "$tag" =~ ^[0-9a-f]{40}$ ]] || fail "Bad target" "'$tag' is not a full 40-character commit SHA."
       say "Rolling back to $tag (no migrations)."
       summary "### Rolled back to \`$tag\`"
       roll_out "$tag" false

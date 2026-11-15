@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: '"previous", or the commit SHA to go back to'
+        description: '"previous", or the full 40-character commit SHA to go back to'
         required: true
         default: previous
 
@@ -28,7 +28,7 @@ jobs:
     name: Roll ECS back
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     environment: production
 
     steps:
@@ -47,5 +47,4 @@ jobs:
           IMAGE_REPO: ${{ vars.AWS_ECR_REPOSITORY_URL || secrets.AWS_ECR_REPOSITORY_URL }}
           # Passed through the environment, never pasted into the script (the script checks it is a SHA).
           TARGET: ${{ inputs.target }}
-          SUMMARY_FILE: ${{ github.step_summary }}
         run: bash scripts/deploy/ecs.sh rollback

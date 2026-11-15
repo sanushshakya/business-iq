@@ -6,6 +6,10 @@ State is a JSON file named by FAKE_AWS_STATE; every call is appended to its "cal
   migration_exit   exit code of the migration container (default 0)
   rolled_back      services whose next rollout onto a new task definition the circuit breaker undoes
   stuck            services that never become stable on anything
+  migration_running  the migration task never stops (until stop-task)
+  ecr_error        describe-images fails with AccessDenied
+  register_fail    task-definition families whose registration fails
+  update_fail      services whose update-service call fails (once)
 """
 
 import json
@@ -53,6 +57,9 @@ def handle(state, argv):
     services, defs = state['services'], state['taskdefs']
 
     if service == 'ecr' and command == 'describe-images':
+        if state.get('ecr_error'):
+            print('An error occurred (AccessDeniedException)', file=sys.stderr)
+            return None, 254
         tag = option(args, '--image-ids').split('=', 1)[1]
         if tag in state.get('images', []):
             return {'imageDetails': [{'imageTags': [tag]}]}, 0
@@ -75,6 +82,9 @@ def handle(state, argv):
         with open(option(args, '--cli-input-json')[len('file://'):]) as f:
             body = json.load(f)
         family = body['family']
+        if family in state.get('register_fail', []):
+            print('An error occurred (ClientException): Too many concurrent attempts', file=sys.stderr)
+            return None, 254
         revision = 1 + max(int(a.rsplit(':', 1)[1]) for a in defs if a.split('/')[-1].split(':')[0] == family)
         arn = f'arn:aws:ecs:eu-west-2:000000000000:task-definition/{family}:{revision}'
         defs[arn] = body
@@ -98,15 +108,25 @@ def handle(state, argv):
                                    'launch_type': option(args, '--launch-type')}
         return {'tasks': [{'taskArn': 'arn:aws:ecs:eu-west-2:000000000000:task/iq/migrate1'}], 'failures': []}, 0
 
+    if command == 'stop-task':
+        state['stopped_task'] = option(args, '--task')
+        return {'task': {'taskArn': option(args, '--task')}}, 0
+
     if command == 'describe-tasks':
         name = state['migration_task']['overrides']['containerOverrides'][0]['name']
+        if state.get('migration_running') and 'stopped_task' not in state:
+            return {'tasks': [{'lastStatus': 'RUNNING', 'containers': [{'name': name}]}]}, 0
         exit_code = state.get('migration_exit', 0)
-        return {'tasks': [{'containers': [{'name': name, 'exitCode': exit_code}],
+        return {'tasks': [{'lastStatus': 'STOPPED', 'containers': [{'name': name, 'exitCode': exit_code}],
                            'stoppedReason': 'Essential container in task exited'}]}, 0
 
     if command == 'update-service':
         name, arn = option(args, '--service'), option(args, '--task-definition')
         svc = services[name]
+        if name in state.get('update_fail', []):
+            state['update_fail'].remove(name)
+            print('An error occurred (ThrottlingException): Rate exceeded', file=sys.stderr)
+            return None, 254
         svc['deploymentConfiguration'] = json.loads(option(args, '--deployment-configuration'))
         if name in state.get('stuck', []):
             svc['deployments'] = deployment(arn, 'IN_PROGRESS')

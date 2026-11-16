@@ -160,6 +160,18 @@ end-of-day total; `expected_card` (completed card sales) is frozen at close like
     No answer, 5xx or `DUPLICATE_SUBMISSION` → `unknown`.
   - `check`: HMRC's copy with equal boxes → accepted; 404 → rejected `NOT_RECEIVED`; else stays unknown,
     `FIGURES_DIFFER`. A new submit checks an unknown one first.
+  - **Review fixes:**
+    - A `sending` row older than `HmrcSubmission.STALE_AFTER` (5 min) becomes unknown (`INTERRUPTED`).
+    - `_accept` marks the row accepted before `record_return`. A recording failure leaves it unknown
+      (`NOT_RECORDED`).
+    - The submission stores `vrn`; `check` refuses another VRN.
+    - `check` re-raises HMRC errors other than 404.
+    - The token is refreshed before the `sending` row is written.
+    - `resolve(action=close|record_hmrc, reason)` at `returns/<id>/resolve/`.
+  - **`journal._check_open`:** refuses any journal (except `source='vat_return'`) dated in a period with a pending
+    (`sending`/`unknown`) submission. `lock_period` refuses over one.
+  - **The connect cookie:** `hmrc_oauth`, HttpOnly, path `/accounting/hmrc/callback/`, 10 min. The callback needs it,
+    and the user must still be active staff of that company. Throttle scope `hmrc_callback`.
 
 Models (tenant-owned):
 - `HmrcConnection`: encrypted tokens, one per company.

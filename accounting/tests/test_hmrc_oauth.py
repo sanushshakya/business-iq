@@ -33,7 +33,7 @@ class HmrcOAuthTests(TestCase):
 
     def callback(self, state, code='the-code', tokens=TOKENS, **extra):
         with mock.patch.object(client.SESSION, 'post', return_value=answer(200, tokens)) as post:
-            response = self.client.get(reverse('hmrc-callback'), {'code': code, 'state': state, **extra})
+            response = self.api.get(reverse('hmrc-callback'), {'code': code, 'state': state, **extra})
         return response, post
 
     def test_connect_returns_hmrc_authorize_url(self):
@@ -101,7 +101,7 @@ class HmrcOAuthTests(TestCase):
     def test_callback_error_param_is_denied(self):
         state = self.connect()
         with mock.patch.object(client.SESSION, 'post') as post:
-            response = self.client.get(reverse('hmrc-callback'), {'error': 'access_denied', 'state': state})
+            response = self.api.get(reverse('hmrc-callback'), {'error': 'access_denied', 'state': state})
         self.assertEqual(response['Location'], '/dashboard/accounts?hmrc=error&reason=denied')
         post.assert_not_called()
         self.assertFalse(HmrcAuthState.objects.exists())
@@ -109,17 +109,17 @@ class HmrcOAuthTests(TestCase):
     def test_callback_refused_exchange(self):
         state = self.connect()
         with mock.patch.object(client.SESSION, 'post', return_value=answer(400, {'error': 'invalid_grant'})):
-            response = self.client.get(reverse('hmrc-callback'), {'code': 'x', 'state': state})
+            response = self.api.get(reverse('hmrc-callback'), {'code': 'x', 'state': state})
         self.assertEqual(response['Location'], '/dashboard/accounts?hmrc=error&reason=exchange')
         self.assertFalse(HmrcConnection.objects.exists())
 
-    def test_other_company_cannot_use_my_state(self):
+    def test_a_state_moved_to_another_company_is_refused(self):
         state = self.connect()
         other = CompanyFactory(vat_number='GB987654321')
-        HmrcAuthState.objects.update(company=other)  # what a forged state would need
-        self.callback(state)
-        self.assertEqual(HmrcConnection.objects.get().company, other)
-        self.assertFalse(HmrcConnection.objects.filter(company=self.company).exists())
+        HmrcAuthState.objects.update(company=other)  # its user is not staff of that company
+        response, _post = self.callback(state)
+        self.assertEqual(response['Location'], '/dashboard/accounts?hmrc=error&reason=state')
+        self.assertFalse(HmrcConnection.objects.exists())
 
     def test_status_never_shows_tokens(self):
         self.callback(self.connect())

@@ -25,7 +25,8 @@ SERVER_PORTS = {80, 443}
 class ScreenSerializer(serializers.Serializer):
     width = serializers.IntegerField(min_value=1, max_value=100000)
     height = serializers.IntegerField(min_value=1, max_value=100000)
-    scaling_factor = serializers.DecimalField(max_digits=6, decimal_places=3, min_value=Decimal('0.001'))
+    # Browsers report e.g. 1.100000023841858 at 110% zoom: any positive number, rounded to 3 places when sent.
+    scaling_factor = serializers.FloatField(min_value=0.001, max_value=100)
     colour_depth = serializers.IntegerField(min_value=1, max_value=128)
 
 
@@ -61,8 +62,9 @@ def _pairs(items):
     return '&'.join(f'{_q(key)}={_q(value)}' for key, value in items)
 
 
-def _decimal(value):
-    return format(value.normalize(), 'f')
+def _scale(value):
+    """1.100000023841858 → '1.1', 2.0 → '2'."""
+    return format(Decimal(str(round(value, 3))).normalize(), 'f')
 
 
 def _public(ip):
@@ -118,7 +120,7 @@ def headers(request, client, user):
         'Gov-Client-Public-Port': str(port) if ip and port else '',
         'Gov-Client-Screens': ','.join(_pairs([
             ('width', screen['width']), ('height', screen['height']),
-            ('scaling-factor', _decimal(screen['scaling_factor'])), ('colour-depth', screen['colour_depth'])])
+            ('scaling-factor', _scale(screen['scaling_factor'])), ('colour-depth', screen['colour_depth'])])
             for screen in client['screens']),
         'Gov-Client-Timezone': client['timezone'],
         'Gov-Client-User-IDs': _pairs([('m18-iq', user.pk)]),

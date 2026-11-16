@@ -35,7 +35,9 @@ class Command(BaseCommand):
         if settings.HMRC_VAT_ENVIRONMENT != 'sandbox':
             raise CommandError('This check runs only against the HMRC sandbox (HMRC_VAT_ENVIRONMENT=sandbox).')
         company = Company.objects.get(pk=options['company'])
-        user = get_user_model().objects.get(pk=options['user'], company=company)
+        user = get_user_model().objects.filter(pk=options['user'], company=company, is_staff=True).first()
+        if user is None:
+            raise CommandError('--user must be a staff member of the company.')
         info = fraud.ClientInfoSerializer(data=CLIENT)
         info.is_valid(raise_exception=True)
         headers = fraud.headers(RequestFactory().post('/'), info.validated_data, user)

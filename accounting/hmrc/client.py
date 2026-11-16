@@ -64,13 +64,14 @@ def exchange_code(code):
                            'redirect_uri': settings.HMRC_REDIRECT_URI})
 
 
-def store_tokens(connection, tokens):
-    """Copy a token answer onto ``connection`` (not saved)."""
+def store_tokens(connection, tokens, new_grant=False):
+    """Copy a token answer onto ``connection`` (not saved). The 18 months run from the grant, not each refresh."""
     now = timezone.now()
     connection.access_token = tokens['access_token']
     connection.refresh_token = tokens['refresh_token']
     connection.access_expires_at = now + timedelta(seconds=int(tokens.get('expires_in', 14400)))
-    connection.refresh_expires_at = now + REFRESH_LIFETIME
+    if new_grant or connection.refresh_expires_at is None:
+        connection.refresh_expires_at = now + REFRESH_LIFETIME
     connection.scope = tokens.get('scope', SCOPE)[:100]
 
 

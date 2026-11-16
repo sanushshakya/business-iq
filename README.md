@@ -230,6 +230,22 @@ IQ: the settlement journal is posted and its months are locked, as "Mark as file
 - **No clear answer** (timeout, 5xx or `DUPLICATE_SUBMISSION`): the attempt is **unknown**. **Check with HMRC**
   reads HMRC's copy, and files it only if the boxes match. Nothing is ever sent twice blindly.
 
+**Ways out of an unclear result:**
+- **Interrupted:** a submission still "sending" after 5 minutes counts as unknown.
+- **HMRC holds it but IQ couldn't record it:** the submission stays unknown (`NOT_RECORDED`). Check again once the
+  cause is fixed.
+- **HMRC holds other figures** (`FIGURES_DIFFER`): staff either record HMRC's figures or close the attempt, with a
+  reason.
+
+**While a submission may be at HMRC:** nothing new can be posted in its months, and they can't be locked. Late items
+go to an open month.
+
+**Connecting:**
+- Only the browser that pressed Connect can finish the sign-in: a 10-minute HttpOnly cookie, plus the single-use
+  state.
+- The callback is throttled (`HMRC_CALLBACK_THROTTLE_RATE`, 30/min).
+- Disconnect deletes IQ's tokens only. HMRC's grant ends after 18 months, or remove it in the HMRC account.
+
 **Settings:**
 
 | Setting | Meaning |

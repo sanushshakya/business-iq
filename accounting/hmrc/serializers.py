@@ -51,6 +51,11 @@ class SubmitRequestSerializer(FraudClientSerializer):
         return value
 
 
+class HmrcResolveRequestSerializer(FraudClientSerializer):
+    action = serializers.ChoiceField(choices=['close', 'record_hmrc'])
+    reason = serializers.CharField(max_length=300, allow_blank=True)
+
+
 class HmrcSubmissionSerializer(serializers.ModelSerializer):
     vat_return = serializers.PrimaryKeyRelatedField(read_only=True)
 
@@ -58,7 +63,7 @@ class HmrcSubmissionSerializer(serializers.ModelSerializer):
         from accounting.models import HmrcSubmission
 
         model = HmrcSubmission
-        fields = ['id', 'period_key', 'period_start', 'period_end', 'box1', 'box2', 'box3', 'box4', 'box5', 'box6',
+        fields = ['id', 'period_key', 'period_start', 'period_end', 'vrn', 'box1', 'box2', 'box3', 'box4', 'box5', 'box6',
                   'box7', 'box8', 'box9', 'net_direction', 'status', 'submitted_by', 'submitted_at',
                   'processing_date', 'form_bundle_number', 'payment_indicator', 'charge_ref_number', 'error_code',
                   'error_message', 'vat_return']

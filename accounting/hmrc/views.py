@@ -7,6 +7,7 @@ from drf_spectacular.utils import extend_schema
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -17,9 +18,11 @@ from inventory.views import CompanyMemberReadsStaffWrites
 from . import client, filing, fraud, oauth
 from .serializers import (AuthorizeUrlSerializer, HmrcErrorSerializer, HmrcStatusSerializer,
                           HmrcSubmissionSerializer, ObligationSerializer, ObligationsRequestSerializer,
-                          SubmitRequestSerializer, FraudClientSerializer)
+                          HmrcResolveRequestSerializer, SubmitRequestSerializer, FraudClientSerializer)
 
 ACCOUNTS_PAGE = '/dashboard/accounts'
+BROWSER_COOKIE = 'hmrc_oauth'
+CALLBACK_PATH = '/accounting/hmrc/callback/'
 
 
 class HmrcStatusView(APIView):
@@ -44,10 +47,14 @@ class HmrcConnectView(APIView):
     @extend_schema(request=None, responses=AuthorizeUrlSerializer)
     def post(self, request):
         try:
-            url = oauth.start(request.user.company, request.user)
+            url, browser = oauth.start(request.user.company, request.user)
         except oauth.ConnectError as error:
             raise ValidationError({'detail': str(error)}) from None
-        return Response({'authorize_url': url})
+        response = Response({'authorize_url': url})
+        # Only this browser can finish the sign-in: HMRC's redirect must bring this cookie back.
+        response.set_cookie(BROWSER_COOKIE, browser, max_age=600, path=CALLBACK_PATH, httponly=True,
+                            secure=request.is_secure(), samesite='Lax')
+        return response
 
 
 class HmrcCallbackView(APIView):
@@ -55,13 +62,16 @@ class HmrcCallbackView(APIView):
 
     authentication_classes = []
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'hmrc_callback'
 
     @extend_schema(exclude=True)
     def get(self, request):
-        outcome = oauth.finish(request.query_params)
-        if outcome == 'connected':
-            return HttpResponseRedirect(f'{ACCOUNTS_PAGE}?hmrc=connected')
-        return HttpResponseRedirect(f'{ACCOUNTS_PAGE}?hmrc=error&reason={outcome}')
+        outcome = oauth.finish(request.query_params, request.COOKIES.get(BROWSER_COOKIE, ''))
+        query = 'hmrc=connected' if outcome == 'connected' else f'hmrc=error&reason={outcome}'
+        response = HttpResponseRedirect(f'{ACCOUNTS_PAGE}?{query}')
+        response.delete_cookie(BROWSER_COOKIE, path=CALLBACK_PATH, samesite='Lax')
+        return response
 
 
 class HmrcConnectionView(APIView):
@@ -193,3 +203,27 @@ class HmrcFraudCheckView(APIView):
         except client.HmrcError as error:
             return hmrc_error_response(error)
         return Response(client.json_of(answer))
+
+
+class HmrcReturnResolveView(APIView):
+    """Settle an attempt still without a clear answer: ``close`` it, or ``record_hmrc`` (record the return HMRC holds
+    for the period with HMRC's figures, and lock its months). A reason is kept on the attempt."""
+
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    @extend_schema(request=HmrcResolveRequestSerializer, responses={200: HmrcSubmissionSerializer, 400: HmrcErrorSerializer})
+    def post(self, request, pk):
+        submission = HmrcSubmission.objects.filter(company_id=request.user.company_id, pk=pk).first()
+        if submission is None:
+            return Response({'detail': 'Not found.'}, status=404)
+        body = HmrcResolveRequestSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        data = body.validated_data
+        try:
+            filing.resolve(submission, request.user, fraud.headers(request, data['client'], request.user),
+                           data['action'], data['reason'])
+        except filing.FilingError as error:
+            return filing_error_response(error)
+        except client.HmrcError as error:
+            return hmrc_error_response(error)
+        return _submission_response(submission)

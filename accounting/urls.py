@@ -26,5 +26,6 @@ urlpatterns = [
     path('hmrc/fraud-check/', hmrc.HmrcFraudCheckView.as_view(), name='hmrc-fraud-check'),
     path('hmrc/returns/', hmrc.HmrcReturnsView.as_view(), name='hmrc-returns'),
     path('hmrc/returns/<int:pk>/check/', hmrc.HmrcReturnCheckView.as_view(), name='hmrc-return-check'),
+    path('hmrc/returns/<int:pk>/resolve/', hmrc.HmrcReturnResolveView.as_view(), name='hmrc-return-resolve'),
     *router.urls,
 ]

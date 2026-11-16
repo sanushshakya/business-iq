@@ -50,7 +50,9 @@ class FakeHmrc:
 
 
 @override_settings(**SANDBOX, HMRC_VENDOR_PUBLIC_IP='203.0.113.6')
-class FilingTests(VatReturnCase):
+class FilingCase(VatReturnCase):
+    """A connected company (VRN 123456789) with a bill last month and that month open at HMRC as 24A1."""
+
     def setUp(self):
         super().setUp()
         self.company.vat_number = 'GB123456789'
@@ -78,11 +80,22 @@ class FilingTests(VatReturnCase):
             return self.api.post(reverse('hmrc-return-check', args=[submission.pk]), {'client': CLIENT},
                                  format='json')
 
+    def view_of(self, submission, **changes):
+        body = {'periodKey': submission.period_key, 'vatDueSales': float(submission.box1), 'vatDueAcquisitions': 0.0,
+                'totalVatDue': float(submission.box3), 'vatReclaimedCurrPeriod': float(submission.box4),
+                'netVatDue': float(submission.box5), 'totalValueSalesExVAT': int(submission.box6),
+                'totalValuePurchasesExVAT': int(submission.box7), 'totalValueGoodsSuppliedExVAT': 0,
+                'totalAcquisitionsExVAT': 0}
+        return answer(200, dict(body, **changes))
+
     def assert_nothing_filed(self):
         self.assertFalse(VatReturn.objects.exists())
         self.assertFalse(Journal.objects.filter(source='vat_return').exists())
         self.assertIsNone(locked_through(self.company))
 
+
+@override_settings(**SANDBOX, HMRC_VENDOR_PUBLIC_IP='203.0.113.6')
+class FilingTests(FilingCase):
     def test_accepted_submission_files_return_and_locks(self):
         response = self.submit(FakeHmrc(self.open))
         self.assertEqual(response.status_code, 201, response.content)
@@ -141,14 +154,6 @@ class FilingTests(VatReturnCase):
         self.submit(FakeHmrc(self.open, submit=answer(500, {'code': 'SERVER_ERROR', 'message': 'x'})))
         self.assertEqual(HmrcSubmission.objects.get().status, 'unknown')
         self.assert_nothing_filed()
-
-    def view_of(self, submission, **changes):
-        body = {'periodKey': '24A1', 'vatDueSales': float(submission.box1), 'vatDueAcquisitions': 0.0,
-                'totalVatDue': float(submission.box3), 'vatReclaimedCurrPeriod': float(submission.box4),
-                'netVatDue': float(submission.box5), 'totalValueSalesExVAT': int(submission.box6),
-                'totalValuePurchasesExVAT': int(submission.box7), 'totalValueGoodsSuppliedExVAT': 0,
-                'totalAcquisitionsExVAT': 0}
-        return answer(200, dict(body, **changes))
 
     def test_check_completes_when_hmrc_has_matching_return(self):
         self.submit(FakeHmrc(self.open, submit=requests.Timeout('slow')))

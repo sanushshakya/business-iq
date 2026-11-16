@@ -15,7 +15,7 @@ from django.utils import timezone
 from tenants.models import Company
 from vat.services import uk_date
 
-from .models import Account, Journal, JournalLine, Period, PeriodEvent
+from .models import Account, HmrcSubmission, Journal, JournalLine, Period, PeriodEvent
 
 ZERO = Decimal('0.00')
 PENNY = Decimal('0.01')
@@ -86,12 +86,17 @@ def locked_through(company):
     return Period.objects.filter(company=company, locked=True).aggregate(last=Max('start'))['last']
 
 
-def _check_open(company, day):
+def _check_open(company, day, source=None):
     if not EARLIEST <= day <= uk_date() + timedelta(days=366):
         raise JournalError(f'A journal is dated from {EARLIEST:%Y} to a year from today.')
     last = locked_through(company)
     if last is not None and _month(day) <= last:
         raise JournalError(f'{day:%B %Y} is locked (up to {last:%B %Y}); reopen it or post in an open month.')
+    # G56: while HMRC may hold a return for the period, nothing new lands in it (the boxes sent must stay the
+    # period's). Only that return's own settlement is posted there.
+    if source != 'vat_return' and HmrcSubmission.objects.filter(
+            company=company, status__in=HmrcSubmission.PENDING, period_start__lte=day, period_end__gte=day).exists():
+        raise JournalError(f"{day:%B %Y} is being filed with HMRC; post in an open month or wait for HMRC's answer.")
 
 
 def _signature(rows):
@@ -99,7 +104,7 @@ def _signature(rows):
 
 
 def _post(company, day, narrative, cleaned, user, source, source_ref, reverses=None, reason=''):
-    _check_open(company, day)
+    _check_open(company, day, source)
     Period.objects.get_or_create(company=company, start=_month(day))
     number = (Journal.objects.filter(company=company).aggregate(last=Max('number'))['last'] or 0) + 1
     journal = Journal.objects.create(company=company, number=number, date=day, narrative=narrative, source=source,
@@ -191,6 +196,10 @@ def lock_period(company, month, user):
     if month < EARLIEST:
         raise JournalError(f'Months from {EARLIEST:%B %Y}.')
     _lock_company(company)
+    month_end = (month.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    if HmrcSubmission.objects.filter(company=company, status__in=HmrcSubmission.PENDING,
+                                     period_start__lte=month_end).exists():
+        raise JournalError("A VAT return for these months is waiting for HMRC's answer; lock them once it is filed.")
     earliest = [month,
                 Journal.objects.filter(company=company).aggregate(first=Min('date'))['first'],
                 Period.objects.filter(company=company).aggregate(first=Min('start'))['first']]

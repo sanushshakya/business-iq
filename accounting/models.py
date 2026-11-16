@@ -251,6 +251,8 @@ class HmrcAuthState(models.Model):
     company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='+')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='+')
     state_hash = models.CharField(max_length=64, unique=True)
+    # SHA-256 of a nonce kept in an HttpOnly cookie on the browser that started it: only that browser can finish.
+    browser_hash = models.CharField(max_length=64, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
 
@@ -259,12 +261,15 @@ class HmrcSubmission(models.Model):
     call; ``unknown`` means no clear answer (resolved by reading HMRC's copy, never by sending again)."""
 
     SENDING, ACCEPTED, REJECTED, UNKNOWN = 'sending', 'accepted', 'rejected', 'unknown'
+    PENDING = [SENDING, UNKNOWN]  # HMRC may hold it: the period's journals are frozen meanwhile
+    STALE_AFTER = timedelta(minutes=5)  # a `sending` row this old lost its process: treated as unknown
     STATUSES = [(SENDING, 'Sending'), (ACCEPTED, 'Accepted'), (REJECTED, 'Rejected'), (UNKNOWN, 'Unknown')]
 
     company = models.ForeignKey('tenants.Company', on_delete=models.PROTECT, related_name='hmrc_submissions')
     period_key = models.CharField(max_length=4)
     period_start = models.DateField()
     period_end = models.DateField()
+    vrn = models.CharField(max_length=9, blank=True, help_text='The VAT number it was sent to.')
     box1 = models.DecimalField(max_digits=14, decimal_places=2)
     box2 = models.DecimalField(max_digits=14, decimal_places=2)
     box3 = models.DecimalField(max_digits=14, decimal_places=2)

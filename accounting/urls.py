@@ -2,6 +2,7 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from . import views
+from .hmrc import views as hmrc
 
 router = DefaultRouter()
 router.register(r'accounts', views.AccountViewSet, basename='account')
@@ -17,5 +18,9 @@ urlpatterns = [
     path('vat-return/', views.VatReturnView.as_view(), name='vat-return'),
     path('exports/journals.csv', views.JournalExportView.as_view(), name='export-journals'),
     path('exports/vat.csv', views.VatExportView.as_view(), name='export-vat'),
+    path('hmrc/', hmrc.HmrcStatusView.as_view(), name='hmrc-status'),
+    path('hmrc/connect/', hmrc.HmrcConnectView.as_view(), name='hmrc-connect'),
+    path('hmrc/callback/', hmrc.HmrcCallbackView.as_view(), name='hmrc-callback'),
+    path('hmrc/connection/', hmrc.HmrcConnectionView.as_view(), name='hmrc-connection'),
     *router.urls,
 ]

@@ -219,7 +219,8 @@ if HMRC_VAT_ENVIRONMENT not in _HMRC_HOSTS:
 HMRC_BASE_URL = _HMRC_HOSTS[HMRC_VAT_ENVIRONMENT]
 HMRC_CLIENT_ID = config('HMRC_CLIENT_ID', default='')
 HMRC_CLIENT_SECRET = config('HMRC_CLIENT_SECRET', default='')
-HMRC_REDIRECT_URI = config('HMRC_REDIRECT_URI', default='http://localhost:8000/accounting/hmrc/callback/')
+# Locally through the Vite dev server (it proxies /accounting), so the redirect back to the app stays on :5173.
+HMRC_REDIRECT_URI = config('HMRC_REDIRECT_URI', default='http://localhost:5173/accounting/hmrc/callback/')
 # The public IP the browser connects to (fraud-prevention header Gov-Vendor-Public-IP); blank = not known.
 HMRC_VENDOR_PUBLIC_IP = config('HMRC_VENDOR_PUBLIC_IP', default='')
 HMRC_VENDOR_PRODUCT_NAME = config('HMRC_VENDOR_PRODUCT_NAME', default='M18 World Foods IQ')

@@ -44,13 +44,13 @@ def _token_request(data):
         logger.warning('HMRC token request: no answer')
         raise _no_answer() from None
     if response.status_code >= 400:
-        code = _json(response).get('error') or 'TOKEN_REFUSED'
+        code = json_of(response).get('error') or 'TOKEN_REFUSED'
         logger.warning('HMRC token request refused: %s %s', response.status_code, code)
         raise HmrcError(response.status_code, str(code)[:60], 'HMRC refused the sign-in.')
-    return _json(response)
+    return json_of(response)
 
 
-def _json(response):
+def json_of(response):
     try:
         value = response.json()
     except ValueError:
@@ -104,7 +104,7 @@ def access_token(connection):
 
 
 def _error(response):
-    body = _json(response)
+    body = json_of(response)
     errors = body.get('errors') or []
     first = errors[0] if errors and isinstance(errors[0], dict) else body
     code = str(first.get('code') or body.get('code') or f'HTTP_{response.status_code}')[:60]

@@ -19,6 +19,10 @@ RUN mkdir -p /app/media && chown app:app /app/media
 # The key is only needed so settings can load; it is not kept in the image environment.
 RUN SECRET_KEY=build-only-key-never-used-at-runtime-0123456789 python manage.py collectstatic --noinput
 
+# The commit this image was built from (HMRC's Gov-Vendor-Version); the deploy workflow passes it.
+ARG APP_VERSION=dev
+ENV APP_VERSION=$APP_VERSION
+
 USER app
 EXPOSE 8000
 

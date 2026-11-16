@@ -4,6 +4,7 @@ operators are not in role_access. The callback is HMRC's redirect: no token of o
 from django.conf import settings
 from django.http import HttpResponseRedirect
 from drf_spectacular.utils import extend_schema
+from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -162,3 +163,33 @@ class HmrcReturnCheckView(APIView):
         except client.HmrcError as error:
             return hmrc_error_response(error)
         return _submission_response(submission)
+
+
+class FraudCheckResultSerializer(serializers.Serializer):
+    code = serializers.CharField(required=False)
+    message = serializers.CharField(required=False)
+    specVersion = serializers.CharField(required=False)
+    errors = serializers.ListField(child=serializers.DictField(), required=False)
+    warnings = serializers.ListField(child=serializers.DictField(), required=False)
+
+
+class HmrcFraudCheckView(APIView):
+    """Sandbox only: HMRC's Test Fraud Prevention Headers API judges the headers this browser and server send."""
+
+    permission_classes = [CompanyMemberReadsStaffWrites]
+
+    @extend_schema(request=FraudClientSerializer, responses={200: FraudCheckResultSerializer, 400: HmrcErrorSerializer})
+    def post(self, request):
+        if settings.HMRC_VAT_ENVIRONMENT != 'sandbox':
+            return Response({'detail': 'The fraud-prevention check runs against the HMRC sandbox only.'}, status=400)
+        body = FraudClientSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        try:
+            connection = filing.connection_for(request.user.company)
+            answer = client.call(connection, 'GET', '/test/fraud-prevention-headers/validate',
+                                 fraud=fraud.headers(request, body.validated_data['client'], request.user))
+        except filing.FilingError as error:
+            return filing_error_response(error)
+        except client.HmrcError as error:
+            return hmrc_error_response(error)
+        return Response(client.json_of(answer))

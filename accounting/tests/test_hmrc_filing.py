@@ -277,3 +277,38 @@ class FilingTests(VatReturnCase):
         response = stranger.post(reverse('hmrc-return-check', args=[HmrcSubmission.objects.get().pk]),
                                  {'client': CLIENT}, format='json')
         self.assertEqual(response.status_code, 404)
+
+
+@override_settings(**SANDBOX, HMRC_VENDOR_PUBLIC_IP='203.0.113.6')
+class FraudCheckTests(VatReturnCase):
+    def setUp(self):
+        super().setUp()
+        self.company.vat_number = 'GB123456789'
+        self.company.save()
+        HmrcConnection.objects.create(
+            company=self.company, vrn='123456789', environment='sandbox', access_token='access-token',
+            refresh_token='refresh-token', access_expires_at=timezone.now() + timedelta(hours=4),
+            refresh_expires_at=timezone.now() + timedelta(days=500), scope='read:vat write:vat')
+        self.api = APIClient()
+        self.api.force_authenticate(self.staff)
+
+    def test_fraud_check_passes_hmrc_answer_through_sandbox_only(self):
+        verdict = {'specVersion': '3.3', 'code': 'POTENTIALLY_INVALID_HEADERS',
+                   'message': 'At least 1 header is potentially invalid',
+                   'warnings': [{'code': 'POTENTIALLY_INVALID_HEADER', 'message': 'Value is empty',
+                                 'headers': ['gov-vendor-license-ids']}]}
+        with mock.patch.object(client.SESSION, 'request', return_value=answer(200, verdict)) as request:
+            response = self.api.post(reverse('hmrc-fraud-check'), {'client': CLIENT}, format='json')
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json(), verdict)
+        method, url = request.call_args.args
+        self.assertEqual((method, url),
+                         ('GET', 'https://test-api.service.hmrc.gov.uk/test/fraud-prevention-headers/validate'))
+        self.assertEqual(request.call_args.kwargs['headers']['Gov-Client-Timezone'], 'UTC+01:00')
+        member = APIClient()
+        member.force_authenticate(UserFactory(company=self.company))
+        self.assertEqual(member.post(reverse('hmrc-fraud-check'), {'client': CLIENT}, format='json').status_code,
+                         403)
+        with override_settings(HMRC_VAT_ENVIRONMENT='production', HMRC_BASE_URL='https://api.service.hmrc.gov.uk'):
+            response = self.api.post(reverse('hmrc-fraud-check'), {'client': CLIENT}, format='json')
+        self.assertEqual(response.status_code, 400)

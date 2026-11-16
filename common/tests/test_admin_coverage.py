@@ -10,7 +10,8 @@ INLINE_ONLY = {'demand_calendar.DemandAlert'}
 DJANGO_APPS = {'admin', 'auth', 'contenttypes', 'sessions'}
 # Two-factor secrets, recovery-code hashes and sign-in challenges stay out of the admin on purpose;
 # who has 2FA and every change to it are visible through TwoFactorEvent and /auth/2fa/users/.
-SECRETS = {'authentication.TwoFactorDevice', 'authentication.RecoveryCode', 'authentication.TwoFactorChallenge'}
+SECRETS = {'authentication.TwoFactorDevice', 'authentication.RecoveryCode', 'authentication.TwoFactorChallenge',
+           'accounting.HmrcConnection', 'accounting.HmrcAuthState'}
 
 
 class AdminCoverageTests(TestCase):

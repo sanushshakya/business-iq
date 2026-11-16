@@ -207,6 +207,25 @@ INVITATION_TTL_HOURS = config('INVITATION_TTL_HOURS', default=7 * 24, cast=int)
 HTTP_TIMEOUT_SECONDS = config('HTTP_TIMEOUT_SECONDS', default=10, cast=int)
 ALADHAN_API_URL = config('ALADHAN_API_URL', default='https://api.aladhan.com/v1')
 HMRC_API_URL = config('HMRC_API_URL', default='https://www.trade-tariff.service.gov.uk/api/v2')
+
+# Filing VAT with HMRC under Making Tax Digital (G56). 'off' keeps G54's "Mark as filed"; 'sandbox' or 'production'
+# picks HMRC's host. The client id and secret come from the HMRC Developer Hub application; the redirect URI must be
+# registered there (https://<domain>/accounting/hmrc/callback/).
+HMRC_VAT_ENVIRONMENT = config('HMRC_VAT_ENVIRONMENT', default='off')
+_HMRC_HOSTS = {'off': '', 'sandbox': 'https://test-api.service.hmrc.gov.uk',
+               'production': 'https://api.service.hmrc.gov.uk'}
+if HMRC_VAT_ENVIRONMENT not in _HMRC_HOSTS:
+    raise ImproperlyConfigured("HMRC_VAT_ENVIRONMENT must be 'off', 'sandbox' or 'production'.")
+HMRC_BASE_URL = _HMRC_HOSTS[HMRC_VAT_ENVIRONMENT]
+HMRC_CLIENT_ID = config('HMRC_CLIENT_ID', default='')
+HMRC_CLIENT_SECRET = config('HMRC_CLIENT_SECRET', default='')
+HMRC_REDIRECT_URI = config('HMRC_REDIRECT_URI', default='http://localhost:8000/accounting/hmrc/callback/')
+# The public IP the browser connects to (fraud-prevention header Gov-Vendor-Public-IP); blank = not known.
+HMRC_VENDOR_PUBLIC_IP = config('HMRC_VENDOR_PUBLIC_IP', default='')
+HMRC_VENDOR_PRODUCT_NAME = config('HMRC_VENDOR_PRODUCT_NAME', default='M18 World Foods IQ')
+HMRC_TIMEOUT_SECONDS = config('HMRC_TIMEOUT_SECONDS', default=20, cast=int)
+# The deployed commit, baked into the image by the deploy workflow (Gov-Vendor-Version).
+APP_VERSION = config('APP_VERSION', default='dev')
 # Shopify retires API versions after 12 months; keep this on a supported one (https://shopify.dev/docs/api/usage/versioning).
 SHOPIFY_API_VERSION = config('SHOPIFY_API_VERSION', default='2026-10')
 DEFAULT_CUSTOMS_DUTY_RATE = config('DEFAULT_CUSTOMS_DUTY_RATE', default=0.0, cast=float)

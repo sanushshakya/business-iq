@@ -4,6 +4,8 @@ deleted: a mistake is reversed) and its calendar-month periods, locked by staff.
 only writer of journals and periods.
 """
 
+from datetime import timedelta
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
@@ -11,6 +13,8 @@ from django.db import models
 from django.db.models import F, Q
 from django.db.models.signals import pre_delete
 from django.dispatch import receiver
+
+from common.fields import EncryptedTextField
 
 JOURNAL_FROZEN = 'A journal is never changed or deleted; post its reversal.'
 
@@ -182,6 +186,7 @@ class VatReturn(models.Model):
     box8 = models.DecimalField(max_digits=14, decimal_places=0)
     box9 = models.DecimalField(max_digits=14, decimal_places=0)
     net_direction = models.CharField(max_length=7, choices=DIRECTIONS)
+    period_key = models.CharField(max_length=4, blank=True, help_text='HMRC obligation, when filed through MTD.')
     filed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
                                  related_name='+')
     filed_at = models.DateTimeField(auto_now_add=True)
@@ -213,3 +218,83 @@ class VatReturn(models.Model):
 @receiver(pre_delete, sender=JournalLine)
 def _journals_are_kept(sender, instance, **kwargs):
     raise ValidationError(JOURNAL_FROZEN)
+
+
+# ---------------------------------------------------------------- HMRC (G56)
+
+class HmrcConnection(models.Model):
+    """A company's grant to file VAT through HMRC's MTD API: the OAuth tokens (encrypted, never shown or logged) and
+    the VRN they were granted for. Disconnecting deletes the row; it is not in the admin."""
+
+    company = models.OneToOneField('tenants.Company', on_delete=models.CASCADE, related_name='hmrc_connection')
+    vrn = models.CharField(max_length=9)
+    environment = models.CharField(max_length=10)  # sandbox or production: the tokens only work there
+    access_token = EncryptedTextField()
+    refresh_token = EncryptedTextField()
+    access_expires_at = models.DateTimeField()
+    refresh_expires_at = models.DateTimeField()
+    scope = models.CharField(max_length=100)
+    connected_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+                                     related_name='+')
+    connected_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'HMRC connection for company {self.company_id}'
+
+
+class HmrcAuthState(models.Model):
+    """The OAuth ``state`` of one "Connect to HMRC": only its SHA-256 is kept. HMRC's redirect comes back without
+    our token, so the state (single use, 10 minutes) is what ties it to the staff member who started it."""
+
+    LIFETIME = timedelta(minutes=10)
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.CASCADE, related_name='+')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='+')
+    state_hash = models.CharField(max_length=64, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class HmrcSubmission(models.Model):
+    """One attempt to submit a VAT return to HMRC, with the boxes exactly as sent. ``sending`` is written before the
+    call; ``unknown`` means no clear answer (resolved by reading HMRC's copy, never by sending again)."""
+
+    SENDING, ACCEPTED, REJECTED, UNKNOWN = 'sending', 'accepted', 'rejected', 'unknown'
+    STATUSES = [(SENDING, 'Sending'), (ACCEPTED, 'Accepted'), (REJECTED, 'Rejected'), (UNKNOWN, 'Unknown')]
+
+    company = models.ForeignKey('tenants.Company', on_delete=models.PROTECT, related_name='hmrc_submissions')
+    period_key = models.CharField(max_length=4)
+    period_start = models.DateField()
+    period_end = models.DateField()
+    box1 = models.DecimalField(max_digits=14, decimal_places=2)
+    box2 = models.DecimalField(max_digits=14, decimal_places=2)
+    box3 = models.DecimalField(max_digits=14, decimal_places=2)
+    box4 = models.DecimalField(max_digits=14, decimal_places=2)
+    box5 = models.DecimalField(max_digits=14, decimal_places=2)
+    box6 = models.DecimalField(max_digits=14, decimal_places=0)
+    box7 = models.DecimalField(max_digits=14, decimal_places=0)
+    box8 = models.DecimalField(max_digits=14, decimal_places=0)
+    box9 = models.DecimalField(max_digits=14, decimal_places=0)
+    net_direction = models.CharField(max_length=7, choices=VatReturn.DIRECTIONS)
+    status = models.CharField(max_length=8, choices=STATUSES, default=SENDING)
+    submitted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                     related_name='+')
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    processing_date = models.DateTimeField(null=True, blank=True)
+    form_bundle_number = models.CharField(max_length=40, blank=True)
+    payment_indicator = models.CharField(max_length=10, blank=True)
+    charge_ref_number = models.CharField(max_length=40, blank=True)
+    error_code = models.CharField(max_length=60, blank=True)
+    error_message = models.CharField(max_length=500, blank=True)
+    vat_return = models.OneToOneField(VatReturn, on_delete=models.PROTECT, null=True, blank=True,
+                                      related_name='hmrc_submission')
+
+    class Meta:
+        ordering = ['-submitted_at', '-pk']
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'period_key'],
+                                    condition=Q(status__in=['sending', 'unknown', 'accepted']),
+                                    name='unique_open_hmrc_submission'),
+        ]
+
+    def __str__(self):
+        return f'HMRC submission {self.period_key} ({self.status})'

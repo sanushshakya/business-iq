@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db.models import Prefetch
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
@@ -259,6 +260,8 @@ class VatReturnViewSet(OwnCompanyMixin, mixins.ListModelMixin, mixins.RetrieveMo
 
     @extend_schema(request=DateRangeSerializer, responses={201: VatReturnSerializer})
     def create(self, request, *args, **kwargs):
+        if settings.HMRC_VAT_ENVIRONMENT != 'off':
+            raise ValidationError({'detail': 'File through HMRC (Submit to HMRC).'})
         body = DateRangeSerializer(data=request.data)
         body.is_valid(raise_exception=True)
         try:

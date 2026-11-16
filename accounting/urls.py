@@ -22,5 +22,8 @@ urlpatterns = [
     path('hmrc/connect/', hmrc.HmrcConnectView.as_view(), name='hmrc-connect'),
     path('hmrc/callback/', hmrc.HmrcCallbackView.as_view(), name='hmrc-callback'),
     path('hmrc/connection/', hmrc.HmrcConnectionView.as_view(), name='hmrc-connection'),
+    path('hmrc/obligations/', hmrc.HmrcObligationsView.as_view(), name='hmrc-obligations'),
+    path('hmrc/returns/', hmrc.HmrcReturnsView.as_view(), name='hmrc-returns'),
+    path('hmrc/returns/<int:pk>/check/', hmrc.HmrcReturnCheckView.as_view(), name='hmrc-return-check'),
     *router.urls,
 ]

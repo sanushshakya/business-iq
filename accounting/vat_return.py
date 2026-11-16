@@ -87,14 +87,26 @@ def file_return(company, start, end, user):
     """File the return for ``start``–``end`` (whole months that have ended, not overlapping a filed one): post what
     is not posted yet for the period (refused if anything fails), store the boxes as they are, move the period's VAT
     to "VAT due to HMRC" (a ``vat_return`` journal on the last day) and lock the months so nothing changes them."""
-    from .postings import run_postings
+    check_period(start, end)
+    boxes = prepare(company, start, end, user)
+    return record_return(company, start, end, boxes, user)
 
+
+def check_period(start, end):
+    """A return covers whole months that have ended, from 2000."""
     if start.day != 1 or end != _month_end(end) or start > end:
         raise VatReturnError('A return covers whole months: from a 1st to a month end.')
     if start < EARLIEST:
         raise VatReturnError(f'Returns start from {EARLIEST:%B %Y}.')
     if end >= uk_date().replace(day=1):
         raise VatReturnError('Only months that have ended are filed.')
+
+
+def prepare(company, start, end, user):
+    """Under the company lock (call inside a transaction): refuse months already in a filed return, post what is not
+    posted yet for the period (refused if anything fails) and return the boxes."""
+    from .postings import run_postings
+
     Company.objects.select_for_update().filter(pk=company.pk).first()
     if VatReturn.objects.filter(company=company, period_start__lte=end, period_end__gte=start).exists():
         raise VatReturnError('These months are in a return filed already.')
@@ -102,9 +114,14 @@ def file_return(company, start, end, user):
     if summary['error'] or summary['conflicts']:
         problems = summary['error'] or '; '.join(f"{c['source']} {c['ref']}: {c['detail']}" for c in summary['conflicts'])
         raise VatReturnError(f'Some of the period could not be posted, so it is not filed: {problems}'[:500])
-    boxes = vat_boxes(company, start, end)
+    return vat_boxes(company, start, end)
+
+
+def record_return(company, start, end, boxes, user, period_key=''):
+    """Store the return with ``boxes`` as they are, move the period's VAT to "VAT due to HMRC" and lock its months
+    (call inside a transaction holding the company lock)."""
     filed = VatReturn.objects.create(company=company, period_start=start, period_end=end, filed_by=user,
-                                     **{key: boxes[key] for key in VAT_FIELDS})
+                                     period_key=period_key, **{key: boxes[key] for key in VAT_FIELDS})
     _settle(company, start, end, boxes, user)
     lock_period(company, end.replace(day=1), user)
     return filed

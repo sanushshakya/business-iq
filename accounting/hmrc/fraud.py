@@ -10,6 +10,7 @@ address (local runs) and licence IDs (in-house software). Keys and values are pe
 
 import hashlib
 import ipaddress
+import math
 from decimal import Decimal
 from datetime import UTC, datetime
 from urllib.parse import quote
@@ -28,6 +29,12 @@ class ScreenSerializer(serializers.Serializer):
     # Browsers report e.g. 1.100000023841858 at 110% zoom: any positive number, rounded to 3 places when sent.
     scaling_factor = serializers.FloatField(min_value=0.001, max_value=100)
     colour_depth = serializers.IntegerField(min_value=1, max_value=128)
+
+
+    def validate_scaling_factor(self, value):
+        if math.isnan(value):  # 'nan' parses as a float and passes both bounds
+            raise serializers.ValidationError('A valid number is required.')
+        return value
 
 
 class WindowSerializer(serializers.Serializer):

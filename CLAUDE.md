@@ -168,6 +168,10 @@ end-of-day total; `expected_card` (completed card sales) is frozen at close like
     - `check` re-raises HMRC errors other than 404.
     - The token is refreshed before the `sending` row is written.
     - `resolve(action=close|record_hmrc, reason)` at `returns/<id>/resolve/`.
+    - Second review: `submit` refuses (409) while another period's attempt that starts on or before `end` is
+      pending; listing `returns/` expires stale `sending` rows; `vat_return._settle` clears what the ledger holds
+      (`vat_boxes`) and puts any difference from the declared boxes in Suspense (`undeclared`); a NaN
+      `scaling_factor` is refused.
   - **`journal._check_open`:** refuses any journal (except `source='vat_return'`) dated in a period with a pending
     (`sending`/`unknown`) submission. `lock_period` refuses over one.
   - **The connect cookie:** `hmrc_oauth`, HttpOnly, path `/accounting/hmrc/callback/`, 10 min. The callback needs it,

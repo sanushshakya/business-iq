@@ -231,11 +231,14 @@ IQ: the settlement journal is posted and its months are locked, as "Mark as file
   reads HMRC's copy, and files it only if the boxes match. Nothing is ever sent twice blindly.
 
 **Ways out of an unclear result:**
-- **Interrupted:** a submission still "sending" after 5 minutes counts as unknown.
+- **Interrupted:** a submission still "sending" after 5 minutes counts as unknown (also when the list is read).
 - **HMRC holds it but IQ couldn't record it:** the submission stays unknown (`NOT_RECORDED`). Check again once the
   cause is fixed.
-- **HMRC holds other figures** (`FIGURES_DIFFER`): staff either record HMRC's figures or close the attempt, with a
-  reason.
+- **Any unknown attempt** (`FIGURES_DIFFER`, `INTERRUPTED`, `NOT_RECORDED`, no answer): staff either record HMRC's
+  figures or close the attempt, with a reason and a second click. Recording figures other than the ledger's clears
+  the VAT accounts in full and puts the difference in Suspense, and the attempt's message says how much.
+- **One period at a time:** a submit is refused (409, nothing sent) while another period that starts on or before
+  this one ends still has no answer, because this return's months could not be locked behind it.
 
 **While a submission may be at HMRC:** nothing new can be posted in its months, and they can't be locked. Late items
 go to an open month.

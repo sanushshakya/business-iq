@@ -25,7 +25,7 @@ from django.utils.dateparse import parse_datetime
 
 from accounting.journal import JournalError
 from accounting.models import HmrcConnection, HmrcSubmission, VatReturn
-from accounting.vat_return import VatReturnError, check_period, prepare, record_return
+from accounting.vat_return import VatReturnError, check_period, prepare, record_return, undeclared, vat_boxes
 from tenants.models import Company
 from vat.services import uk_date
 
@@ -118,6 +118,8 @@ def submit(company, user, period_key, start, end, fraud):
     client.access_token(connection)  # refresh now, so a refusal or no answer here sends and records nothing
     try:
         with transaction.atomic():
+            Company.objects.select_for_update().filter(pk=company.pk).first()
+            _refuse_while_earlier_waits(company, period_key, end)
             boxes = prepare(company, start, end, user)
             if HmrcSubmission.objects.filter(company=company, period_key=period_key,
                                              status__in=[HmrcSubmission.SENDING, HmrcSubmission.ACCEPTED]).exists():
@@ -139,6 +141,17 @@ def submit(company, user, period_key, start, end, fraud):
         return submission
     _accept(submission, answer, user)
     return submission
+
+
+def _refuse_while_earlier_waits(company, period_key, end):
+    """Another period's attempt still waiting for HMRC, starting on or before this one ends, would stop this return's
+    months being locked once HMRC accepted it (``journal.lock_period``): refuse before anything is sent."""
+    waiting = (HmrcSubmission.objects.filter(company=company, status__in=HmrcSubmission.PENDING, period_start__lte=end)
+               .exclude(period_key=period_key).order_by('period_start').first())
+    if waiting is not None:
+        raise FilingError(f'The VAT return for period {waiting.period_key} ({waiting.period_start:%d/%m/%Y} to '
+                          f"{waiting.period_end:%d/%m/%Y}) has no answer from HMRC yet. Check it with HMRC, or close "
+                          'it, before submitting this one.', conflict=True)
 
 
 def _close(submission, status, code='', message=''):
@@ -249,8 +262,11 @@ def resolve(submission, user, fraud, action, reason):
         value = Decimal(str(held.get(field, 0)))
         boxes[box] = value.quantize(Decimal('1') if box in WHOLE_POUNDS else Decimal('0.01'))
     boxes['net_direction'] = VatReturn.PAY if boxes['box3'] >= boxes['box4'] else VatReturn.RECLAIM
-    _accept(submission, held, user, boxes=boxes, code='RECORDED_FROM_HMRC',
-            message=f"Recorded from HMRC's copy: {reason}")
+    message = f"Recorded from HMRC's copy: {reason}"
+    left = undeclared(vat_boxes(submission.company, submission.period_start, submission.period_end), boxes)
+    if left:
+        message += f" IQ's ledger differs by £{left}: the difference is in Suspense, to correct."
+    _accept(submission, held, user, boxes=boxes, code='RECORDED_FROM_HMRC', message=message)
     if submission.status != HmrcSubmission.ACCEPTED:
         raise FilingError(submission.error_message)
     return submission

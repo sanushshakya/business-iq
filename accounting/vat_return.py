@@ -127,23 +127,30 @@ def record_return(company, start, end, boxes, user, period_key=''):
     return filed
 
 
+
+def undeclared(held, boxes):
+    """The ledger's net VAT for the period (``held``, from ``vat_boxes``) less the return's: 0 unless the return
+    declares other figures."""
+    return (held['box1'] - held['box4']) - (boxes['box1'] - boxes['box4'])
+
+
 VAT_FIELDS = ['box1', 'box2', 'box3', 'box4', 'box5', 'net_direction', 'box6', 'box7', 'box8', 'box9']
 
 
 def _settle(company, start, end, boxes, user):
-    """Clear VAT on sales and on purchases for the period into "VAT due to HMRC" (paid or repaid from there)."""
+    """Clear VAT on sales and on purchases for the period into "VAT due to HMRC" (paid or repaid from there). The
+    accounts are cleared of what the ledger holds; if the return declares other figures (G56: HMRC's copy recorded),
+    the difference goes to Suspense, for the accountant to correct."""
     accounts = {account.system_key: account for account in Account.objects.filter(
-        company=company, system_key__in=['vat_output', 'vat_input', 'vat_hmrc'])}
-    lines = []
-    if boxes['box1']:
-        lines.append({'account': accounts['vat_output'], 'debit': max(boxes['box1'], ZERO),
-                      'credit': max(-boxes['box1'], ZERO)})
-    if boxes['box4']:
-        lines.append({'account': accounts['vat_input'], 'debit': max(-boxes['box4'], ZERO),
-                      'credit': max(boxes['box4'], ZERO)})
+        company=company, system_key__in=['vat_output', 'vat_input', 'vat_hmrc', 'suspense'])}
+    held = vat_boxes(company, start, end)
     net = boxes['box1'] - boxes['box4']
-    if net:
-        lines.append({'account': accounts['vat_hmrc'], 'debit': max(-net, ZERO), 'credit': max(net, ZERO)})
+    left = undeclared(held, boxes)
+    lines = []
+    for key, amount in (('vat_output', held['box1']), ('vat_input', -held['box4']), ('vat_hmrc', -net),
+                        ('suspense', -left)):
+        if amount:
+            lines.append({'account': accounts[key], 'debit': max(amount, ZERO), 'credit': max(-amount, ZERO)})
     if len(lines) >= 2:
         post_journal(company, date=end, narrative=f'VAT return {start:%d/%m/%Y} to {end:%d/%m/%Y}', lines=lines,
                      user=user, source=SETTLEMENT, source_ref=f'{start}:{end}')

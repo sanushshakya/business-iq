@@ -125,6 +125,7 @@ class HmrcReturnsView(APIView):
 
     @extend_schema(responses=HmrcSubmissionSerializer(many=True))
     def get(self, request):
+        filing._expire_stale(request.user.company)  # a dead attempt shows as unknown, so it can be checked
         rows = HmrcSubmission.objects.filter(company_id=request.user.company_id)
         return Response(HmrcSubmissionSerializer(rows, many=True).data)
 
